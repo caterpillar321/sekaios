@@ -340,6 +340,13 @@ DEFAULT_PINS = [
 ]
 
 
+# 사용자 전환: 먼저 이 화면을 잠그고 로그인 화면으로 간다.
+#   Wayland 의 sekai-lock 은 잠긴 뒤 곧바로 0 으로 끝난다 (swaylock -f 와 같은 약속).
+#   X11 의 sekai-lock 은 xsecurelock 이 잠금이 풀릴 때까지 앞에서 돈다 → 뒤로 돌리고 잠시 뒤 전환.
+SWITCH_USER_CMD = ("sekai-lock && pkexec /usr/libexec/sekai/sekai-switch-user" if _layer.WAYLAND else
+                   "sekai-lock & sleep 1.5; pkexec /usr/libexec/sekai/sekai-switch-user")
+
+
 class StartMenu(Gtk.Window):
     W, H = 720, 600
 
@@ -478,7 +485,7 @@ class StartMenu(Gtk.Window):
         for label, cls, icon, action in (
             ("잠금",        "pw-lock",   "system-lock-screen-symbolic", lambda: subprocess.Popen(["sekai-lock"])),
             ("사용자 전환", "pw-switch", "system-switch-user-symbolic",
-             lambda: subprocess.Popen(["sh", "-c", "sekai-lock && pkexec /usr/libexec/sekai/sekai-switch-user"])),
+             lambda: subprocess.Popen(["sh", "-c", SWITCH_USER_CMD])),
             ("로그아웃",    "pw-exit",   "system-log-out-symbolic",     lambda: self.hypr.dispatch("exit")),
             ("다시 시작",   "pw-reboot", "system-reboot-symbolic",      lambda: subprocess.Popen(["systemctl", "reboot"])),
             ("시스템 종료", "pw-off",    "system-shutdown-symbolic",    lambda: subprocess.Popen(["systemctl", "poweroff"])),

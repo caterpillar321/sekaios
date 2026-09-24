@@ -817,11 +817,35 @@ def main():
 
     disp = Gdk.Display.get_default()
     desks = []
-    for i in range(disp.get_n_monitors()):
-        m = disp.get_monitor(i)
-        d = Desk(m, primary=(i == 0))
-        d.show_all()
-        desks.append(d)
+
+    def build():
+        """모니터마다 바탕화면 하나. 아이콘은 주 모니터에만."""
+        for d in desks:
+            d.destroy()
+        desks.clear()
+        n = disp.get_n_monitors()
+        prim = disp.get_primary_monitor() or (disp.get_monitor(0) if n else None)
+        for i in range(n):
+            m = disp.get_monitor(i)
+            d = Desk(m, primary=(m == prim))
+            d.show_all()
+            desks.append(d)
+        return False
+
+    build()
+    # 모니터를 꽂거나 빼면 다시 만든다 (새 모니터가 까맣게, 빠진 주 모니터와 함께 아이콘이 사라지지 않게)
+    rebuild = {"src": 0}
+
+    def later(*_):
+        if rebuild["src"]:
+            GLib.source_remove(rebuild["src"])
+
+        def go():
+            rebuild["src"] = 0
+            return build()
+        rebuild["src"] = GLib.timeout_add(500, go)
+    disp.connect("monitor-added", later)
+    disp.connect("monitor-removed", later)
 
     def on_hup(*_):
         for d in desks:

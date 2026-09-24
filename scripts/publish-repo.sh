@@ -26,6 +26,13 @@ if find "$P/repo" -type f \( -name '*.key' -o -name '*secring*' -o -name 'privat
     echo "E: repo/ 에 비밀 키로 보이는 파일이 있습니다"; exit 1
 fi
 
+# 서명 확인: 고정된 키로 서명된 메타데이터만 올린다
+PIN="$(cat "$P/config/sekaios-archive.fpr")"
+KFPR=$(gpg --show-keys --with-colons "$KEY" 2>/dev/null | awk -F: '/^fpr/{print $10; exit}')
+[ "$KFPR" = "$PIN" ] || { echo "E: 공개 키 지문($KFPR)이 고정 지문($PIN)과 다릅니다"; exit 1; }
+gpgv --keyring "$KEY" "$P/repo/dists/hatsune/InRelease" >/dev/null 2>&1 \
+    || { echo "E: InRelease 서명이 고정된 키로 확인되지 않습니다"; exit 1; }
+
 say "게시할 파일 준비 → $SITE"
 rm -rf "$SITE"; mkdir -p "$SITE"
 cp -a "$P/repo/." "$SITE/"

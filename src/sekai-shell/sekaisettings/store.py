@@ -130,7 +130,12 @@ class Store:
         except FileNotFoundError:
             dbg("설정 파일 없음 — 기본값 사용")
         except Exception as e:
+            # 깨진 파일은 다음 저장 때 덮어쓰이기 전에 옆에 남겨 둔다 (사용자 설정을 되살릴 수 있게)
             dbg("설정 읽기 실패, 기본값 사용:", e)
+            try:
+                os.replace(CFG_FILE, CFG_FILE + ".broken")
+            except OSError:
+                pass
 
     def _diff(self):
         out = {}

@@ -70,4 +70,8 @@ if [ $rc -ne 0 ] && [ $(( $(date +%s) - started )) -lt 10 ]; then
     export SEKAI_BASIC=1 SEKAI_BASIC_REASON=crash
     exec /usr/lib/sekai/x11/start /usr/lib/sekai/x11/session
 fi
+# 로그아웃: 이 세션에서 띄운 것(패널·트레이 앱·입력기…)을 모두 정리해야 세션이 닫힌다.
+#   데비안 기본값(KillUserProcesses=no)에선 남은 프로세스 때문에 세션이 "closing" 으로 남고,
+#   로그인 화면이 그 사용자를 이미 로그인한 것으로 본다. (이 스크립트도 함께 끝난다)
+[ -n "${XDG_SESSION_ID:-}" ] && loginctl terminate-session "$XDG_SESSION_ID" 2>/dev/null
 exit $rc

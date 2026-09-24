@@ -15,6 +15,7 @@
 #  sekai-lock --fg    앞에서 실행 (디버그)
 #  SEKAI_LOCK_DEMO=1  잠금 프로토콜 없이 보통 창으로 (모양 확인용, 비밀번호 demo)
 # ═══════════════════════════════════════════════════════════════
+import atexit
 import fcntl
 import json
 import os
@@ -45,6 +46,7 @@ if not os.environ.get("WAYLAND_DISPLAY") or os.environ.get("XDG_SESSION_TYPE") =
         sys.exit(1)
 
 LOCKFILE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "sekai-lock.pid")
+LOCKED_MARK = LOCKFILE + ".locked"       # 화면이 실제로 잠긴 동안만 있다 (내용 = 잠근 pid)
 DEMO = os.environ.get("SEKAI_LOCK_DEMO") == "1"
 CFG = os.path.expanduser("~/.config/sekai/settings.json")
 FALLBACK_WALL = "/usr/share/backgrounds/sekai/hatsune.jpg"
@@ -62,7 +64,31 @@ def single_instance():
         return None
     os.ftruncate(fd, 0)
     os.write(fd, str(os.getpid()).encode())
+    try:
+        os.remove(LOCKED_MARK)              # 죽은 앞 인스턴스가 남긴 표시
+    except OSError:
+        pass
     return fd
+
+
+def wait_other_locked(timeout=10.0):
+    """다른 인스턴스가 잠금을 잡고 있다 — 실제로 화면이 잠길 때까지 기다린다.
+    잠금 파일만 잡혔을 뿐 아직 안 잠긴 순간에 '잠김'이라 답하면, 절전 직전 잠금(before-sleep)이
+    잠기기 전에 절전을 허락해 버린다.
+      → 'locked' 표시가 생기면 True / 앞 인스턴스가 끝나면 우리가 잠금을 넘겨받음 / 시간 초과 False"""
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        try:
+            with open(LOCKED_MARK) as f, open(LOCKFILE) as g:
+                if f.read().strip() == g.read().strip():
+                    return True
+        except OSError:
+            pass
+        fd = single_instance()
+        if fd is not None:
+            return fd                        # 앞 인스턴스가 실패하고 끝났다 → 우리가 잠근다
+        time.sleep(0.1)
+    return False
 
 
 def daemonize():
@@ -97,10 +123,13 @@ if __name__ == "__main__" and "--fg" not in sys.argv and not DEMO:
 
 INSTANCE = single_instance()
 if INSTANCE is None:
-    # 이미 잠겨 있다 — 부모에게는 "잠김"으로 알린다
-    if READY_FD is not None:
-        os.write(READY_FD, b"1")
-    sys.exit(0)
+    # 다른 인스턴스가 잠그는 중이거나 이미 잠갔다 — 실제로 잠긴 걸 확인하고 답한다
+    got = wait_other_locked()
+    if got is True or got is False:
+        if READY_FD is not None:
+            os.write(READY_FD, b"1" if got else b"0")
+        sys.exit(0 if got else 1)
+    INSTANCE = got
 
 import gi  # noqa: E402
 gi.require_version("Gtk", "3.0")
@@ -127,6 +156,13 @@ def settings():
 
 def signal_ready(ok):
     global READY_FD
+    if ok:
+        try:
+            with open(LOCKED_MARK, "w") as f:
+                f.write(str(os.getpid()))
+            atexit.register(lambda: os.path.exists(LOCKED_MARK) and os.remove(LOCKED_MARK))
+        except OSError:
+            pass
     if READY_FD is not None:
         try:
             os.write(READY_FD, b"1" if ok else b"0")
@@ -406,7 +442,10 @@ class Locker:
         self.windows = []
         self.anim = None
 
-        path = settings().get("wallpaper", {}).get("path") or FALLBACK_WALL
+        try:                                     # 설정 파일이 이상해도 잠금은 걸려야 한다
+            path = (settings().get("wallpaper") or {}).get("path") or FALLBACK_WALL
+        except Exception:
+            path = FALLBACK_WALL
         if not os.path.exists(path):
             path = FALLBACK_WALL
         try:
@@ -429,25 +468,65 @@ class Locker:
             self.lock.lock_lock()
             monitors = [display.get_monitor(i) for i in range(display.get_n_monitors())]
 
-        prim = display.get_primary_monitor() or monitors[0]
+        self.main = None
+        self.mons = []                  # 창마다 붙은 모니터 (views·windows 와 같은 순서)
+        prim = display.get_primary_monitor() or (monitors[0] if monitors else None)
         for m in monitors:
-            win = Gtk.Window()
-            view = LockView(self, primary=(m == prim))
-            win.add(view)
-            win.connect("key-press-event", self._key)
-            if self.lock is not None:
-                self.lock.new_surface(win, m)
-            else:
-                win.fullscreen()
-                win.connect("destroy", Gtk.main_quit)
-            win.show_all()
-            self.views.append(view)
-            self.windows.append(win)
-            if view.primary:
-                self.main = view
-        for v in self.views:
-            v.apply_stage()
+            self._add_view(m, primary=(m == prim))
+        if self.main is None and self.views:
+            self._make_primary(0)
+        if self.lock is not None:
+            # 잠긴 동안 모니터를 꽂거나 빼도 (도킹 해제 등) 입력 칸이 있는 화면이 남게
+            display.connect("monitor-added", lambda _d, m: self._monitor_added(m))
+            display.connect("monitor-removed", lambda _d, m: self._monitor_removed(m))
         GLib.timeout_add_seconds(1, self._tick)
+
+    def _add_view(self, m, primary):
+        win = Gtk.Window()
+        view = LockView(self, primary=primary)
+        win.add(view)
+        win.connect("key-press-event", self._key)
+        if self.lock is not None:
+            self.lock.new_surface(win, m)
+        else:
+            win.fullscreen()
+            win.connect("destroy", Gtk.main_quit)
+        win.show_all()
+        self.views.append(view)
+        self.windows.append(win)
+        self.mons.append(m)
+        if primary:
+            self.main = view
+        view.stage = view.target = self.main.target if self.main else 0.0
+        view.apply_stage()
+        return view
+
+    def _drop_view(self, i):
+        self.views.pop(i)
+        self.mons.pop(i)
+        win = self.windows.pop(i)
+        win.destroy()
+
+    def _make_primary(self, i):
+        """i 번 화면을 입력 칸이 있는 화면으로 다시 만든다"""
+        m = self.mons[i]
+        self._drop_view(i)
+        self.main = None
+        self._add_view(m, primary=True)
+
+    def _monitor_added(self, m):
+        self._add_view(m, primary=self.main is None)
+
+    def _monitor_removed(self, m):
+        if m not in self.mons:
+            return
+        i = self.mons.index(m)
+        was_main = self.views[i] is self.main
+        self._drop_view(i)
+        if was_main:
+            self.main = None
+            if self.views:
+                self._make_primary(0)
 
     def _finished(self, *_):
         # 다른 잠금 프로그램이 이미 잠갔거나, 컴포지터가 거부했다
@@ -458,6 +537,8 @@ class Locker:
     def _tick(self):
         for v in self.views:
             v.tick()
+        if self.main is None:                   # 모니터가 하나도 없을 때 (절전 직전 등)
+            return True
         if (self.main.target == 1.0 and not self.busy and not self.main.pw.get_text()
                 and time.monotonic() - self.last_input > IDLE_BACK):
             self.animate(0.0)
@@ -469,7 +550,7 @@ class Locker:
     # ── 커튼 ↔ 로그인 ──
     def reveal(self):
         self.poke()
-        if self.main.target != 1.0:
+        if self.main is not None and self.main.target != 1.0:
             self.animate(1.0)
 
     def animate(self, target):
@@ -488,6 +569,9 @@ class Locker:
             else:
                 v.stage = v.target
             v.apply_stage()
+        if self.main is None:
+            self.anim = None
+            return False
         if self.main.target == 1.0 and self.main.stage > 0.5 and not self.main.pw.has_focus():
             self.main.pw.grab_focus()
         if done:
@@ -500,6 +584,8 @@ class Locker:
 
     def _key(self, win, ev):
         self.poke()
+        if self.main is None:
+            return True
         if self.main.target != 1.0:
             self.reveal()
             # 첫 글자를 버리지 않게 — 글자 키면 비밀번호 칸으로 넘긴다
@@ -514,8 +600,19 @@ class Locker:
                 self.animate(0.0)
             return True
         if win is not self.main.get_toplevel():
-            # 다른 모니터에 초점이 있으면 주 화면 입력칸으로
-            self.main.get_toplevel().present()
+            # 다른 모니터에 초점이 있으면 — 입력을 주 화면 비밀번호 칸으로 직접 옮긴다
+            #   (초점만 옮기면 첫 글자 뒤의 키가 그 모니터에서 버려진다)
+            e = self.main.pw
+            if ev.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+                self.submit()
+            elif ev.keyval == Gdk.KEY_BackSpace:
+                e.set_text(e.get_text()[:-1])
+            else:
+                ch = Gdk.keyval_to_unicode(ev.keyval)
+                if ch and ch >= 32 and not (ev.state & Gdk.ModifierType.CONTROL_MASK):
+                    e.set_text(e.get_text() + chr(ch))
+            e.set_position(-1)
+            return True
         caps = Gdk.Keymap.get_for_display(Gdk.Display.get_default()).get_caps_lock_state()
         cur = self.main.msg.get_text()
         if caps and not cur:

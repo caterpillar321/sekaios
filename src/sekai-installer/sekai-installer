@@ -303,6 +303,15 @@ class Installer(Gtk.Window):
 
     def on_disk(self, path):
         self.disk = path
+        # 고른 순간의 크기·시리얼 — 설치 직전에 같은 디스크인지 백엔드가 다시 확인한다
+        #   (확인 화면에 머무는 사이 USB 를 바꿔 꽂으면 같은 /dev/sdX 가 다른 디스크일 수 있다)
+        def q(col):
+            return subprocess.run(["lsblk", "-dno", col, "-b", path], capture_output=True,
+                                  text=True, timeout=5).stdout.strip().replace(" ", "")
+        try:
+            self.disk_id = [x for x in (q("SIZE"), q("SERIAL")) if x] if q("SIZE") else []
+        except Exception:
+            self.disk_id = []
         self._plan()
         self.wz.set_next_enabled(True)
 
@@ -467,6 +476,11 @@ class Installer(Gtk.Window):
     def _cmd(self):
         args = [BACKEND, "--disk", self.disk, "--esp-mb", str(self.esp_mb),
                 "--swap-mb", str(self.swap_mb), "--yes-erase"]
+        ident = getattr(self, "disk_id", [])
+        if ident:
+            args += ["--expect-size", ident[0]]
+        if len(ident) > 1:
+            args += ["--expect-serial", ident[1]]
         if DEMO:
             return None
         # 라이브 사용자는 암호 없이 sudo 가 된다. 안 되면 pkexec 로 암호를 묻는다.

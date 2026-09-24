@@ -20,6 +20,12 @@ fi
 echo "==> overlay 동기화"
 "$SELF/sync-overlay.sh" | tail -2
 
+# 배포용인데 개발용 SSH 키가 남아 있으면 멈춘다 (설치하는 모든 계정에 SSH 문이 열린다)
+if [ "$(cat "$P/build/overlay.kind" 2>/dev/null)" != dev ] && [ -e "$R/etc/skel/.ssh/authorized_keys" ]; then
+    echo "E: 배포용 빌드인데 rootfs/etc/skel/.ssh/authorized_keys 가 있습니다 — 지우고 다시 하세요"
+    exit 1
+fi
+
 echo "==> 정리"
 rm -rf  "$R"/var/cache/apt/archives/*.deb "$R"/var/cache/apt/archives/partial/*
 rm -rf  "$R"/var/lib/apt/lists/*;  mkdir -p "$R/var/lib/apt/lists/partial"

@@ -266,6 +266,8 @@ mkdeb() {
         echo " Built from upstream source for SekaiOS."
     } > "$stage/DEBIAN/control"
 
+    # 옛 판(다른 버전·리비전)은 지운다 — 두 판이 함께 있으면 finalize 의 *.deb 설치가 꼬인다
+    rm -f "$OUT/${pkg}"_*_amd64.deb
     dpkg-deb --root-owner-group --build "$stage" "$OUT/${pkg}_${ver}-$(rev_for "$pkg")_amd64.deb" >/dev/null \
       || die ".deb 생성 실패: $pkg"
     ok "$(basename "$OUT/${pkg}_${ver}-$(rev_for "$pkg")_amd64.deb")"

@@ -33,16 +33,23 @@ C=$(wt --title "FINAL WARNING" --inputbox "\nType  DESTROY  to erase $DISK and i
 [ "$C" = DESTROY ] || { wt --msgbox "Cancelled." 7 30; exit 1; }
 
 ERR=""
+RES=$(mktemp)                     # 결과 파일 — 예측 가능한 /tmp 경로를 쓰지 않는다
 {
     "$BACKEND" --disk "$DISK" --yes-erase 2>&1 | while read -r kind rest; do
         case "$kind" in
             PROGRESS) echo "${rest%% *}" ;;
             STEP)     printf 'XXX\n%s\nStep %s\nXXX\n' "" "$rest" ;;
-            ERROR)    echo "$rest" > /tmp/sekai-install.err ;;
+            ERROR)    echo "ERROR $rest" > "$RES" ;;
+            DONE)     [ -s "$RES" ] || echo "DONE" > "$RES" ;;
         esac
     done
 } | wt --title "Installing" --gauge "Starting..." 8 70 0
-[ -s /tmp/sekai-install.err ] && ERR=$(cat /tmp/sekai-install.err) && rm -f /tmp/sekai-install.err
+case "$(cat "$RES")" in
+    DONE)    ERR="" ;;
+    ERROR*)  ERR=$(sed 's/^ERROR //' "$RES") ;;
+    *)       ERR="The installer stopped unexpectedly." ;;   # 끝(DONE)을 못 받음 = 도중에 죽음
+esac
+rm -f "$RES"
 
 if [ -n "$ERR" ]; then
     wt --title "Installation failed" --msgbox "$ERR\n\nLog: /var/log/sekai-install.log" 12 70

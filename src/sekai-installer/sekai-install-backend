@@ -25,13 +25,15 @@ TARGET=/target
 LOG=/var/log/sekai-install.log
 TOTAL=6
 
-DISK=""; ESP_MB=512; SWAP_MB=0; YES=0
+DISK=""; ESP_MB=512; SWAP_MB=0; YES=0; EXP_SIZE=""; EXP_SERIAL=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --disk)      DISK="$2"; shift 2 ;;
         --esp-mb)    ESP_MB="$2"; shift 2 ;;
         --swap-mb)   SWAP_MB="$2"; shift 2 ;;
         --yes-erase) YES=1; shift ;;
+        --expect-size)   EXP_SIZE="$2"; shift 2 ;;
+        --expect-serial) EXP_SERIAL="$2"; shift 2 ;;
         *) echo "ERROR 모르는 옵션: $1"; exit 2 ;;
     esac
 done
@@ -63,14 +65,25 @@ log "disk=$DISK esp=$ESP_MB swap=$SWAP_MB"
 [ -d /sys/firmware/efi ]        || die "UEFI 모드로 부팅해야 합니다 (BIOS/레거시 모드는 지원하지 않음)"
 [ "$YES" = 1 ]                  || die "--yes-erase 없이는 디스크를 지우지 않습니다"
 [ -b "$DISK" ]                  || die "디스크가 없습니다: $DISK"
+DISK="$(realpath "$DISK")"        # /dev/disk/by-id/… 같은 링크도 실제 장치 이름으로 (비교·파티션 이름용)
 [ "$(lsblk -dno TYPE "$DISK")" = disk ] || die "디스크가 아닙니다: $DISK"
 [[ "$ESP_MB" =~ ^[0-9]+$ ]] && [ "$ESP_MB" -ge 256 ] && [ "$ESP_MB" -le 4096 ] || die "ESP 크기가 이상합니다: $ESP_MB"
 [[ "$SWAP_MB" =~ ^[0-9]+$ ]] && [ "$SWAP_MB" -le 65536 ] || die "스왑 크기가 이상합니다: $SWAP_MB"
 
+# 고른 뒤에 디스크가 바뀌지 않았는지 (크기·시리얼)
+if [ -n "$EXP_SIZE" ] && [ "$(lsblk -dnbo SIZE "$DISK")" != "$EXP_SIZE" ]; then
+    die "고른 디스크가 바뀌었습니다 (크기가 다름) — 디스크를 다시 골라 주세요"
+fi
+if [ -n "$EXP_SERIAL" ] && [ "$(lsblk -dno SERIAL "$DISK" | tr -d ' ')" != "$EXP_SERIAL" ]; then
+    die "고른 디스크가 바뀌었습니다 (시리얼이 다름) — 디스크를 다시 골라 주세요"
+fi
+
+# 설치 USB 자체는 안 된다. 장치 매퍼(Ventoy 등)를 거쳐도 맨 아래 디스크까지 따라간다
 LIVE_DEV="$(findmnt -n -o SOURCE /run/live/medium 2>/dev/null | sed 's/\[.*//')"
 if [ -n "$LIVE_DEV" ]; then
-    LIVE_DISK="/dev/$(lsblk -no PKNAME "$LIVE_DEV" 2>/dev/null | head -1)"
-    [ "$DISK" = "$LIVE_DISK" ] || [ "$DISK" = "$LIVE_DEV" ] && die "지금 켜져 있는 설치 USB 에는 설치할 수 없습니다"
+    for d in $(lsblk -snlpo NAME,TYPE "$LIVE_DEV" 2>/dev/null | awk '$2=="disk"{print $1}') "$LIVE_DEV"; do
+        [ "$DISK" = "$(realpath "$d" 2>/dev/null)" ] && die "지금 켜져 있는 설치 USB 에는 설치할 수 없습니다"
+    done
 fi
 
 SIZE_MB=$(( $(lsblk -dnbo SIZE "$DISK") / 1024 / 1024 ))
@@ -130,7 +143,10 @@ while read -r pct; do
     [ "$pct" -eq "$last" ] && continue
     last=$pct
     prog $(( 4 + pct * 72 / 100 ))
-done < <(unsquashfs -f -percentage -d "$TARGET" "$SQUASH" 2>>"$LOG")
+done < <(unsquashfs -f -percentage -d "$TARGET" "$SQUASH" 2>>"$LOG"; echo "rc=$?" > "$LOG.unsquashfs")
+# 프로세스 치환의 종료 코드는 그냥은 안 보인다 → 파일로 받아 확인 (USB 읽기 오류·공간 부족)
+[ "$(cat "$LOG.unsquashfs" 2>/dev/null)" = "rc=0" ] || die "파일을 복사하지 못했습니다 (설치 USB 읽기 오류일 수 있습니다)"
+rm -f "$LOG.unsquashfs"
 [ -x "$TARGET/usr/bin/bash" ] || die "파일을 복사하지 못했습니다"
 prog 76
 

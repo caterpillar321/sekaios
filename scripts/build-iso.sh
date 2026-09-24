@@ -7,7 +7,9 @@ set -euo pipefail
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 P="$(dirname "$SELF")"
 
-ISO_NAME="sekaios-1.0-amd64.iso"
+# 개발 빌드(SSH 키 포함)는 이름부터 다르게 — 배포용과 헷갈려 남에게 주지 않게
+KIND="$(cat "$P/build/overlay.kind" 2>/dev/null || echo release)"
+if [ "$KIND" = dev ]; then ISO_NAME="sekaios-1.0-amd64-dev.iso"; else ISO_NAME="sekaios-1.0-amd64.iso"; fi
 VOLID="SEKAIOS"
 SQUASH="$P/build/filesystem.zstd.squashfs"
 # ISO 를 복사할 Windows 폴더 (--win) — 이 컴퓨터 전용 설정 local/env 의 SEKAI_WINDIR
@@ -18,9 +20,19 @@ say(){ printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 
 # ── 1. live/ 동기화 ──────────────────────────────────
 say "커널 / initramfs / squashfs 동기화"
-cp -u "$P"/rootfs/boot/vmlinuz-*    "$P/iso/live/vmlinuz"
-cp -u "$P"/rootfs/boot/initrd.img-* "$P/iso/live/initrd.img"
+# 가장 높은 버전 하나를 골라 커널과 initrd 를 짝으로 복사한다.
+#   cp -u 는 날짜로 판단하는데 커널 파일 날짜는 "패키지 만든 날"이라 새 커널을 건너뛰곤 했다
+#   (옛 vmlinuz + 새 initrd → 모듈이 안 맞아 라이브 부팅 실패).
+KVER="$(ls "$P"/rootfs/boot/vmlinuz-* | sed 's|.*/vmlinuz-||' | sort -V | tail -1)"
+[ -n "$KVER" ] && [ -f "$P/rootfs/boot/initrd.img-$KVER" ] || { echo "E: 커널/initrd 없음 ($KVER)"; exit 1; }
+echo "    커널 $KVER"
+cp "$P/rootfs/boot/vmlinuz-$KVER"    "$P/iso/live/vmlinuz"
+cp "$P/rootfs/boot/initrd.img-$KVER" "$P/iso/live/initrd.img"
 [ -f "$SQUASH" ] || { echo "E: squashfs 없음: $SQUASH"; exit 1; }
+# 마지막 확인: 배포용인데 이미지 안에 개발용 SSH 키가 있으면 만들지 않는다
+if [ "$KIND" != dev ] && unsquashfs -l "$SQUASH" 2>/dev/null | grep '/etc/skel/\.ssh/authorized_keys$' >/dev/null; then
+    echo "E: 배포용 ISO 에 개발용 SSH 키(/etc/skel/.ssh/authorized_keys)가 들어 있습니다"; exit 1
+fi
 cp -u "$SQUASH" "$P/iso/live/filesystem.squashfs"
 printf '%s' "$(stat -c%s "$P/iso/live/filesystem.squashfs")" > "$P/iso/live/filesystem.size"
 
@@ -57,6 +69,10 @@ cp "$STUB" "$P/iso/EFI/debian/grub.cfg"
 cp "$STUB" "$P/iso/EFI/BOOT/grub.cfg"
 cp "$P/config/grub-live.cfg" "$P/iso/boot/grub/grub.cfg"
 # 시험용: SEKAI_ISO_DEFAULT=1 이면 기본 선택을 두 번째 항목(기본 화면 모드)으로
+if [ -n "${SEKAI_ISO_DEFAULT:-}" ]; then
+    [[ "$SEKAI_ISO_DEFAULT" =~ ^[0-9]$ ]] || { echo "E: SEKAI_ISO_DEFAULT 는 한 자리 숫자"; exit 1; }
+    [ "$KIND" = dev ] || { echo "E: SEKAI_ISO_DEFAULT 는 개발 빌드(SEKAI_DEV=1)에서만"; exit 1; }
+fi
 [ -n "${SEKAI_ISO_DEFAULT:-}" ] && sed -i "s/^set default=.*/set default=${SEKAI_ISO_DEFAULT}/" "$P/iso/boot/grub/grub.cfg"
 cp -r "$P/src/sekai-desktop/usr/share/grub/themes/sekai" "$P/iso/boot/grub/themes/"
 mkdir -p "$P/iso/boot/grub/fonts"

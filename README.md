@@ -33,7 +33,7 @@ scripts/publish-repo.sh           # 저장소 게시 → https://caterpillar321.
 
 `local/env` 에 `SEKAI_VM`, `SEKAI_VM_PW` 를 적고 `scripts/deploy-vm.sh --restart`.
 개발 빌드에는 `local/overlay-dev/` 의 파일(개발용 SSH 키)이 들어간다.
-**배포용 ISO 는 `SEKAI_RELEASE=1 sudo -E scripts/finalize.sh`** 로 만든다.
+기본은 **배포용**이다. 개발용 SSH 키(`local/overlay-dev`)를 넣은 개발 ISO 는 `sudo env SEKAI_DEV=1 scripts/finalize.sh` 로 만들고, 이름에 `-dev` 가 붙는다 (남에게 주지 말 것).
 
 ## 라이선스
 

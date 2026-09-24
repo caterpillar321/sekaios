@@ -8,7 +8,7 @@ import os
 
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GdkPixbuf, Gdk  # noqa: E402
+from gi.repository import GLib, Gtk, GdkPixbuf, Gdk  # noqa: E402
 
 
 def icon_image(names, size=16):
@@ -133,8 +133,20 @@ def slider(value, lo, hi, step=1, on_change=None, digits=0, width=220):
     sc.set_size_request(width, -1)
     sc.set_value_pos(Gtk.PositionType.RIGHT)
     if on_change:
-        sc.connect("value-changed",
-                   lambda s: on_change(s.get_value() if digits else int(s.get_value())))
+        # 끄는 동안 값이 수십 번 바뀐다 — 매번 저장·적용(파일 쓰기, hyprctl)하면 버벅인다.
+        #   멈춘 뒤 150ms 에 한 번만
+        pending = {"src": 0}
+
+        def fire():
+            pending["src"] = 0
+            on_change(sc.get_value() if digits else int(sc.get_value()))
+            return False
+
+        def changed(_s):
+            if pending["src"]:
+                GLib.source_remove(pending["src"])
+            pending["src"] = GLib.timeout_add(150, fire)
+        sc.connect("value-changed", changed)
     return sc
 
 

@@ -126,9 +126,18 @@ def apply(req):
         return {"ok": False, "error": "컴퓨터 이름은 영문·숫자·하이픈(-)만, 63자까지 쓸 수 있습니다"}
     if not USER_RE.match(user) or user in RESERVED:
         return {"ok": False, "error": "쓸 수 없는 사용자 이름입니다"}
+    # 앞서 이 OOBE 가 만들다 만 계정 (다음 단계에서 실패해 "다시 시도"하는 경우)
+    try:
+        with open(DONE_USER) as f:
+            made = f.read().strip()
+    except OSError:
+        made = ""
+    reuse = False
     try:
         pwd.getpwnam(user)
-        return {"ok": False, "error": "이미 있는 사용자 이름입니다"}
+        if user != made:
+            return {"ok": False, "error": "이미 있는 사용자 이름입니다"}
+        reuse = True                                # 같은 이름으로 다시 시도 → 이어서 진행
     except KeyError:
         pass
     if not (1 <= len(pw) <= 256) or "\n" in pw or ":" in full or "\n" in full or len(full) > 80:
@@ -162,16 +171,36 @@ def apply(req):
     # 계정 — 있는 그룹만 (없는 그룹이 하나라도 있으면 useradd 전체가 실패한다)
     groups = [g for g in ("sudo", "audio", "video", "plugdev", "netdev", "cdrom", "dialout",
                           "bluetooth", "lpadmin", "users") if _group(g)]
-    rc, out = run(["useradd", "-m", "-s", "/bin/bash", "-c", full or user,
-                   "-G", ",".join(groups), user])
-    if rc != 0:
-        return {"ok": False, "error": "계정을 만들지 못했습니다"}
+    if made and made != user and not reuse:
+        # 다른 이름으로 다시 시도 — 지난번에 만들다 만 계정은 치운다 (OOBE 가 안 끝났으니 쓴 적 없음)
+        try:
+            pwd.getpwnam(made)
+            run(["userdel", "-r", made])
+        except KeyError:
+            pass
+    if not reuse:
+        rc, out = run(["useradd", "-m", "-s", "/bin/bash", "-c", full or user,
+                       "-G", ",".join(groups), user])
+        if rc != 0:
+            return {"ok": False, "error": "계정을 만들지 못했습니다"}
+        # 만들었다는 표시를 먼저 남긴다 — 뒤 단계가 실패해도 다시 시도할 수 있게
+        with open(DONE_USER, "w") as f:
+            f.write(user + "\n")
+    else:
+        run(["usermod", "-c", full or user, "-G", ",".join(groups), user])
     rc, out = run(["chpasswd"], inp=f"{user}:{pw}\n")
     if rc != 0:
-        run(["userdel", "-r", user])
         return {"ok": False, "error": "암호를 정하지 못했습니다"}
 
-    # 사용자 설정 (언어·강조색·배경·키보드)
+    try:
+        _user_setup(user, lang, accent, wall, kb)
+    except Exception as e:                          # 설정 파일·기본 폴더는 없어도 로그인은 된다
+        print("사용자 설정 실패:", e, flush=True)
+    return {"ok": True, "user": user}
+
+
+def _user_setup(user, lang, accent, wall, kb):
+    """사용자 설정 (언어·강조색·배경·키보드)과 기본 폴더"""
     p = pwd.getpwnam(user)
     cfg_dir = os.path.join(p.pw_dir, ".config", "sekai")
     os.makedirs(cfg_dir, exist_ok=True)
@@ -189,11 +218,10 @@ def apply(req):
             os.chown(os.path.join(root, n), p.pw_uid, p.pw_gid)
     os.chown(os.path.join(p.pw_dir, ".config"), p.pw_uid, p.pw_gid)
     # 사진·문서 같은 기본 폴더 (한국어 이름)
-    run(["runuser", "-u", user, "--", "env", f"LANG={lang}", "xdg-user-dirs-update", "--force"])
-
-    with open(DONE_USER, "w") as f:
-        f.write(user + "\n")
-    return {"ok": True, "user": user}
+    try:
+        run(["runuser", "-u", user, "--", "env", f"LANG={lang}", "xdg-user-dirs-update", "--force"])
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def _group(name):
@@ -205,10 +233,13 @@ def _group(name):
 
 
 def finish():
-    try:
-        os.remove(FLAG)
-    except FileNotFoundError:
-        pass
+    # "만들다 만 계정" 표시도 지운다 — 남아 있으면 나중에 OOBE 를 다시 켰을 때
+    # 이 (이제는 진짜) 계정을 만들다 만 것으로 보고 지울 수 있다
+    for f in (FLAG, DONE_USER):
+        try:
+            os.remove(f)
+        except FileNotFoundError:
+            pass
     # 다음 부팅부터는 켜지지 않게
     run(["systemctl", "disable", "sekai-oobe-helper.service"])
     threading.Timer(1.0, lambda: os._exit(0)).start()

@@ -26,7 +26,14 @@ APT_OPTS = ["-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--fo
 
 
 def out(*a):
-    print(*a, flush=True)
+    # 설정 창을 닫으면 읽는 쪽이 사라진다 — 그래도 설치는 끝까지 가야 한다 (dpkg 가 반쯤 멈추면 안 됨)
+    try:
+        print(*a, flush=True)
+    except (BrokenPipeError, OSError):
+        try:
+            sys.stdout = open(os.devnull, "w")
+        except OSError:
+            pass
 
 
 def run_status(cmd, lo, hi, label):
@@ -60,6 +67,17 @@ def run_status(cmd, lo, hi, label):
     return p.returncode, log
 
 
+# 업데이트가 이것들을 지우려 하면 설치하지 않는다 (저장소끼리 충돌할 때 apt 는 조용히 지운다)
+PROTECTED = re.compile(r"^(sekai-|hyprland|hyprbars|hyprexpo|greetd|linux-image-amd64$|shim-signed|"
+                       r"grub-efi-amd64-signed|systemd$|network-manager$)")
+
+
+def removals():
+    res = subprocess.run(["apt-get", "-s", "-q", "full-upgrade"], env=ENV,
+                         capture_output=True, text=True)
+    return [l.split()[1] for l in res.stdout.splitlines() if l.startswith(("Remv ", "Purg "))]
+
+
 def pending():
     """설치될 업데이트 목록 (시뮬레이션)"""
     res = subprocess.run(["apt-get", "-s", "-q", "full-upgrade"], env=ENV,
@@ -82,6 +100,8 @@ def check():
     pk = pending()
     for name, old, new in pk:
         out("PKG", name, old, new)
+    for name in removals():                     # 지워지는 것도 미리 보여 준다
+        out("PKG", name, "-", "삭제")
     out("COUNT", len(pk))
     out("PROGRESS", 100, "완료")
     return 0
@@ -95,6 +115,12 @@ REBOOT_PKGS = re.compile(r"^(linux-image-|linux-base$|libc6$|systemd$|dbus$|dbus
 
 def apply():
     out("PROGRESS", 1, "준비하는 중")
+    gone = removals()
+    bad = [n for n in gone if PROTECTED.match(n)]
+    if bad:
+        out("ERROR", "이 업데이트는 꼭 필요한 패키지를 지우게 되어 설치하지 않았습니다: "
+            + ", ".join(bad[:6]) + " — 저장소가 서로 충돌하고 있을 수 있습니다")
+        return 1
     before = [name for name, _o, _n in pending()]
     rc, log = run_status(["apt-get", "-y", "-q"] + APT_OPTS + ["full-upgrade"], 1, 99, "설치")
     if rc != 0:

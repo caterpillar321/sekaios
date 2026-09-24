@@ -124,8 +124,16 @@ def signed_in():
     try:
         out = subprocess.run(["loginctl", "list-sessions", "--json=short"],
                              capture_output=True, text=True, timeout=3).stdout
-        return {s["user"]: s["session"] for s in json.loads(out or "[]")
-                if s.get("class") == "user" and s.get("seat") == "seat0" and s.get("tty")}
+        res = {}
+        for s in json.loads(out or "[]"):
+            if s.get("class") != "user" or s.get("seat") != "seat0" or not s.get("tty"):
+                continue
+            # 로그아웃했는데 프로세스가 남아 "closing" 인 세션은 로그인한 게 아니다
+            st = subprocess.run(["loginctl", "show-session", str(s["session"]), "-p", "State",
+                                 "--value"], capture_output=True, text=True, timeout=3).stdout.strip()
+            if st in ("active", "online"):
+                res[s["user"]] = s["session"]
+        return res
     except Exception:
         return {}
 

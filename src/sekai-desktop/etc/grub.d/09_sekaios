@@ -1,7 +1,7 @@
 #!/bin/sh
 # SekaiOS 부팅 메뉴 항목 — grub-mkconfig(update-grub)가 부른다
 #   SekaiOS / SekaiOS — 복구 모드 / SekaiOS (이전 커널 …)
-#   데비안의 10_linux 는 sekai-desktop 이 치워 둔다 (항목이 두 벌이 되지 않게)
+#   데비안의 10_linux 는 sekai-desktop 이 실행 권한을 빼 둔다 (항목이 두 벌이 되지 않게)
 set -e
 . /usr/share/grub/grub-mkconfig_lib
 
@@ -31,14 +31,20 @@ entry() {  # 제목 클래스 id 커널 옵션
     echo "}"
 }
 
+# 데비안 안내대로 /etc/default/grub 에 넣은 커널 옵션도 따른다
+#   GRUB_CMDLINE_LINUX         모든 항목 (복구 모드 포함)
+#   GRUB_CMDLINE_LINUX_DEFAULT 보통 항목만 (데비안 기본값 "quiet" 는 겹쳐도 무해)
+ALWAYS="${GRUB_CMDLINE_LINUX:-}"
+NORMAL="$SEKAI_KERNEL_OPTS ${GRUB_CMDLINE_LINUX_DEFAULT:-} $ALWAYS"
+
 latest=$(echo "$KERNELS" | head -1)
-entry "SekaiOS" sekaios default "$latest" "$SEKAI_KERNEL_OPTS"
-entry "SekaiOS — 복구 모드" recovery recovery "$latest" "single"
+entry "SekaiOS" sekaios default "$latest" "$NORMAL"
+entry "SekaiOS — 복구 모드" recovery recovery "$latest" "single $ALWAYS"
 # 그래픽 드라이버 문제로 화면이 안 나올 때 — 펌웨어 화면만 쓰는 기본 화면 모드(X11)
-entry "SekaiOS — 기본 화면 모드" sekaios basic "$latest" "$SEKAI_KERNEL_OPTS nomodeset sekai.basic=1"
+entry "SekaiOS — 기본 화면 모드" sekaios basic "$latest" "$SEKAI_KERNEL_OPTS $ALWAYS nomodeset sekai.basic=1"
 prev=$(echo "$KERNELS" | sed -n 2p)
 if [ -n "$prev" ]; then
-    entry "SekaiOS (이전 커널 ${prev#/boot/vmlinuz-})" sekaios previous "$prev" "$SEKAI_KERNEL_OPTS"
+    entry "SekaiOS (이전 커널 ${prev#/boot/vmlinuz-})" sekaios previous "$prev" "$NORMAL"
 fi
 # 펌웨어(BIOS·UEFI) 설정으로 재시작 — 데비안의 30_uefi-firmware 대신 (아이콘을 붙이려고)
 cat <<'FW'

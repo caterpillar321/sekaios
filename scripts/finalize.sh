@@ -13,7 +13,9 @@ ok(){  printf '%s  ok%s %s\n' "$C_G" "$C_0" "$*"; }
 [ "$(id -u)" -eq 0 ] || { echo "sudo 로 실행하세요"; exit 1; }
 
 # ── 마운트 ───────────────────────────────────────────
+MOUNTED=0
 mnt() {
+    MOUNTED=1
     mkdir -p "$R/mnt/packages" "$P/packages"
     mountpoint -q "$R/proc"    || mount -t proc  proc  "$R/proc"
     mountpoint -q "$R/sys"     || mount -t sysfs sysfs "$R/sys"
@@ -28,6 +30,8 @@ mnt() {
     printf '#!/bin/sh\nexit 101\n' > "$R/usr/sbin/policy-rc.d"; chmod 755 "$R/usr/sbin/policy-rc.d"
 }
 umnt() {
+    [ "$MOUNTED" = 1 ] || return 0          # 두 번 불려도(EXIT 트랩) 되살린 resolv.conf 를 지우지 않게
+    MOUNTED=0
     rm -f "$R/usr/sbin/policy-rc.d" "$R/etc/resolv.conf"
     [ -e "$R/etc/resolv.conf.sekai-saved" ] || [ -L "$R/etc/resolv.conf.sekai-saved" ] && \
         mv -f "$R/etc/resolv.conf.sekai-saved" "$R/etc/resolv.conf" 2>/dev/null || true
@@ -37,6 +41,8 @@ umnt() {
     return 0
 }
 trap 'echo; echo "중단됨"; umnt; exit 130' INT TERM
+# 도중에 실패해도(set -e) 마운트·policy-rc.d·resolv.conf 를 남기지 않는다
+trap 'umnt' EXIT
 
 inroot() {
     chroot "$R" /usr/bin/env -i HOME=/root TERM="${TERM:-xterm}" \

@@ -1,5 +1,11 @@
-"""네트워크 — NetworkManager(nmcli) 기반."""
+"""네트워크 — NetworkManager(nmcli) 기반.
+
+오래 걸리는 nmcli(무선 검색·연결)는 작업 스레드에서 — 창이 멈추지 않게.
+"""
+import re
 import shutil
+import subprocess
+import threading
 
 import gi
 gi.require_version("Gtk", "3.0")
@@ -13,10 +19,15 @@ def _nm(*args, timeout=8):
     return run(["nmcli", "-t", "-c", "no", *args], timeout=timeout)
 
 
+def _fields(line):
+    """nmcli -t 한 줄 → 칸들. 값 안의 : 는 \\: 로 이스케이프되어 온다 (SSID 에 : 가 들어갈 수 있다)"""
+    return [re.sub(r"\\(.)", r"\1", f) for f in re.split(r"(?<!\\):", line)]
+
+
 def _devices():
     out = []
     for line in _nm("-f", "DEVICE,TYPE,STATE,CONNECTION", "device").splitlines():
-        f = line.split(":")
+        f = _fields(line)
         if len(f) >= 4 and f[1] not in ("loopback",):
             out.append({"dev": f[0], "type": f[1], "state": f[2], "conn": f[3]})
     return out
@@ -35,7 +46,7 @@ def _wifi_list():
     out = []
     for line in _nm("-f", "ACTIVE,SSID,SIGNAL,SECURITY", "device", "wifi",
                     "list", timeout=15).splitlines():
-        f = line.split(":")
+        f = _fields(line)
         if len(f) >= 4 and f[1]:
             out.append({"active": f[0] == "yes", "ssid": f[1],
                         "signal": f[2], "sec": f[3] or "열림"})
@@ -130,37 +141,65 @@ def _fill(page, body, store, refresh=None):
                 GLib.timeout_add(1200, lambda: (refresh and refresh(), False)[1]))))
 
         if radio:
-            nets = _wifi_list()
-            if not nets:
-                row(s, "검색된 네트워크 없음", "잠시 후 새로 고쳐 보세요")
-            for n in nets[:20]:
-                bars = int(n["signal"] or 0)
-                ico = "network-wireless-signal-" + (
-                    "excellent" if bars > 75 else "good" if bars > 50
-                    else "ok" if bars > 25 else "weak")
-                sub = f"신호 {n['signal']}%  ·  {n['sec']}"
-                if n["active"]:
-                    sub = "연결됨  ·  " + sub
+            wifi_dev = next((d["dev"] for d in devs if d["type"] == "wifi"), None)
+            status = Gtk.Label(xalign=0)
+            status.get_style_context().add_class("row-sub")
+            status.set_line_wrap(True)
+            body.pack_start(status, False, False, 0)
+            waiting = row(s, "무선 네트워크를 찾는 중…")
 
-                def connect(ssid=n["ssid"], sec=n["sec"], active=n["active"]):
-                    win = body.get_toplevel()
+            def connect(ssid, sec, active):
+                win = body.get_toplevel()
+                pw = None
+                if not active and sec and sec != "열림":
+                    pw = _ask_password(win, ssid)
+                    if pw is None:
+                        return
+                status.set_text("연결을 끊는 중…" if active else f"'{ssid}' 에 연결하는 중…")
+
+                def work():
                     if active:
-                        run(["nmcli", "connection", "down", "id", ssid])
+                        cmd = ["nmcli", "device", "disconnect", wifi_dev] if wifi_dev else \
+                              ["nmcli", "connection", "down", "id", ssid]
                     else:
-                        pw = None
-                        if sec and sec != "열림":
-                            pw = _ask_password(win, ssid)
-                            if pw is None:
-                                return
-                        cmd = ["nmcli", "device", "wifi", "connect", ssid]
-                        if pw:
-                            cmd += ["password", pw]
-                        run(cmd, timeout=30)
-                    if refresh:
-                        GLib.timeout_add(800, lambda: (refresh(), False)[1])
+                        cmd = ["nmcli", "device", "wifi", "connect", ssid] + (["password", pw] if pw else [])
+                    try:
+                        r = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
+                        err = None if r.returncode == 0 else (r.stderr or r.stdout).strip().splitlines()[-1:]
+                    except subprocess.TimeoutExpired:
+                        err = ["시간이 초과되었습니다"]
+                    GLib.idle_add(finish, ssid, err)
+                threading.Thread(target=work, daemon=True).start()
 
-                row(s, n["ssid"], sub, icon=[ico, "network-wireless"],
-                    control=button("연결 끊기" if n["active"] else "연결", connect))
+            def finish(ssid, err):
+                if err is not None:
+                    msg = err[0] if err else "알 수 없는 오류"
+                    if "Secrets were required" in msg or "802-11-wireless-security" in msg:
+                        msg = "암호가 맞지 않습니다"
+                    status.set_text(f"'{ssid}' 에 연결하지 못했습니다: {msg}")
+                elif refresh:
+                    refresh()
+                return False
+
+            def show(nets):
+                s.remove(waiting)
+                if not nets:
+                    row(s, "검색된 네트워크 없음", "잠시 후 새로 고쳐 보세요")
+                for n in nets[:20]:
+                    bars = int(n["signal"] or 0)
+                    ico = "network-wireless-signal-" + (
+                        "excellent" if bars > 75 else "good" if bars > 50
+                        else "ok" if bars > 25 else "weak")
+                    sub = f"신호 {n['signal']}%  ·  {n['sec']}"
+                    if n["active"]:
+                        sub = "연결됨  ·  " + sub
+                    row(s, n["ssid"], sub, icon=[ico, "network-wireless"],
+                        control=button("연결 끊기" if n["active"] else "연결",
+                                       lambda n=n: connect(n["ssid"], n["sec"], n["active"])))
+                s.show_all()
+                return False
+
+            threading.Thread(target=lambda: GLib.idle_add(show, _wifi_list()), daemon=True).start()
 
     # ── 도구 ──
     s = sect("도구")

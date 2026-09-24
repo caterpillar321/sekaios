@@ -31,8 +31,8 @@ ibus-daemon -drx >/dev/null 2>&1
 sxhkd -c "$X/sxhkdrc" >/dev/null 2>&1 &
 xcape -e 'Super_L=Control_L|Escape' >/dev/null 2>&1 &
 sekai-idle >/dev/null 2>&1 &
-sh -c 'until sekai-desk; do sleep 1; done' >/dev/null 2>&1 &
-sh -c 'until sekai-panel; do sleep 1; done' >/dev/null 2>&1 &
+/usr/lib/sekai/keep-running sekai-desk >/dev/null 2>&1 &
+/usr/lib/sekai/keep-running sekai-panel >/dev/null 2>&1 &
 lxpolkit >/dev/null 2>&1 &
 nm-applet --indicator >/dev/null 2>&1 &
 

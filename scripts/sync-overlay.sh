@@ -15,12 +15,23 @@ MANIFEST="$P/build/overlay.manifest"     # 이미지 밖에 둔다 (빌드 메�
 [ -d "$P/overlay" ]  || { echo "E: overlay 없음"; exit 1; }
 
 # 개발 빌드에만 넣는 파일 (local/overlay-dev: 개발용 SSH 키 등, git 에 없음)
-#   배포용으로 만들 땐 SEKAI_RELEASE=1 → 넣지 않고, 지난번에 넣은 것도 지운다
+#   명시적으로 SEKAI_DEV=1 일 때만 넣는다. 기본은 배포용 — 환경 변수를 빠뜨려도
+#   (sudo 가 지우는 등) 키가 새지 않는 쪽으로 틀린다.
+#   배포용일 땐 지난번에 넣은 것도 지운다 (manifest 가 없어도 overlay-dev 목록으로 지운다).
 SRCS=("$P/overlay")
-if [ "${SEKAI_RELEASE:-0}" != 1 ] && [ -d "$P/local/overlay-dev" ]; then
+KIND=release
+if [ "${SEKAI_DEV:-0}" = 1 ] && [ -d "$P/local/overlay-dev" ]; then
     SRCS+=("$P/local/overlay-dev")
-    echo "==> 개발 빌드: local/overlay-dev 포함 (배포용은 SEKAI_RELEASE=1)"
+    KIND=dev
+    echo "==> 개발 빌드: local/overlay-dev 포함 (SSH 키가 들어갑니다 — 남에게 주지 말 것)"
+elif [ -d "$P/local/overlay-dev" ]; then
+    (cd "$P/local/overlay-dev" && find . -type f -printf '%P\n') | while read -r f; do
+        [ -e "$R/$f" ] || continue
+        dpkg --admindir="$R/var/lib/dpkg" -S "/$f" >/dev/null 2>&1 && continue
+        rm -f "$R/$f"; echo "    삭제 (개발 전용): /$f"
+    done
 fi
+mkdir -p "$P/build"; echo "$KIND" > "$P/build/overlay.kind"
 
 NEW="$(mktemp)"; trap 'rm -f "$NEW"' EXIT
 declare -A FROM                          # 파일 → 원본 폴더 (뒤의 것이 앞의 것을 덮는다)

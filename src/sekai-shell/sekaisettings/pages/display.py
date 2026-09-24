@@ -1,9 +1,15 @@
-"""디스플레이 — 해상도 / 주사율 / 배율 / 회전."""
+"""디스플레이 — 해상도 / 주사율 / 배율 / 회전.
+
+바꾸면 바로 적용하고 "유지할까요?"를 15초 동안 묻는다. 답이 없으면 되돌린다
+(모니터가 못 받아들이는 모드라 화면이 안 보여도 저절로 돌아오게).
+"""
+import copy
+
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib  # noqa: E402
 
-from ..util import hyprctl, spawn
+from ..util import hyprctl, keyword, spawn
 from ..widgets import Page, button, combo, info, row, switch
 
 
@@ -35,9 +41,82 @@ def _modes(mon):
     return out
 
 
+CONFIRM_SECS = 15
+
+
+def _scale_id(v):
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return "1.0"
+    return next((k for k, _ in SCALES if abs(float(k) - v) < 0.01), "1.0")
+
+
 def build(store):
     p = Page("디스플레이", "모니터의 해상도, 주사율, 배율을 바꿉니다.")
     mons = hyprctl("monitors", js=True) or []
+    ctl = {}                       # 모니터 이름 → 되돌릴 때 다시 맞출 위젯들
+    quiet = {"on": False}          # 되돌리며 위젯을 바꿀 땐 변경 처리를 하지 않는다
+
+    def sync_widgets():
+        quiet["on"] = True
+        try:
+            for n, w in ctl.items():
+                d = store.get("display").get(n, {})
+                w["mode"].set_active_id(d.get("mode") or "preferred")
+                w["scale"].set_active_id(_scale_id(d.get("scale", 1.0)))
+                w["tr"].set_active_id(str(int(d.get("transform", 0))))
+                w["en"].set_active(d.get("enabled", True))
+        finally:
+            quiet["on"] = False
+
+    def restore(snap):
+        cur = store.get("display")
+        store.data["display"] = snap
+        store.save()
+        store.apply_display()
+        # 이번에 처음 설정한 모니터는 설정이 없던 상태(권장 모드)로
+        for n in cur:
+            if n not in snap:
+                keyword("monitor", f"{n}, preferred, auto, 1")
+        sync_widgets()
+
+    def confirm(snap):
+        dlg = Gtk.MessageDialog(transient_for=p.get_toplevel() if p.get_toplevel().is_toplevel()
+                                else None, modal=True, message_type=Gtk.MessageType.QUESTION,
+                                buttons=Gtk.ButtonsType.NONE, text="이 화면 설정을 유지할까요?")
+        dlg.add_button("되돌리기", Gtk.ResponseType.REJECT)
+        dlg.add_button("유지", Gtk.ResponseType.ACCEPT)
+        dlg.set_default_response(Gtk.ResponseType.REJECT)
+        left = {"n": CONFIRM_SECS}
+
+        def tick():
+            left["n"] -= 1
+            if left["n"] <= 0:
+                dlg.response(Gtk.ResponseType.REJECT)
+                return False
+            dlg.format_secondary_text(f"{left['n']}초 뒤 원래대로 되돌립니다.")
+            return True
+        dlg.format_secondary_text(f"{CONFIRM_SECS}초 뒤 원래대로 되돌립니다.")
+        src = GLib.timeout_add_seconds(1, tick)
+
+        def done(d, resp):
+            GLib.source_remove(src) if left["n"] > 0 else None
+            d.destroy()
+            if resp != Gtk.ResponseType.ACCEPT:
+                restore(snap)
+        dlg.connect("response", done)
+        dlg.show_all()
+
+    def change(n, key, value, ask=True):
+        if quiet["on"]:
+            return
+        snap = copy.deepcopy(store.get("display"))
+        d = copy.deepcopy(snap.get(n, {}))
+        d[key] = value
+        store.set("display", n, d)
+        if ask:
+            confirm(snap)
 
     if not mons:
         w = Gtk.Label(label="모니터 정보를 읽지 못했습니다. "
@@ -61,16 +140,17 @@ def build(store):
         active = saved.get("mode") or "preferred"
 
         def on_mode(v, n=name):
-            d = store.get("display").setdefault(n, {})
-            d["mode"] = v
-            store.set("display", n, d)
+            if quiet["on"]:
+                return
+            change(n, "mode", v)
             # 적용됐는지 실제 모니터 상태로 확인한다.
             #   드라이버가 모드를 거부하면 Hyprland 는 조용히 권장 모드로 되돌아간다.
             GLib.timeout_add(1500, _verify, n, v)
 
+        mode_combo = combo(items, active, on_mode)
         mode_row = row(s, "해상도 및 주사율", f"현재: {cur_mode}",
                        icon=["video-display", "preferences-desktop-display"],
-                       control=combo(items, active, on_mode))
+                       control=mode_combo)
 
         # 드라이버가 거부했을 때의 안내 + 세션 재시작 버튼
         warn = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -106,38 +186,50 @@ def build(store):
             return False
 
         def on_scale(v, n=name):
-            d = store.get("display").setdefault(n, {})
-            d["scale"] = float(v)
-            store.set("display", n, d)
+            change(n, "scale", float(v))
 
-        row(s, "배율", "글자와 UI 크기",
-            control=combo(SCALES, "%.2g" % float(saved.get("scale", mon.get("scale", 1.0))),
-                          on_scale))
+        scale_combo = combo(SCALES, _scale_id(saved.get("scale", mon.get("scale", 1.0))), on_scale)
+        row(s, "배율", "글자와 UI 크기", control=scale_combo)
 
         def on_tr(v, n=name):
-            d = store.get("display").setdefault(n, {})
-            d["transform"] = int(v)
-            store.set("display", n, d)
+            change(n, "transform", int(v))
 
-        row(s, "화면 방향",
-            control=combo(TRANSFORMS, int(saved.get("transform", mon.get("transform", 0))),
-                          on_tr))
+        tr_combo = combo(TRANSFORMS, int(saved.get("transform", mon.get("transform", 0))), on_tr)
+        row(s, "화면 방향", control=tr_combo)
 
         def on_enabled(v, n=name):
-            d = store.get("display").setdefault(n, {})
-            d["enabled"] = bool(v)
-            store.set("display", n, d)
+            if quiet["on"]:
+                return
+            if not v:
+                # 켜져 있는 마지막 모니터는 끌 수 없다 — 끄면 아무것도 안 보인다
+                active = [m for m in (hyprctl("monitors", js=True) or []) if not m.get("disabled")]
+                if len(active) <= 1:
+                    quiet["on"] = True
+                    ctl[n]["en"].set_active(True)
+                    quiet["on"] = False
+                    return
+            change(n, "enabled", bool(v))
 
-        row(s, "이 모니터 사용", "끄면 화면이 꺼집니다",
-            control=switch(saved.get("enabled", True), on_enabled))
+        en_switch = switch(saved.get("enabled", True), on_enabled)
+        row(s, "이 모니터 사용", "끄면 화면이 꺼집니다 (마지막 남은 모니터는 끌 수 없음)",
+            control=en_switch)
+        ctl[name] = {"mode": mode_combo, "scale": scale_combo, "tr": tr_combo, "en": en_switch}
 
         row(s, "위치", "다중 모니터 배치 (auto 는 자동 배열)",
             control=info(saved.get("position") or "auto"))
 
     s = p.section("기타")
+    def reset():
+        names = [m.get("name") for m in mons] + list(store.get("display").keys())
+        store.reset_section("display")
+        # 설정이 비면 apply_display 는 아무것도 안 보낸다 → 지금 화면에도 직접 권장값을
+        for n in dict.fromkeys(names):
+            if n:
+                keyword("monitor", f"{n}, preferred, auto, 1")
+        sync_widgets()
+
     row(s, "기본값으로 되돌리기", "모든 모니터 설정을 지웁니다",
-        control=button("되돌리기", lambda: (store.reset_section("display"),
-                                          store.apply_display())))
+        control=button("되돌리기", reset))
     return p
 
 

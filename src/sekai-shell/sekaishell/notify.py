@@ -478,6 +478,10 @@ class NotificationService:
 
         if self.toasts is not None and not self.dnd:
             self.toasts.push(n)
+        elif not n.resident:
+            # 방해 금지: 토스트는 안 띄우지만 "닫힘" 신호는 보내야 한다 — 안 그러면
+            # 동작 버튼을 기다리는 쪽(notify-send --action 등)이 영영 끝나지 않고 쌓인다
+            GLib.timeout_add(self.timeout_for(n) or 6000, self._dnd_expire, nid)
         if self.center is not None and self.center.get_visible():
             self.center.rebuild()
         dbg(f"알림 #{nid} [{app}] {summary}")
@@ -496,6 +500,11 @@ class NotificationService:
             return max(1, int(default)) * 1000
         except Exception:
             return 6000
+
+    def _dnd_expire(self, nid):
+        if nid in self.live:
+            self.close(nid, EXPIRED)
+        return False
 
     def close(self, nid, reason=CLOSED_BY_CALL):
         if self.toasts is not None:

@@ -153,11 +153,16 @@ class GraphicsPage:
 
     # ── 진단 정보 ──
     def _report(self):
-        try:
-            text = subprocess.run([HELPER, "report"], capture_output=True, text=True,
-                                  timeout=30).stdout
-        except Exception as e:
-            text = f"진단 정보를 만들지 못했습니다: {e}"
+        def work():
+            try:
+                text = subprocess.run([HELPER, "report"], capture_output=True, text=True,
+                                      timeout=30).stdout
+            except Exception as e:
+                text = f"진단 정보를 만들지 못했습니다: {e}"
+            GLib.idle_add(self._show_report, text)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_report(self, text):
         win = Gtk.Window(title="그래픽 진단 정보")
         win.get_style_context().add_class("settings-window")
         top = self.p.get_toplevel()
@@ -272,12 +277,15 @@ class GraphicsPage:
             p = subprocess.Popen(["pkexec", HELPER, action], stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT, text=True)
         except OSError as e:
-            GLib.idle_add(self._finish, action, f"실행하지 못했습니다: {e}")
+            GLib.idle_add(self._finish, action, f"실행하지 못했습니다: {e}", None)
             return
         for line in p.stdout:
             GLib.idle_add(self._line, line.rstrip("\n"))
         rc = p.wait()
-        GLib.idle_add(self._finish, action, "인증이 취소되었습니다" if rc in (126, 127) else None)
+        err = ("인증이 취소되었습니다" if rc in (126, 127) else
+               f"도우미가 비정상 종료했습니다 (코드 {rc})" if rc != 0 else None)
+        st = _status()                          # 느릴 수 있어 작업 스레드에서
+        GLib.idle_add(self._finish, action, err, st)
 
     def _line(self, line):
         kind, _, rest = line.partition(" ")
@@ -296,18 +304,17 @@ class GraphicsPage:
             self._got["error"] = rest
         return False
 
-    def _finish(self, action, err):
+    def _finish(self, action, err, st=None):
         self.busy = False
         self.progress.hide()
         self.progress_text.hide()
-        err = err or self._got["error"]
+        err = self._got["error"] or err          # 도우미가 알려 준 이유가 더 자세하다
         pw = self._got["pw"]
         if pw:
             self.mok_pw.set_markup(f"비밀번호  <span size='xx-large' weight='bold' "
                                    f"letter_spacing='4000'>{pw[:4]} {pw[4:]}</span>")
             self.mok_card.set_no_show_all(False)      # no_show_all 이면 show_all 이 무시된다
             self.mok_card.show_all()
-        st = _status()
         if st:
             self.st = st
         self._nv_state()

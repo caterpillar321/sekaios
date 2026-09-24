@@ -34,6 +34,7 @@ install -Dm755 "$SRC/sekai-session"   "$STAGE/usr/bin/sekai-session"
 install -Dm755 "$SRC/sekai-greeter"   "$STAGE/usr/bin/sekai-greeter"
 install -Dm755 "$SRC/sekai-greeter-session" "$STAGE/usr/bin/sekai-greeter-session"
 install -Dm644 "$SRC/lib/hw-env.sh"   "$STAGE/usr/lib/sekai/hw-env.sh"
+install -Dm755 "$SRC/lib/keep-running" "$STAGE/usr/lib/sekai/keep-running"
 install -Dm755 "$SRC/sekai-terminal"  "$STAGE/usr/bin/sekai-terminal"
 # 기본 화면 모드 (X11) — 그래픽 드라이버가 없을 때
 for f in "$SRC"/lib/x11/*; do
@@ -156,12 +157,20 @@ if [ "$1" = "configure" ]; then
     if command -v debconf-set-selections >/dev/null; then
         echo "refind refind/install_to_esp boolean false" | debconf-set-selections || true
     fi
-    # 데비안의 10_linux 대신 09_sekaios 가 부팅 항목을 만든다 (항목이 두 벌이 되지 않게)
-    mkdir -p /usr/share/sekai/grub
-    dpkg-divert --package sekai-desktop --rename --quiet \
-        --divert /usr/share/sekai/grub/10_linux.debian --add /etc/grub.d/10_linux
-    dpkg-divert --package sekai-desktop --rename --quiet \
-        --divert /usr/share/sekai/grub/30_uefi-firmware.debian --add /etc/grub.d/30_uefi-firmware
+    # 데비안의 10_linux 대신 09_sekaios 가 부팅 항목을 만든다 (항목이 두 벌이 되지 않게).
+    #   파일을 옮기지(dpkg-divert) 않고 실행 권한만 뺀다 — update-grub 은 실행 권한 없는 것을
+    #   건너뛴다. 이 파일들은 grub-common 의 conffile 이라 옮기면 grub 업데이트 때 꼬인다.
+    #   dpkg-statoverride 는 grub-common 이 업데이트돼도 유지된다.
+    for f in 10_linux 30_uefi-firmware; do
+        # 예전 판이 옮겨 둔 것 되돌리기
+        if dpkg-divert --listpackage "/etc/grub.d/$f" 2>/dev/null | grep -qx sekai-desktop; then
+            dpkg-divert --package sekai-desktop --rename --quiet --remove "/etc/grub.d/$f" || true
+        fi
+        if ! dpkg-statoverride --list "/etc/grub.d/$f" >/dev/null 2>&1; then
+            dpkg-statoverride --update --add root root 0644 "/etc/grub.d/$f" 2>/dev/null || true
+        fi
+    done
+    rmdir /usr/share/sekai/grub 2>/dev/null || true
 fi
 if [ "$1" = "configure" ] || [ "$1" = "triggered" ]; then
     # 부팅 메뉴(shim + GRUB)를 이 패키지 기준으로 다시 쓴다 — 설치된 디스크일 때만.
@@ -189,8 +198,19 @@ cat > "$STAGE_D/DEBIAN/postrm" <<'PO'
 #!/bin/sh
 set -e
 if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
-    dpkg-divert --package sekai-desktop --rename --quiet --remove /etc/grub.d/10_linux || true
-    dpkg-divert --package sekai-desktop --rename --quiet --remove /etc/grub.d/30_uefi-firmware || true
+    # 데비안 부팅 항목을 되살리고, 우리 항목은 끈다 (conffile 이라 purge 전까진 남는다)
+    for f in 10_linux 30_uefi-firmware; do
+        dpkg-divert --package sekai-desktop --rename --quiet --remove "/etc/grub.d/$f" 2>/dev/null || true
+        if dpkg-statoverride --list "/etc/grub.d/$f" >/dev/null 2>&1; then
+            dpkg-statoverride --remove "/etc/grub.d/$f" || true
+            [ -e "/etc/grub.d/$f" ] && chmod 755 "/etc/grub.d/$f"
+        fi
+    done
+    [ -e /etc/grub.d/09_sekaios ] && chmod 644 /etc/grub.d/09_sekaios
+    # 설치된 디스크면 부팅 메뉴를 다시 쓴다 (없어진 테마·항목을 가리키지 않게)
+    if [ -f /boot/grub/grub.cfg ] && command -v update-grub >/dev/null; then
+        update-grub >/dev/null 2>&1 || true
+    fi
 fi
 PO
 # shim·GRUB 이 업데이트되면 ESP 의 복사본도 새것으로 (postinst "triggered")

@@ -157,7 +157,8 @@ class UpdatePage:
             n = Gtk.Label(label=name, xalign=0)
             n.get_style_context().add_class("row-title")
             h.pack_start(n, True, True, 0)
-            v = Gtk.Label(label=f"{old}  →  {new}" if old != "-" else f"새로 설치  {new}")
+            v = Gtk.Label(label="지워짐" if new == "삭제" else
+                          f"{old}  →  {new}" if old != "-" else f"새로 설치  {new}")
             v.get_style_context().add_class("row-value")
             v.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
             v.set_max_width_chars(72)
@@ -228,6 +229,8 @@ class UpdatePage:
         err = None
         if rc in (126, 127):
             err = "인증이 취소되었습니다"
+        elif rc != 0:
+            err = f"업데이트 도우미가 비정상 종료했습니다 (코드 {rc})"
         GLib.idle_add(self._finish, action, err)
 
     def _line(self, line):
@@ -260,7 +263,7 @@ class UpdatePage:
             b.set_sensitive(True)
         self.progress.hide()
         self.progress_text.hide()
-        err = err or self._got["error"]
+        err = self._got["error"] or err          # 도우미가 알려 준 이유가 더 자세하다
         if action == "check":
             self.pkgs = self._got["pkgs"]
             self._summary(self.pkgs)

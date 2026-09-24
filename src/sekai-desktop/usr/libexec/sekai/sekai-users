@@ -107,12 +107,19 @@ def remove(name, keep):
     rc, out = run(cmd)
     if rc not in (0, 12):              # 12 = 홈 폴더를 지우지 못함 (계정은 지워짐)
         fail("계정을 지우지 못했습니다")
+    if keep == "keep" and os.path.isdir(p.pw_dir) and p.pw_dir.startswith("/home/"):
+        # 남긴 홈 폴더는 관리자만 열 수 있게 — 그대로 두면 옛 UID 소유라, 다음에 만드는 계정이
+        # 같은 UID 를 받아 이 사람의 파일(브라우저 프로필·키링 등)을 모두 읽을 수 있다
+        try:
+            os.chown(p.pw_dir, 0, 0)
+            os.chmod(p.pw_dir, 0o700)
+        except OSError:
+            pass
     # 로그인 화면이 기억한 해상도 파일
     try:
         os.remove(f"/var/lib/sekai/displays/{name}.conf")
     except OSError:
         pass
-    _ = p
 
 
 def admin(name, on):

@@ -1,0 +1,23 @@
+#!/bin/sh
+# SekaiOS — 셸 프로그램(패널·바탕화면)이 죽으면 다시 띄운다. 화면 서버가 살아 있는 동안만.
+#   keep-running <명령> [인자…]
+#   로그아웃으로 화면 서버가 사라지면 멈춘다 — 안 그러면 1초마다 다시 띄우며 세션이
+#   끝나지 않아, 로그인 화면이 그 사용자를 "이미 로그인됨"으로 보고 다시 들어갈 수 없다.
+alive() {
+    if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+        case "$WAYLAND_DISPLAY" in /*) s=$WAYLAND_DISPLAY ;; *) s="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/$WAYLAND_DISPLAY" ;; esac
+        [ -S "$s" ]
+    elif [ -n "${DISPLAY:-}" ]; then
+        n=${DISPLAY#*:}; n=${n%%.*}
+        [ -S "/tmp/.X11-unix/X$n" ]
+    else
+        return 1
+    fi
+}
+fails=0
+while alive; do
+    "$@" && exit 0
+    # 계속 곧바로 죽으면 (설정 오류 등) 조금씩 더 기다린다
+    fails=$((fails + 1))
+    [ "$fails" -gt 5 ] && sleep 5 || sleep 1
+done

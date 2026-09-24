@@ -12,7 +12,7 @@ from gi.repository import Gtk, GLib  # noqa: E402
 from ..util import run, spawn
 from ..widgets import Page, button, combo, entry, icon_image, info, row
 
-TERMINALS = [("foot", "Foot"), ("xterm", "XTerm")]
+TERMINALS = [("sekai-terminal", "SekaiOS 터미널 (자동)"), ("foot", "Foot"), ("xterm", "XTerm")]
 BROWSERS = [("chromium", "Chromium"), ("google-chrome", "Google Chrome"),
             ("firefox-esr", "Firefox ESR")]
 FILERS = [("thunar", "Thunar"), ("pcmanfm", "PCManFM")]
