@@ -1,0 +1,6 @@
+# SekaiOS — 펌웨어 화면(/dev/fbN)을 지금 화면 앞에 있는 세션(로그인 화면·사용자)이 쓸 수 있게.
+#   기본 화면 모드(X11 fbdev)용. 그래픽 드라이버(KMS)가 하나라도 올라오면 Xorg 는 root 권한 없이
+#   세션 사용자로 뜨는데(Xorg.wrap), fbN 은 video 그룹 전용이라 로그인 화면(_greetd)이 못 열어
+#   "no screens found" 로 죽었다. uaccess 는 logind 가 활성 세션 사용자에게만 ACL 을 준다.
+#   (73-seat-late.rules 가 uaccess 태그를 ACL 로 바꾸므로 그보다 앞 번호여야 한다)
+SUBSYSTEM=="graphics", KERNEL=="fb[0-9]*", TAG+="uaccess"

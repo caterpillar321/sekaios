@@ -156,6 +156,11 @@ if [ "$1" = "configure" ]; then
         ssh-keygen -A >/dev/null 2>&1 || true
         systemctl restart ssh.socket >/dev/null 2>&1 || true
     fi
+    # 펌웨어 화면 장치 권한 규칙(70-sekai-fb.rules)을 지금 바로 적용
+    if [ -d /run/systemd/system ] && command -v udevadm >/dev/null; then
+        udevadm control --reload >/dev/null 2>&1 || true
+        udevadm trigger --subsystem-match=graphics >/dev/null 2>&1 || true
+    fi
     # 옛 설치본이 이미지에 직접 넣었던 커널 훅 → 이제 패키지의 zz-sekai-boot 가 한다
     for f in /etc/kernel/postinst.d/zz-sekai-esp /etc/initramfs/post-update.d/zz-sekai-esp; do
         [ -e "$f" ] && ! dpkg -S "$f" >/dev/null 2>&1 && rm -f "$f"
