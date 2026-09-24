@@ -145,8 +145,20 @@ def take_over():
         pass
 
 
+def main_x11():
+    """기본 화면 모드(X11): X 화면 보호기 시간 + xss-lock 이 잠금 프로그램을 부른다"""
+    p = power()
+    lock = p["lock"] or 0
+    subprocess.run(["xset", "s", str(lock), str(lock)] if lock else ["xset", "s", "off"])
+    off = p["screen_off"]
+    subprocess.run(["xset", "dpms", str(off), str(off), str(off)] if off else ["xset", "-dpms"])
+    os.execvp("xss-lock", ["xss-lock", "--transfer-sleep-lock", "--", "sekai-lock"])
+
+
 def main():
     global reload_wanted
+    if not os.environ.get("WAYLAND_DISPLAY") or os.environ.get("XDG_SESSION_TYPE") == "x11":
+        return main_x11()
     if not shutil.which("swayidle"):
         print("swayidle 이 없습니다.", file=sys.stderr)
         return 1

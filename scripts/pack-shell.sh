@@ -34,6 +34,12 @@ install -Dm755 "$SRC/sekai-session"   "$STAGE/usr/bin/sekai-session"
 install -Dm755 "$SRC/sekai-greeter"   "$STAGE/usr/bin/sekai-greeter"
 install -Dm755 "$SRC/sekai-greeter-session" "$STAGE/usr/bin/sekai-greeter-session"
 install -Dm644 "$SRC/lib/hw-env.sh"   "$STAGE/usr/lib/sekai/hw-env.sh"
+install -Dm755 "$SRC/sekai-terminal"  "$STAGE/usr/bin/sekai-terminal"
+# 기본 화면 모드 (X11) — 그래픽 드라이버가 없을 때
+for f in "$SRC"/lib/x11/*; do
+    case "$(basename "$f")" in sxhkdrc) m=644 ;; *) m=755 ;; esac
+    install -Dm$m "$f" "$STAGE/usr/lib/sekai/x11/$(basename "$f")"
+done
 install -Dm644 "$SRC/style.css"       "$STAGE/usr/share/sekai-shell/style.css"
 install -Dm644 "$SRC/settings.css"    "$STAGE/usr/share/sekai-shell/settings.css"
 
@@ -207,10 +213,13 @@ Depends: sekai-shell (= ${FULL}),
  hyprland, hyprbars (>= 0.50.0-sekai4), hyprexpo, xwayland, binutils,
  xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr,
  foot, fuzzel, swaybg, swayidle, swaylock, grim, slurp,
- brightnessctl, playerctl, wtype, pkexec, efibootmgr, open-vm-tools,
+ brightnessctl, playerctl, wtype, pkexec, efibootmgr, open-vm-tools, mokutil, pciutils, openssl,
  shim-signed, grub-efi-amd64-signed, grub-efi-amd64-bin, grub2-common, os-prober,
  firmware-amd-graphics, firmware-intel-graphics, firmware-nvidia-graphics, firmware-misc-nonfree,
  firmware-iwlwifi, firmware-realtek, firmware-atheros, firmware-mediatek, firmware-sof-signed,
+ xserver-xorg-core, xserver-xorg-video-fbdev, xserver-xorg-input-libinput, xserver-xorg-legacy,
+ xinit, x11-xserver-utils, xfwm4, xfconf, sxhkd, xcape, xsecurelock, xss-lock, maim, slop, xclip,
+ xdotool, xterm, gir1.2-wnck-3.0,
  wl-clipboard, cliphist, lxpolkit, libnotify-bin, wayland-utils,
  pipewire, pipewire-audio, pipewire-pulse, wireplumber, pavucontrol,
  network-manager, network-manager-gnome, systemd-resolved,

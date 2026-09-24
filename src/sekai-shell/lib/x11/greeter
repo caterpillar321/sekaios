@@ -1,0 +1,7 @@
+#!/bin/sh
+# 기본 화면 모드의 로그인 화면·첫 부팅 설정 — X 위에 창 하나 (창 관리자 없음)
+export XDG_SESSION_TYPE=x11
+unset WAYLAND_DISPLAY
+export GDK_BACKEND=x11
+xsetroot -cursor_name left_ptr -solid '#151517' 2>/dev/null
+exec "$@"

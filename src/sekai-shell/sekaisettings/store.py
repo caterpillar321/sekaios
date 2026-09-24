@@ -66,7 +66,7 @@ DEFAULTS = {
         "show_date": False,
     },
     "apps": {
-        "terminal": "foot",
+        "terminal": "sekai-terminal",
         "browser": "chromium",
         "files": "thunar",
     },

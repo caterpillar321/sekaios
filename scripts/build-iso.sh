@@ -56,6 +56,8 @@ cp "$SHIM/mmx64.efi.signed"   "$P/iso/EFI/BOOT/mmx64.efi"
 cp "$STUB" "$P/iso/EFI/debian/grub.cfg"
 cp "$STUB" "$P/iso/EFI/BOOT/grub.cfg"
 cp "$P/config/grub-live.cfg" "$P/iso/boot/grub/grub.cfg"
+# 시험용: SEKAI_ISO_DEFAULT=1 이면 기본 선택을 두 번째 항목(기본 화면 모드)으로
+[ -n "${SEKAI_ISO_DEFAULT:-}" ] && sed -i "s/^set default=.*/set default=${SEKAI_ISO_DEFAULT}/" "$P/iso/boot/grub/grub.cfg"
 cp -r "$P/src/sekai-desktop/usr/share/grub/themes/sekai" "$P/iso/boot/grub/themes/"
 mkdir -p "$P/iso/boot/grub/fonts"
 cp "$P/rootfs/usr/share/grub/unicode.pf2" "$P/iso/boot/grub/fonts/unicode.pf2"

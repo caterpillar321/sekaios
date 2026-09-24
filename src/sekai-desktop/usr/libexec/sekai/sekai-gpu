@@ -1,0 +1,337 @@
+#!/usr/bin/env python3
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 그래픽 드라이버 도우미 — 관리자 권한으로 실행된다 (pkexec)
+#
+#    sekai-gpu status           그래픽 카드·드라이버·보안 부팅 상태 (권한 없이도 됨)
+#    sekai-gpu install-nvidia   NVIDIA 공식 저장소의 드라이버(open 커널 모듈)를 설치한다
+#    sekai-gpu remove-nvidia    NVIDIA 드라이버를 지우고 기본 드라이버로 돌아간다
+#    sekai-gpu enroll-mok       보안 부팅 키 등록을 새 비밀번호로 다시 예약한다 (비밀번호를 잊었을 때)
+#
+#  드라이버 출처
+#    데비안 13 의 nvidia-driver 는 550 이라 RTX 50(Blackwell) 을 모른다.
+#    → NVIDIA 가 직접 운영하는 데비안 13 저장소(CUDA 저장소)의 최신 드라이버를 쓴다.
+#      저장소 키는 sekai-desktop 이 가지고 있고(/usr/share/keyrings/nvidia-cuda-debian13.gpg),
+#      저장소는 사용자가 설치를 고를 때만 추가된다.
+#    커널 모듈은 이 컴퓨터에서 DKMS 로 빌드된다 (미리 빌드된 모듈은 NVIDIA 가 주지 않는다).
+#
+#  보안 부팅
+#    직접 빌드한 모듈은 마이크로소프트·데비안 서명이 없어서 그대로는 안 올라간다.
+#    DKMS 가 이 컴퓨터만의 키(MOK)로 서명하고, 그 키를 펌웨어에 등록하도록 예약한다.
+#    다시 시작하면 파란 "MOK 관리" 화면이 한 번 뜨고, 여기서 보여 준 비밀번호를 넣으면 끝.
+#
+#  출력은 한 줄에 하나씩, 설정 앱이 읽는 형식:
+#    GPU <슬롯> <제조사> <쓰는 드라이버|-> <이름…>
+#    SECUREBOOT on|off
+#    NVIDIA <설치된 버전|->
+#    MOK enrolled|pending|missing|-
+#    PROGRESS <0-100> <설명>
+#    MOKPASS <비밀번호>         다시 시작할 때 파란 화면에 넣을 비밀번호
+#    REBOOT                    다시 시작이 필요함
+#    ERROR <설명>
+#  인자는 위 네 가지만 받는다 — 관리자 권한으로 도는 프로그램이라
+#  바깥에서 명령·옵션을 넘길 수 없게 한다.
+# ═══════════════════════════════════════════════════════════════
+import glob
+import os
+import re
+import secrets
+import subprocess
+import sys
+import threading
+
+ENV = dict(os.environ, DEBIAN_FRONTEND="noninteractive", LANG="C.UTF-8", LC_ALL="C.UTF-8",
+           PATH="/usr/sbin:/usr/bin:/sbin:/bin")
+APT_OPTS = ["-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold",
+            "-o", "Dpkg::Use-Pty=0"]
+
+KEYRING = "/usr/share/keyrings/nvidia-cuda-debian13.gpg"
+SOURCES = "/etc/apt/sources.list.d/sekai-nvidia.sources"
+SOURCES_TEXT = f"""# NVIDIA 공식 드라이버 저장소 — 설정 > 그래픽 에서 NVIDIA 드라이버를 설치할 때 추가됨
+# (지우려면 설정 > 그래픽 > NVIDIA 드라이버 제거)
+Types: deb
+URIs: https://developer.download.nvidia.com/compute/cuda/repos/debian13/x86_64/
+Suites: /
+Signed-By: {KEYRING}
+"""
+# CUDA 저장소엔 CUDA 도구 등 수천 개 패키지가 있다. 드라이버에 딸린 것만 이 저장소에서 받고
+# 나머지(데비안에도 있는 dkms 같은 것)는 데비안 것을 쓰게 우선순위를 낮춘다.
+PREFS = "/etc/apt/preferences.d/sekai-nvidia"
+PREFS_TEXT = """# SekaiOS: NVIDIA 저장소에선 드라이버 관련 패키지만 우선으로
+Package: *
+Pin: origin developer.download.nvidia.com
+Pin-Priority: 100
+
+Package: nvidia-* libnvidia-* libcuda* libnvcuvid* libnvoptix* libegl-nvidia* libgles-nvidia* libglx-nvidia* libgl1-nvidia* xserver-xorg-video-nvidia* firmware-nvidia-* libxnvctrl*
+Pin: origin developer.download.nvidia.com
+Pin-Priority: 600
+"""
+MODPROBE = "/etc/modprobe.d/sekai-nvidia.conf"
+MODPROBE_TEXT = """# SekaiOS: NVIDIA 드라이버 설정 (sekai-gpu 가 만듦)
+#   modeset/fbdev — Wayland(Hyprland) 와 부팅 화면에 필요
+#   PreserveVideoMemoryAllocations — 절전 후 화면 깨짐 방지
+options nvidia-drm modeset=1 fbdev=1
+options nvidia NVreg_PreserveVideoMemoryAllocations=1
+"""
+# 드라이버 본체. nvidia-open(메타)은 CUDA 도구까지 끌고 와서 쓰지 않는다.
+NVIDIA_PKGS = ["nvidia-kernel-open-dkms", "nvidia-driver", "firmware-nvidia-gsp",
+               "nvidia-settings"]
+MOK_KEY = "/var/lib/dkms/mok.key"
+MOK_PUB = "/var/lib/dkms/mok.pub"
+
+
+def out(*a):
+    print(*a, flush=True)
+
+
+def sh(cmd, **kw):
+    return subprocess.run(cmd, env=ENV, capture_output=True, text=True, **kw)
+
+
+# ── 상태 ──────────────────────────────────────────────────
+VENDORS = {"10de": "nvidia", "8086": "intel", "1002": "amd", "15ad": "vmware",
+           "1af4": "virtio", "1234": "qemu", "1b36": "qemu"}
+
+
+def gpus():
+    """[(슬롯, 제조사, 드라이버, 이름)] — /sys 에서 표시 장치(클래스 03xx)를 찾는다"""
+    res = []
+    for dev in sorted(glob.glob("/sys/bus/pci/devices/*")):
+        try:
+            cls = open(f"{dev}/class").read().strip()
+            if not cls.startswith("0x03"):
+                continue
+            ven = open(f"{dev}/vendor").read().strip()[2:]
+        except OSError:
+            continue
+        slot = os.path.basename(dev)
+        drv = os.path.basename(os.readlink(f"{dev}/driver")) if os.path.exists(f"{dev}/driver") else "-"
+        name = ""
+        r = sh(["lspci", "-s", slot, "-mm"])
+        m = re.findall(r'"([^"]*)"', r.stdout)
+        if len(m) >= 3:
+            name = m[2]
+            b = re.search(r"\[(.+)\]", name)          # "GB202 [GeForce RTX 5090]" → 괄호 안
+            if b:
+                name = b.group(1)
+        res.append((slot, VENDORS.get(ven, ven), drv, name or "알 수 없는 장치"))
+    return res
+
+
+def secure_boot():
+    r = sh(["mokutil", "--sb-state"])
+    return "enabled" in r.stdout.lower()
+
+
+def nvidia_version():
+    r = sh(["dpkg-query", "-W", "-f=${Status} ${Version}", "nvidia-kernel-open-dkms"])
+    if r.returncode == 0 and r.stdout.startswith("install ok installed"):
+        return r.stdout.split()[-1]
+    return None
+
+
+def mok_state():
+    if not os.path.exists(MOK_PUB):
+        return "missing"
+    r = sh(["mokutil", "--test-key", MOK_PUB])
+    txt = (r.stdout + r.stderr).lower()
+    if "already enrolled" in txt:
+        return "enrolled"
+    # 등록을 예약해 두었는지 (다시 시작 대기 중)
+    r2 = sh(["mokutil", "--list-new"])
+    if r2.returncode == 0 and r2.stdout.strip():
+        return "pending"
+    return "missing"
+
+
+def status():
+    for slot, ven, drv, name in gpus():
+        out("GPU", slot, ven, drv, name)
+    sb = secure_boot()
+    out("SECUREBOOT", "on" if sb else "off")
+    v = nvidia_version()
+    out("NVIDIA", v or "-")
+    out("MOK", mok_state() if sb else "-")
+    return 0
+
+
+# ── 설치 ──────────────────────────────────────────────────
+def run_status(cmd, lo, hi):
+    """apt 의 기계용 진행 정보(Status-Fd)를 읽어 PROGRESS 로 바꾼다 (sekai-update 와 같은 방식)"""
+    r, w = os.pipe()
+    p = subprocess.Popen(cmd + ["-o", f"APT::Status-Fd={w}"], env=ENV, pass_fds=(w,),
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    os.close(w)
+    log = []
+
+    def drain():
+        for line in p.stdout:
+            log.append(line.rstrip())
+            # DKMS 빌드는 수 분 걸리고 apt 진행률이 멈춰 보인다 → 알려 준다
+            if "Building module" in line or "Building for" in line:
+                out("PROGRESS", hi - 8, "커널 모듈을 만드는 중 (몇 분 걸립니다)")
+    t = threading.Thread(target=drain, daemon=True)
+    t.start()
+    with os.fdopen(r, "r", errors="replace") as f:
+        for line in f:
+            parts = line.rstrip("\n").split(":", 3)
+            if len(parts) == 4 and parts[0] in ("dlstatus", "pmstatus"):
+                try:
+                    pct = float(parts[2])
+                except ValueError:
+                    continue
+                what = "내려받는 중" if parts[0] == "dlstatus" else "설치하는 중"
+                name = parts[1] if parts[0] == "pmstatus" else ""
+                out("PROGRESS", int(lo + (hi - lo) * pct / 100), f"{what} {name}".strip())
+    p.wait()
+    t.join(2)
+    return p.returncode, log
+
+
+def last_error(log):
+    return next((l for l in reversed(log) if l.startswith(("E:", "Err", "Error!"))), "알 수 없는 오류")
+
+
+def write(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(text)
+
+
+def ensure_mok_key():
+    """DKMS 서명 키 — 없으면 만든다 (dkms 3 의 기본 위치·형식과 같게)"""
+    if os.path.exists(MOK_KEY) and os.path.exists(MOK_PUB):
+        return True
+    r = sh(["dkms", "generate_mok"])
+    if r.returncode == 0 and os.path.exists(MOK_PUB):
+        return True
+    os.makedirs(os.path.dirname(MOK_KEY), exist_ok=True)
+    r = sh(["openssl", "req", "-new", "-x509", "-nodes", "-days", "36500", "-subj",
+            f"/CN=SekaiOS DKMS module signing key ({os.uname().nodename})",
+            "-newkey", "rsa:2048", "-keyout", MOK_KEY, "-outform", "DER", "-out", MOK_PUB])
+    if r.returncode != 0:
+        return False
+    os.chmod(MOK_KEY, 0o600)
+    return True
+
+
+def enroll_mok():
+    """키 등록 예약. 비밀번호는 다시 시작할 때 파란 화면에서 한 번 넣는다 (숫자 8자리 — 키보드 배열과 무관)"""
+    pw = "".join(secrets.choice("0123456789") for _ in range(8))
+    p = subprocess.run(["mokutil", "--import", MOK_PUB], input=f"{pw}\n{pw}\n",
+                       env=ENV, capture_output=True, text=True)
+    if p.returncode != 0:
+        return None, (p.stderr or p.stdout).strip()
+    return pw, ""
+
+
+def install_nvidia():
+    if not any(v == "nvidia" for _s, v, _d, _n in gpus()):
+        out("ERROR", "NVIDIA 그래픽 카드를 찾지 못했습니다")
+        return 1
+    out("PROGRESS", 1, "NVIDIA 저장소를 추가하는 중")
+    write(SOURCES, SOURCES_TEXT)
+    write(PREFS, PREFS_TEXT)
+    write(MODPROBE, MODPROBE_TEXT)
+
+    out("PROGRESS", 3, "패키지 목록을 받는 중")
+    rc, log = run_status(["apt-get", "-q", "update"], 3, 15)
+    if rc != 0:
+        out("ERROR", f"패키지 목록을 받지 못했습니다 (인터넷 연결을 확인해 주세요): {last_error(log)}")
+        return 1
+
+    sb = secure_boot()
+    if sb and not ensure_mok_key():
+        out("ERROR", "모듈 서명 키를 만들지 못했습니다")
+        return 1
+
+    # 지금 커널과, 앞으로 올 커널(메타 패키지) 모두의 헤더 — DKMS 가 커널이 바뀔 때마다 다시 빌드한다
+    kernel = os.uname().release
+    flavor = kernel.rsplit("-", 1)[-1]              # 6.12.x+deb13-amd64 → amd64
+    pkgs = [f"linux-headers-{kernel}", f"linux-headers-{flavor}"] + NVIDIA_PKGS
+    rc, log = run_status(["apt-get", "-y", "-q", "--no-install-recommends"] + APT_OPTS
+                         + ["install"] + pkgs, 15, 92)
+    if rc != 0:
+        subprocess.run(["dpkg", "--configure", "-a"], env=ENV,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        out("ERROR", f"설치하지 못했습니다: {last_error(log)}")
+        return 1
+
+    out("PROGRESS", 93, "커널 모듈을 확인하는 중")
+    r = sh(["dkms", "status", "-k", kernel])
+    if not re.search(r"^nvidia.*installed", r.stdout, re.M):
+        out("ERROR", "커널 모듈을 만들지 못했습니다 — /var/lib/dkms 의 make.log 를 확인해 주세요")
+        return 1
+
+    out("PROGRESS", 96, "부팅 이미지를 다시 만드는 중")
+    sh(["update-initramfs", "-u", "-k", kernel])
+
+    if sb and mok_state() != "enrolled":
+        pw, err = enroll_mok()
+        if pw is None:
+            out("ERROR", f"보안 부팅 키 등록을 예약하지 못했습니다: {err}")
+            return 1
+        out("MOKPASS", pw)
+    out("PROGRESS", 100, "완료")
+    out("REBOOT")
+    return 0
+
+
+def reenroll_mok():
+    if not secure_boot():
+        out("ERROR", "보안 부팅이 꺼져 있어 키를 등록할 필요가 없습니다")
+        return 1
+    if not os.path.exists(MOK_PUB):
+        out("ERROR", "모듈 서명 키가 없습니다 — NVIDIA 드라이버를 먼저 설치해 주세요")
+        return 1
+    if mok_state() == "enrolled":
+        out("ERROR", "이미 등록되어 있습니다")
+        return 1
+    sh(["mokutil", "--revoke-import"])              # 앞서 예약한 것(잊은 비밀번호) 취소
+    pw, err = enroll_mok()
+    if pw is None:
+        out("ERROR", f"등록을 예약하지 못했습니다: {err}")
+        return 1
+    out("MOKPASS", pw)
+    out("REBOOT")
+    return 0
+
+
+def remove_nvidia():
+    out("PROGRESS", 2, "NVIDIA 드라이버를 지우는 중")
+    r = sh(["dpkg-query", "-W", "-f=${Package} ${Status}\n"])
+    names = [l.split()[0] for l in r.stdout.splitlines()
+             if l.endswith("installed") and re.match(
+                 r"(nvidia-|libnvidia-|firmware-nvidia-|xserver-xorg-video-nvidia|libcuda|"
+                 r"libnvcuvid|libegl-nvidia|libgles-nvidia|libglx-nvidia|libxnvctrl)", l)]
+    if names:
+        rc, log = run_status(["apt-get", "-y", "-q"] + APT_OPTS + ["purge"] + names, 2, 90)
+        if rc != 0:
+            out("ERROR", f"지우지 못했습니다: {last_error(log)}")
+            return 1
+    for f in (SOURCES, PREFS, MODPROBE):
+        try:
+            os.remove(f)
+        except FileNotFoundError:
+            pass
+    out("PROGRESS", 94, "부팅 이미지를 다시 만드는 중")
+    sh(["update-initramfs", "-u"])
+    sh(["apt-get", "-q", "update"])
+    out("PROGRESS", 100, "완료")
+    out("REBOOT")
+    return 0
+
+
+def main():
+    cmds = {"status": status, "install-nvidia": install_nvidia, "remove-nvidia": remove_nvidia,
+            "enroll-mok": reenroll_mok}
+    if len(sys.argv) != 2 or sys.argv[1] not in cmds:
+        out("ERROR", "사용법: sekai-gpu status|install-nvidia|remove-nvidia|enroll-mok")
+        return 2
+    if sys.argv[1] != "status" and os.geteuid() != 0:
+        out("ERROR", "관리자 권한이 필요합니다")
+        return 1
+    return cmds[sys.argv[1]]()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

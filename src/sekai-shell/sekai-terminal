@@ -1,0 +1,8 @@
+#!/bin/sh
+# SekaiOS 터미널 — Wayland 에선 foot, 기본 화면 모드(X11)에선 xterm 을 비슷한 모양으로
+if [ -n "${WAYLAND_DISPLAY:-}" ] && [ "${XDG_SESSION_TYPE:-}" != x11 ]; then
+    exec foot "$@"
+fi
+exec xterm -class SekaiTerminal -fa "JetBrains Mono" -fs 11 -bg "#151517" -fg "#f1f1f3" \
+    -cr "#39c5bb" -bc -geometry 110x32 -xrm 'XTerm*selectToClipboard: true' \
+    -xrm 'XTerm*internalBorder: 12' -xrm 'XTerm*scrollBar: false' "$@"

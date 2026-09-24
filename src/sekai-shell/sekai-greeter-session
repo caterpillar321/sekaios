@@ -15,10 +15,29 @@ locale -a 2>/dev/null | grep -qi '^ko_KR.utf8$' && export LANG=ko_KR.UTF-8
 #   ① 파일 주인이 그 사용자인지 ② 줄이 "monitor = 이름, 모드, 위치, 배율" 형식인지
 #   확인해서 통과한 줄만 새로 적는다.
 CONF=/usr/share/sekai/greeter/hyprland.conf
+APP=sekai-greeter
+X=/usr/lib/sekai/x11
+
+# Hyprland 로 띄우고, 시작하자마자(10초 안) 비정상으로 끝나면 기본 화면 모드(X11)로 다시.
+#   (그냥 두면 greetd 가 계속 다시 띄우다 포기해서 화면이 영영 까맣게 남는다)
+run_greeter() {
+    if [ -n "${SEKAI_BASIC:-}" ]; then
+        exec "$X/start" "$X/greeter" "$APP"
+    fi
+    started=$(date +%s)
+    Hyprland -c "$1" >/dev/null 2>&1
+    rc=$?
+    if [ $rc -ne 0 ] && [ $(( $(date +%s) - started )) -lt 10 ]; then
+        export SEKAI_BASIC=1
+        exec "$X/start" "$X/greeter" "$APP"
+    fi
+    exit $rc
+}
+
 # 설치 직후 첫 부팅이면 로그인 화면 대신 첫 부팅 설정(OOBE)
 if [ -e /var/lib/sekai/oobe-pending ] && [ -x /usr/bin/sekai-oobe ]; then
-    CONF=/usr/share/sekai/oobe/hyprland.conf
-    exec Hyprland -c "$CONF" >/dev/null 2>&1
+    APP=sekai-oobe
+    run_greeter /usr/share/sekai/oobe/hyprland.conf
 fi
 home=${HOME:-$(getent passwd "$(id -un)" | cut -d: -f6)}
 last=$(cat "$home/.cache/sekai-greeter/last-user" 2>/dev/null)
@@ -33,4 +52,4 @@ if [ -n "$last" ] && [ -f "$disp" ] && [ "$(stat -c %U "$disp" 2>/dev/null)" = "
     } > "$run" 2>/dev/null && CONF=$run
 fi
 
-exec Hyprland -c "$CONF" >/dev/null 2>&1
+run_greeter "$CONF"

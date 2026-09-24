@@ -1,0 +1,58 @@
+#!/bin/sh
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 기본 화면 모드 세션 (X11)
+#
+#  그래픽 드라이버가 없어 Wayland(Hyprland)가 뜰 수 없을 때 쓰는 세션.
+#  Hyprland 대신 xfwm4 가 창을 관리하고, 우리 셸(sekai-panel·sekai-desk…)은
+#  호환 층(sekaishell/layer.py, wm.py)으로 X11 에서도 그대로 돈다.
+#  이 스크립트가 끝나면 X 가 닫히고 로그인 화면으로 돌아간다 (로그아웃).
+# ═══════════════════════════════════════════════════════════════
+export XDG_SESSION_TYPE=x11
+export XDG_CURRENT_DESKTOP=SekaiOS:XFCE
+unset WAYLAND_DISPLAY
+export GDK_BACKEND=x11
+export QT_QPA_PLATFORM=xcb
+export GTK_IM_MODULE=ibus QT_IM_MODULE=ibus XMODIFIERS=@im=ibus
+export SEKAI_BASIC=1
+export SEKAI_SESSION_PID=$$
+X=/usr/lib/sekai/x11
+
+dbus-update-activation-environment --systemd DISPLAY XAUTHORITY XDG_SESSION_TYPE \
+    XDG_CURRENT_DESKTOP GDK_BACKEND GTK_IM_MODULE QT_IM_MODULE XMODIFIERS 2>/dev/null
+
+xsetroot -cursor_name left_ptr -solid '#151517' 2>/dev/null
+xset s off 2>/dev/null
+
+# 창 관리자 — SekaiOS 제목 표시줄 테마, Win 키 창 배치
+"$X/xfwm4-setup" >/dev/null 2>&1
+xfwm4 --compositor=on --replace >/dev/null 2>&1 &
+
+ibus-daemon -drx >/dev/null 2>&1
+sxhkd -c "$X/sxhkdrc" >/dev/null 2>&1 &
+xcape -e 'Super_L=Control_L|Escape' >/dev/null 2>&1 &
+sekai-idle >/dev/null 2>&1 &
+sh -c 'until sekai-desk; do sleep 1; done' >/dev/null 2>&1 &
+sh -c 'until sekai-panel; do sleep 1; done' >/dev/null 2>&1 &
+lxpolkit >/dev/null 2>&1 &
+nm-applet --indicator >/dev/null 2>&1 &
+
+# 왜 기본 화면 모드인지 알려 주기
+( sleep 6
+  if [ "${SEKAI_BASIC_REASON:-}" = crash ]; then
+      body="데스크톱을 시작하지 못해 기본 화면 모드로 열었습니다. 그래픽 드라이버를 확인해 주세요."
+  elif grep -qw 'sekai.basic=1' /proc/cmdline 2>/dev/null; then
+      body="부팅 메뉴에서 기본 화면 모드를 골랐습니다. 평소처럼 쓰려면 다시 시작하세요."
+  else
+      body="이 그래픽 카드에 맞는 드라이버가 없어 기본 화면 모드로 실행 중입니다. 드라이버를 설치하면 전체 기능을 쓸 수 있습니다."
+  fi
+  act=$(notify-send -a 디스플레이 -i video-display --action=default=열기 "--action=open=그래픽 설정" \
+        "기본 화면 모드" "$body")
+  case "$act" in open|default) exec sekai-settings --page=graphics ;; esac ) >/dev/null 2>&1 &
+
+# 설치 USB 로 켰으면 설치 화면
+( sleep 3; command -v sekai-installer >/dev/null && sekai-installer --autostart ) >/dev/null 2>&1 &
+
+# 로그아웃(패널이 이 셸에 TERM 을 보냄)까지 기다린다. 끝날 때 딸린 프로세스를 함께 정리
+trap 'kill 0 2>/dev/null; exit 0' TERM INT HUP
+sleep infinity &
+wait $!

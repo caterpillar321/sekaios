@@ -1,0 +1,33 @@
+#!/bin/sh
+# 기본 화면 모드의 xfwm4 설정 — SekaiOS 모양·Windows 식 단축키
+q() { xfconf-query -c "$1" -p "$2" -n -t "$3" -s "$4" 2>/dev/null || xfconf-query -c "$1" -p "$2" -s "$4" 2>/dev/null; }
+W=xfwm4
+q $W /general/theme string Sekai
+q $W /general/title_font string "Pretendard SemiBold 10"
+q $W /general/title_alignment string left
+q $W /general/button_layout string "O|HMC"
+q $W /general/use_compositing bool true
+q $W /general/show_frame_shadow bool true
+q $W /general/show_popup_shadow bool true
+q $W /general/frame_opacity int 100
+q $W /general/placement_ratio int 100
+q $W /general/placement_mode string center
+q $W /general/tile_on_move bool true
+q $W /general/snap_to_border bool true
+q $W /general/snap_to_windows bool true
+q $W /general/workspace_count int 1
+q $W /general/easy_click string Super
+q $W /general/raise_on_click bool true
+q $W /general/cycle_tabwin_mode int 0
+K=xfce4-keyboard-shortcuts
+# Alt+Tab 은 sxhkd → 우리 전환기. xfwm4 자신의 것은 끈다
+q $K "/xfwm4/custom/<Alt>Tab" string empty
+q $K "/xfwm4/custom/<Alt><Shift>Tab" string empty
+q $K "/xfwm4/custom/<Super>Left" string tile_left_key
+q $K "/xfwm4/custom/<Super>Right" string tile_right_key
+q $K "/xfwm4/custom/<Super>Up" string maximize_window_key
+q $K "/xfwm4/custom/<Super>Down" string hide_window_key
+q $K "/xfwm4/custom/<Super>q" string close_window_key
+q $K "/xfwm4/custom/<Alt>F4" string close_window_key
+q $K "/xfwm4/custom/<Super>f" string fullscreen_key
+exit 0

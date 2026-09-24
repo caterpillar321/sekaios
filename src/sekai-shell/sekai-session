@@ -60,4 +60,14 @@ fi
 # 출력은 파일로 — 안 그러면 로그인 직후 Hyprland 시작 로그가 화면에 잠깐 찍힌다
 LOGDIR="${XDG_STATE_HOME:-$HOME/.local/state}/sekai"
 mkdir -p "$LOGDIR"
-exec Hyprland >"$LOGDIR/session.log" 2>&1
+# 그래픽 드라이버가 없으면(hw-env.sh 가 SEKAI_BASIC=1) 처음부터 기본 화면 모드(X11)
+[ -n "${SEKAI_BASIC:-}" ] && exec /usr/lib/sekai/x11/start /usr/lib/sekai/x11/session
+# Hyprland 가 시작하자마자(10초 안) 비정상으로 끝나면 — 드라이버 문제 — 기본 화면 모드로 다시
+started=$(date +%s)
+Hyprland >"$LOGDIR/session.log" 2>&1
+rc=$?
+if [ $rc -ne 0 ] && [ $(( $(date +%s) - started )) -lt 10 ]; then
+    export SEKAI_BASIC=1 SEKAI_BASIC_REASON=crash
+    exec /usr/lib/sekai/x11/start /usr/lib/sekai/x11/session
+fi
+exit $rc

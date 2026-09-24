@@ -7,14 +7,15 @@
 # ═══════════════════════════════════════════════════════════════
 import gi, os, json, socket, subprocess, shlex, time, sys, cairo
 gi.require_version("Gtk", "3.0")
-gi.require_version("GtkLayerShell", "0.1")
-from gi.repository import Gtk, Gdk, GLib, GtkLayerShell, Pango
+from gi.repository import Gtk, Gdk, GLib, Pango
 
 PANEL_HEIGHT = 48
 HERE = os.path.dirname(os.path.abspath(__file__))
 if os.path.isdir(os.path.join(HERE, "sekaishell")):
     sys.path.insert(0, HERE)
 
+from sekaishell.layer import GtkLayerShell  # noqa: E402  (X11 기본 화면 모드에선 흉내)
+from sekaishell import layer as _layer                   # noqa: E402
 from sekaishell.popup import ClickCatcher, PanelPopup, make_translucent  # noqa: E402
 from sekaishell.tray import TrayBox                     # noqa: E402
 from sekaishell.notify import NotificationService       # noqa: E402
@@ -26,6 +27,7 @@ from sekaishell.clipboard import ClipboardPopup          # noqa: E402
 from sekaishell.windows import WindowManager             # noqa: E402
 from sekaishell.shell import ShellService                # noqa: E402
 from sekaishell.updates import UpdateNotifier            # noqa: E402
+from sekaishell.gpuhint import GpuHint                   # noqa: E402
 
 # 시작 버튼 로고: layers / world / diamond / blockS / nested / slashes
 DEBUG = os.environ.get("SEKAI_DEBUG") == "1"
@@ -281,7 +283,10 @@ def load_apps():
 def launch(app):
     cmd = app["exec"]
     if app.get("terminal"):
-        cmd = f"foot -e {cmd}"
+        cmd = f"sekai-terminal -e {cmd}"
+    # foot 은 Wayland 전용 — 기본 화면 모드(X11)에서는 X 용 터미널로
+    if cmd.split()[:1] in (["foot"], ["footclient"]):
+        cmd = "sekai-terminal" + cmd[len(cmd.split()[0]):]
     try:
         subprocess.Popen(shlex.split(cmd), start_new_session=True,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -1032,6 +1037,9 @@ def main():
                     body = f.read()
                 break
         # 사용자가 직접 덧붙이고 싶을 때
+        if not _layer.WAYLAND:
+            # 기본 화면 모드(X11)엔 뒤를 흐리는 효과가 없다 — 반투명 면을 거의 불투명하게
+            body = body.replace("alpha(@surface, 0.86)", "alpha(@surface, 0.97)")
         user = os.path.expanduser("~/.config/sekai/panel.css")
         if os.path.exists(user):
             with open(user, encoding="utf-8") as f:
@@ -1059,7 +1067,12 @@ def main():
             dbg(f"icon theme: {cand}")
             break
 
-    hypr = Hypr()
+    # Wayland(Hyprland) 이면 IPC 소켓, X11 기본 화면 모드면 libwnck 로 흉내
+    if _layer.WAYLAND:
+        hypr = Hypr()
+    else:
+        from sekaishell.wm import X11Hypr
+        hypr = X11Hypr()
     panel = Panel(hypr)
     panel.show_all()
 
@@ -1076,6 +1089,7 @@ def main():
         panel.update_sys()
 
     panel.updates = UpdateNotifier()
+    panel.gpuhint = GpuHint()
 
     panel.shell = ShellService({
         "Switch": switcher.step,

@@ -1,0 +1,11 @@
+#!/bin/sh
+# SekaiOS 기본 화면 모드 — X 서버를 띄우고 그 안에서 클라이언트 스크립트를 돌린다
+#   start <클라이언트> [인자…]
+#   greetd 세션이 있는 가상 터미널(XDG_VTNR)에서 X 를 연다. 쓰지 않는 디스플레이 번호를 고른다
+#   (사용자 전환으로 X 가 여럿 떠 있을 수 있다).
+n=0
+while [ -e "/tmp/.X11-unix/X$n" ] || [ -e "/tmp/.X$n-lock" ]; do n=$((n + 1)); done
+# 펌웨어 화면(fb0)을 쓰게 고정 — /etc/X11/sekai-basic.conf 참고
+cfg=""
+[ -e /dev/fb0 ] && [ -e /etc/X11/sekai-basic.conf ] && cfg="-config sekai-basic.conf"
+exec xinit "$@" -- ":$n" "vt${XDG_VTNR:-7}" $cfg -nolisten tcp -keeptty -quiet -background none

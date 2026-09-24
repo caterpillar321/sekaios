@@ -7,9 +7,9 @@ import subprocess
 
 import gi
 gi.require_version("Gtk", "3.0")
-gi.require_version("GtkLayerShell", "0.1")
-from gi.repository import Gtk, GLib, GtkLayerShell  # noqa: E402
+from gi.repository import Gtk, GLib  # noqa: E402
 
+from .layer import GtkLayerShell
 from . import dbg
 from .popup import make_translucent
 

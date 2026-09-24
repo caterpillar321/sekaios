@@ -24,6 +24,26 @@ import sys
 import threading
 import time
 
+# ── 기본 화면 모드(X11) — ext-session-lock 이 없으므로 검증된 X 잠금 프로그램(xsecurelock)을 쓴다 ──
+if not os.environ.get("WAYLAND_DISPLAY") or os.environ.get("XDG_SESSION_TYPE") == "x11":
+    env = dict(os.environ,
+               XSECURELOCK_FONT="Pretendard:size=14",
+               XSECURELOCK_AUTH_BACKGROUND_COLOR="#151517",
+               XSECURELOCK_AUTH_FOREGROUND_COLOR="#f1f1f3",
+               XSECURELOCK_AUTH_WARNING_COLOR="#ff9aa8",
+               XSECURELOCK_PASSWORD_PROMPT="asterisks",
+               XSECURELOCK_SHOW_HOSTNAME="0",
+               XSECURELOCK_SHOW_USERNAME="1",
+               XSECURELOCK_SHOW_DATETIME="1",
+               XSECURELOCK_DATETIME_FORMAT="%m월 %d일 %H:%M",
+               XSECURELOCK_BLANK_TIMEOUT="60",
+               XSECURELOCK_SAVER="saver_blank")
+    try:
+        os.execvpe("xsecurelock", ["xsecurelock"], env)
+    except OSError as e:
+        print("xsecurelock 을 실행하지 못했습니다:", e, file=sys.stderr)
+        sys.exit(1)
+
 LOCKFILE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "sekai-lock.pid")
 DEMO = os.environ.get("SEKAI_LOCK_DEMO") == "1"
 CFG = os.path.expanduser("~/.config/sekai/settings.json")

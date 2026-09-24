@@ -34,6 +34,8 @@ entry() {  # 제목 클래스 id 커널 옵션
 latest=$(echo "$KERNELS" | head -1)
 entry "SekaiOS" sekaios default "$latest" "$SEKAI_KERNEL_OPTS"
 entry "SekaiOS — 복구 모드" recovery recovery "$latest" "single"
+# 그래픽 드라이버 문제로 화면이 안 나올 때 — 펌웨어 화면만 쓰는 기본 화면 모드(X11)
+entry "SekaiOS — 기본 화면 모드" sekaios basic "$latest" "$SEKAI_KERNEL_OPTS nomodeset sekai.basic=1"
 prev=$(echo "$KERNELS" | sed -n 2p)
 if [ -n "$prev" ]; then
     entry "SekaiOS (이전 커널 ${prev#/boot/vmlinuz-})" sekaios previous "$prev" "$SEKAI_KERNEL_OPTS"

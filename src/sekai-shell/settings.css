@@ -268,3 +268,11 @@ scrollbar slider {
 scrollbar slider:hover { background: alpha(@fg, 0.38); min-width: 6px; }
 
 tooltip { background: @card; color: @fg; border: 1px solid @line; border-radius: 6px; }
+
+/* 그래픽 페이지 — 보안 부팅 키 등록 비밀번호 (휴대폰으로 찍기 좋게 크게) */
+box.mok-card {
+    background: @card;
+    border: 1px solid alpha(@accent, 0.55);
+    border-radius: 8px;
+}
+label.mok-password { color: @accent; margin: 4px 0; }

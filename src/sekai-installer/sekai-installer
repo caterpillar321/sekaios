@@ -120,7 +120,15 @@ def ram_mb():
 class Installer(Gtk.Window):
     def __init__(self):
         super().__init__(title="SekaiOS 설치")
-        self.set_default_size(1000, 680)
+        # 작은 화면(기본 화면 모드의 1024×768 등)에서는 화면 안에 들어오게
+        w, h = 1000, 680
+        try:
+            mon = Gdk.Display.get_default().get_primary_monitor() or Gdk.Display.get_default().get_monitor(0)
+            wa = mon.get_workarea()
+            w, h = min(w, wa.width - 24), min(h, wa.height - 60)
+        except Exception:
+            pass
+        self.set_default_size(w, h)
         self.set_position(Gtk.WindowPosition.CENTER)
         self.disk = None
         self.esp_mb = 512

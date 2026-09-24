@@ -23,16 +23,16 @@ from shutil import which as shutil_which
 
 import gi
 gi.require_version("Gtk", "3.0")
-gi.require_version("GtkLayerShell", "0.1")
 gi.require_version("Pango", "1.0")
 gi.require_version("PangoCairo", "1.0")
-from gi.repository import (Gtk, Gdk, GdkPixbuf, Gio, GLib, GtkLayerShell,  # noqa: E402
+from gi.repository import (Gtk, Gdk, GdkPixbuf, Gio, GLib,  # noqa: E402
                            Pango, PangoCairo)
 import cairo  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if os.path.isdir(os.path.join(HERE, "sekaishell")):
     sys.path.insert(0, HERE)
+from sekaishell.layer import GtkLayerShell  # noqa: E402  (X11 기본 화면 모드에선 흉내)
 from sekaishell.popup import PanelPopup, make_translucent  # noqa: E402,F401
 
 CFG = os.path.expanduser("~/.config/sekai/settings.json")
@@ -764,7 +764,7 @@ class Desk(Gtk.Window):
                         None,
                         ("새로 고침", "view-refresh-symbolic", self.refresh),
                         ("여기서 터미널 열기", "utilities-terminal-symbolic",
-                         lambda: run([settings().get("apps", {}).get("terminal") or "foot"], cwd=self.ddir)),
+                         lambda: run([settings().get("apps", {}).get("terminal") or "sekai-terminal"], cwd=self.ddir)),
                         ("파일 관리자에서 열기", "folder-open-symbolic",
                          lambda: run([file_manager(), self.ddir])),
                         None]

@@ -30,3 +30,58 @@ sekai_gpu_check() {
     esac
 }
 sekai_gpu_check
+
+# ── 여러 그래픽 카드 ─────────────────────────────────────
+#   Hyprland 는 기본으로 첫 번째 카드(card0)로 그린다. 그런데 card0 가 모니터 없는
+#   내장 GPU 나 보조 카드일 수 있다 (예: 내장 AMD + RTX 5090 + Quadro).
+#   → 모니터가 꽂힌 카드만, 펌웨어가 화면을 띄운 카드(boot_vga)를 앞에 두어 넘긴다.
+#   (카드 목록은 콜론으로 나누므로 by-path 대신 /dev/dri/cardN 을 쓴다)
+sekai_gpu_pick() {
+    [ -n "${AQ_DRM_DEVICES:-}" ] && return 0            # 사용자가 정했으면 그대로
+    first="" rest="" n=0
+    for c in /dev/dri/card[0-9]*; do
+        [ -e "$c" ] || continue
+        n=$((n + 1))
+        k=${c##*/}
+        grep -qx connected /sys/class/drm/"$k"-*/status 2>/dev/null || continue
+        if [ -z "$first" ] && [ "$(cat /sys/class/drm/"$k"/device/boot_vga 2>/dev/null)" = 1 ]; then
+            first=$c
+        else
+            rest="$rest${rest:+:}$c"
+        fi
+    done
+    [ "$n" -gt 1 ] || return 0                           # 카드가 하나면 고를 것이 없다
+    list="$first${first:+${rest:+:}}$rest"
+    [ -n "$list" ] && export AQ_DRM_DEVICES="$list"
+}
+sekai_gpu_pick
+
+# ── NVIDIA 드라이버 ─────────────────────────────────────
+#   주 카드가 NVIDIA 드라이버로 돌면 VA-API·GLX 가 NVIDIA 것을 쓰게 알려 준다
+sekai_nvidia_env() {
+    c=${AQ_DRM_DEVICES%%:*}
+    [ -n "$c" ] || c=$(ls /dev/dri/card[0-9]* 2>/dev/null | head -1)
+    [ -n "$c" ] || return 0
+    drv=$(basename "$(readlink /sys/class/drm/"${c##*/}"/device/driver 2>/dev/null)" 2>/dev/null)
+    [ "$drv" = nvidia ] || return 0
+    export LIBVA_DRIVER_NAME=nvidia
+    export __GLX_VENDOR_LIBRARY_NAME=nvidia
+    export NVD_BACKEND=direct
+    export SEKAI_NVIDIA=1
+}
+sekai_nvidia_env
+
+# ── 기본 화면 모드 (X11) ─────────────────────────────────
+#   화면 장치(DRM)가 아예 없으면(드라이버 없는 최신 NVIDIA 등) Wayland 는 뜰 수 없다.
+#   데비안 커널은 펌웨어 화면을 DRM 으로 잡아 주지 않아(simpledrm 꺼짐) fbdev 만 남는다
+#   → Xorg(fbdev) 위의 기본 화면 모드로 띄운다. 부팅 메뉴 "기본 화면 모드"도 여기로 온다.
+if grep -qw 'sekai.basic=1' /proc/cmdline 2>/dev/null || ! ls /dev/dri/card* >/dev/null 2>&1; then
+    export SEKAI_BASIC=1
+elif ! grep -qx connected /sys/class/drm/card*-*/status 2>/dev/null \
+        && grep -qiE 'EFI VGA|VESA VGA|simple' /sys/class/graphics/fb0/name 2>/dev/null; then
+    # 화면 장치는 있는데 모니터가 꽂힌 곳이 하나도 없고, 펌웨어 화면은 살아 있다
+    #   = 모니터는 드라이버 없는 카드(최신 NVIDIA 등)에, 드라이버 있는 건 내장 GPU 뿐
+    #   → Hyprland 는 모니터 없는 카드로 떠서 까만 화면이 된다. 펌웨어 화면으로 간다.
+    export SEKAI_BASIC=1
+    export SEKAI_BASIC_REASON=nodisplay
+fi

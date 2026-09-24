@@ -7,9 +7,9 @@ z-순서가 꼬여 배경화면 아래로 내려가 버린다.
 """
 import gi
 gi.require_version("Gtk", "3.0")
-gi.require_version("GtkLayerShell", "0.1")
-from gi.repository import Gtk, Gdk, GtkLayerShell  # noqa: E402
+from gi.repository import Gtk, Gdk  # noqa: E402
 
+from .layer import GtkLayerShell
 from . import dbg
 
 E = GtkLayerShell.Edge

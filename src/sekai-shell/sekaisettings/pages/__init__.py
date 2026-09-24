@@ -4,10 +4,10 @@
     {"id": str, "title": str, "icon": [아이콘 후보...], "build": f(store) -> Gtk.Widget}
 build 는 페이지를 처음 열 때 한 번만 불린다 (지연 생성).
 """
-from . import (about, display, personalize, devices, network,  # noqa: F401
+from . import (about, display, graphics, personalize, devices, network,  # noqa: F401
                notifications, locale, apps, users, update)
 
-MODULES = [about, display, personalize, devices, network,
+MODULES = [about, display, graphics, personalize, devices, network,
            notifications, locale, apps, users, update]
 
 

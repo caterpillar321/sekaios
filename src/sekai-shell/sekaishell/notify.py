@@ -10,9 +10,9 @@ import time
 
 import gi
 gi.require_version("Gtk", "3.0")
-gi.require_version("GtkLayerShell", "0.1")
-from gi.repository import Gtk, Gdk, GdkPixbuf, GLib, GtkLayerShell  # noqa: E402
+from gi.repository import Gtk, Gdk, GdkPixbuf, GLib  # noqa: E402
 
+from .layer import GtkLayerShell
 from . import dbg
 from . import config
 from . import dbusutil as D

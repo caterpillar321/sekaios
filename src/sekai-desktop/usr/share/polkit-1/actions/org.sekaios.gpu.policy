@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- SekaiOS 그래픽 드라이버 도우미 — 설정 앱의 "그래픽" 페이지가 pkexec 로 부른다 -->
+<policyconfig>
+  <vendor>SekaiOS</vendor>
+  <action id="org.sekaios.gpu">
+    <description>Install graphics drivers</description>
+    <description xml:lang="ko">그래픽 드라이버 설치</description>
+    <message>Authentication is required to install or remove graphics drivers</message>
+    <message xml:lang="ko">그래픽 드라이버를 설치하거나 지우려면 인증이 필요합니다</message>
+    <icon_name>video-display</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <!-- 설치는 매번 인증 -->
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/sekai/sekai-gpu</annotate>
+  </action>
+</policyconfig>
