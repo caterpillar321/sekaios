@@ -19,7 +19,7 @@ import signal
 import subprocess
 import sys
 import time
-from urllib.parse import unquote, urlparse
+from shutil import which as shutil_which
 
 import gi
 gi.require_version("Gtk", "3.0")
@@ -354,6 +354,10 @@ class Desk(Gtk.Window):
         items.append(Item("::home", os.path.basename(home) or "홈", path=home,
                           uri=Gio.File.new_for_path(home).get_uri(), special=True, is_dir=True,
                           gicon=Gio.ThemedIcon.new("user-home")))
+        # 설치 USB 로 켠 라이브 세션이면 "SekaiOS 설치" 아이콘도
+        if os.path.isdir("/run/live/medium") and shutil_which("sekai-installer"):
+            items.append(Item("::install", "SekaiOS 설치", special=True,
+                              gicon=Gio.ThemedIcon.new_from_names(["sekaios", "system-software-install"])))
         full = self._trash_count() > 0
         items.append(Item("::trash", "휴지통", uri="trash:///", special=True, is_dir=True,
                           gicon=Gio.ThemedIcon.new("user-trash-full" if full else "user-trash")))
@@ -678,6 +682,9 @@ class Desk(Gtk.Window):
     # ── 동작 ──────────────────────────────────────────────
     def open_items(self, items):
         for it in items:
+            if it.key == "::install":
+                run(["sekai-installer"])
+                continue
             if it.app is not None:
                 try:
                     it.app.launch([], None)

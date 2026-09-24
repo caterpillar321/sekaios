@@ -1,0 +1,260 @@
+#!/usr/bin/env python3
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 첫 부팅 설정(OOBE) 도우미 — 관리자 권한으로 돈다
+#
+#  OOBE 화면(sekai-oobe)은 로그인 화면과 같은 _greetd 권한으로 뜬다.
+#  계정 만들기·시간대·컴퓨터 이름·Wi-Fi 처럼 관리자 권한이 필요한 일만
+#  이 도우미가 한다. 설치 직후 첫 부팅 동안에만 켜진다
+#  (sekai-oobe-helper.service, /var/lib/sekai/oobe-pending 이 있을 때).
+#
+#  소켓: /run/sekai-oobe.sock  (소유 root:_greetd, 0660 — OOBE 화면만 쓸 수 있다)
+#  요청·응답: 한 줄짜리 JSON
+#    {"op":"net"}                          네트워크 상태
+#    {"op":"wifi_scan"}                    Wi-Fi 목록
+#    {"op":"wifi_connect","ssid":..,"password":..}
+#    {"op":"zones"}                        시간대 목록
+#    {"op":"apply", ...}                   설정 적용 + 계정 만들기
+#    {"op":"finish"}                       OOBE 끝 — 표시 지우고 도우미도 끈다
+#  입력은 모두 엄격히 검사한다 — 관리자 권한으로 도는 프로그램이다.
+# ═══════════════════════════════════════════════════════════════
+import grp
+import json
+import os
+import pwd
+import re
+import socket
+import subprocess
+import sys
+import threading
+
+SOCK = "/run/sekai-oobe.sock"
+FLAG = "/var/lib/sekai/oobe-pending"
+DONE_USER = "/var/lib/sekai/oobe-user"
+GREETER_GROUP = "_greetd"
+
+USER_RE = re.compile(r"^[a-z][a-z0-9_-]{0,30}$")
+HOST_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+RESERVED = {"root", "daemon", "bin", "sys", "sync", "games", "man", "lp", "mail", "news", "uucp",
+            "proxy", "www-data", "backup", "list", "irc", "nobody", "systemd", "admin", "sekai-oobe",
+            "_greetd", "messagebus", "polkitd", "sshd", "avahi", "pulse", "rtkit", "colord", "geoclue"}
+LANGS = {"ko_KR.UTF-8", "en_US.UTF-8", "ja_JP.UTF-8"}
+ACCENT_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+WALLS = {"hatsune", "sakura", "midnight"}
+ENV = dict(os.environ, LC_ALL="C.UTF-8", PATH="/usr/sbin:/usr/bin:/sbin:/bin")
+
+
+def run(cmd, inp=None, timeout=60):
+    r = subprocess.run(cmd, input=inp, capture_output=True, text=True, env=ENV, timeout=timeout)
+    return r.returncode, (r.stdout or "") + (r.stderr or "")
+
+
+# ── 네트워크 ──────────────────────────────────────────────
+def net():
+    rc, out = run(["nmcli", "-t", "-f", "TYPE,STATE,CONNECTION,DEVICE", "device"])
+    conns, wifi = [], False
+    for ln in out.splitlines():
+        parts = ln.split(":")
+        if len(parts) < 4:
+            continue
+        typ, state, name, dev = parts[:4]
+        if typ == "wifi":
+            wifi = True
+        if state == "connected" and typ in ("ethernet", "wifi"):
+            conns.append({"type": typ, "name": name, "device": dev})
+    rc, st = run(["nmcli", "-t", "networking", "connectivity"])
+    return {"ok": True, "wifi": wifi, "connected": conns, "internet": st.strip() == "full"}
+
+
+def wifi_scan():
+    run(["nmcli", "device", "wifi", "rescan"], timeout=20)
+    rc, out = run(["nmcli", "-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list"])
+    seen, res = set(), []
+    for ln in out.splitlines():
+        # SSID 안의 ':' 는 '\:' 로 온다
+        parts = re.split(r"(?<!\\):", ln)
+        if len(parts) < 4:
+            continue
+        inuse, ssid, sig, sec = parts[0], parts[1].replace("\\:", ":"), parts[2], parts[3]
+        if not ssid or ssid in seen:
+            continue
+        seen.add(ssid)
+        res.append({"ssid": ssid, "signal": int(sig or 0), "secure": bool(sec and sec != "--"),
+                    "active": inuse == "*"})
+    res.sort(key=lambda x: (-x["active"], -x["signal"]))
+    return {"ok": True, "networks": res[:30]}
+
+
+def wifi_connect(req):
+    ssid = str(req.get("ssid", ""))
+    pw = str(req.get("password", ""))
+    if not (0 < len(ssid.encode()) <= 32) or len(pw) > 63 or "\n" in ssid + pw:
+        return {"ok": False, "error": "이름이나 암호가 올바르지 않습니다"}
+    cmd = ["nmcli", "device", "wifi", "connect", ssid]
+    if pw:
+        cmd += ["password", pw]
+    rc, out = run(cmd, timeout=45)
+    if rc != 0:
+        msg = "암호가 틀렸거나 연결할 수 없습니다" if "Secrets" in out or "password" in out.lower() \
+            else "연결하지 못했습니다"
+        return {"ok": False, "error": msg}
+    return {"ok": True}
+
+
+def zones():
+    rc, out = run(["timedatectl", "list-timezones"])
+    return {"ok": True, "zones": [z for z in out.split() if "/" in z]}
+
+
+# ── 적용 ──────────────────────────────────────────────────
+def apply(req):
+    lang = req.get("lang", "ko_KR.UTF-8")
+    tz = str(req.get("timezone", "Asia/Seoul"))
+    host = str(req.get("hostname", ""))
+    user = str(req.get("username", ""))
+    full = str(req.get("fullname", "")).strip()
+    pw = str(req.get("password", ""))
+    kb = req.get("keyboard", "ko")
+    accent = str(req.get("accent", "#39c5bb"))
+    wall = str(req.get("wallpaper", "hatsune"))
+
+    if lang not in LANGS:
+        return {"ok": False, "error": "지원하지 않는 언어입니다"}
+    if not re.match(r"^[A-Za-z_]+(/[A-Za-z0-9_+-]+){1,2}$|^UTC$", tz) or \
+            not os.path.isfile(f"/usr/share/zoneinfo/{tz}"):
+        return {"ok": False, "error": "알 수 없는 시간대입니다"}
+    if not HOST_RE.match(host):
+        return {"ok": False, "error": "컴퓨터 이름은 영문·숫자·하이픈(-)만, 63자까지 쓸 수 있습니다"}
+    if not USER_RE.match(user) or user in RESERVED:
+        return {"ok": False, "error": "쓸 수 없는 사용자 이름입니다"}
+    try:
+        pwd.getpwnam(user)
+        return {"ok": False, "error": "이미 있는 사용자 이름입니다"}
+    except KeyError:
+        pass
+    if not (1 <= len(pw) <= 256) or "\n" in pw or ":" in full or "\n" in full or len(full) > 80:
+        return {"ok": False, "error": "이름이나 암호가 올바르지 않습니다"}
+    if kb not in ("ko", "us"):
+        kb = "ko"
+    if not ACCENT_RE.match(accent):
+        accent = "#39c5bb"
+    if wall not in WALLS:
+        wall = "hatsune"
+
+    # 시간대
+    run(["timedatectl", "set-timezone", tz])
+    try:
+        with open("/etc/timezone", "w") as f:
+            f.write(tz + "\n")
+    except OSError:
+        pass
+    # 컴퓨터 이름
+    run(["hostnamectl", "set-hostname", host])
+    with open("/etc/hostname", "w") as f:
+        f.write(host + "\n")
+    with open("/etc/hosts") as f:
+        hosts = f.read()
+    hosts = re.sub(r"^127\.0\.1\.1\s.*$", f"127.0.1.1\t{host}", hosts, flags=re.M)
+    if "127.0.1.1" not in hosts:
+        hosts += f"127.0.1.1\t{host}\n"
+    with open("/etc/hosts", "w") as f:
+        f.write(hosts)
+
+    # 계정 — 있는 그룹만 (없는 그룹이 하나라도 있으면 useradd 전체가 실패한다)
+    groups = [g for g in ("sudo", "audio", "video", "plugdev", "netdev", "cdrom", "dialout",
+                          "bluetooth", "lpadmin", "users") if _group(g)]
+    rc, out = run(["useradd", "-m", "-s", "/bin/bash", "-c", full or user,
+                   "-G", ",".join(groups), user])
+    if rc != 0:
+        return {"ok": False, "error": "계정을 만들지 못했습니다"}
+    rc, out = run(["chpasswd"], inp=f"{user}:{pw}\n")
+    if rc != 0:
+        run(["userdel", "-r", user])
+        return {"ok": False, "error": "암호를 정하지 못했습니다"}
+
+    # 사용자 설정 (언어·강조색·배경·키보드)
+    p = pwd.getpwnam(user)
+    cfg_dir = os.path.join(p.pw_dir, ".config", "sekai")
+    os.makedirs(cfg_dir, exist_ok=True)
+    settings = {
+        "locale": {"lang": lang},
+        "appearance": {"accent": accent},
+        "wallpaper": {"path": f"/usr/share/backgrounds/sekai/{wall}.jpg"},
+    }
+    if kb == "us":
+        settings["input"] = {"kb_options": ""}
+    with open(os.path.join(cfg_dir, "settings.json"), "w", encoding="utf-8") as f:
+        json.dump(settings, f, ensure_ascii=False, indent=2)
+    for root, dirs, files in os.walk(os.path.join(p.pw_dir, ".config")):
+        for n in dirs + files:
+            os.chown(os.path.join(root, n), p.pw_uid, p.pw_gid)
+    os.chown(os.path.join(p.pw_dir, ".config"), p.pw_uid, p.pw_gid)
+    # 사진·문서 같은 기본 폴더 (한국어 이름)
+    run(["runuser", "-u", user, "--", "env", f"LANG={lang}", "xdg-user-dirs-update", "--force"])
+
+    with open(DONE_USER, "w") as f:
+        f.write(user + "\n")
+    return {"ok": True, "user": user}
+
+
+def _group(name):
+    try:
+        grp.getgrnam(name)
+        return True
+    except KeyError:
+        return False
+
+
+def finish():
+    try:
+        os.remove(FLAG)
+    except FileNotFoundError:
+        pass
+    # 다음 부팅부터는 켜지지 않게
+    run(["systemctl", "disable", "sekai-oobe-helper.service"])
+    threading.Timer(1.0, lambda: os._exit(0)).start()
+    return {"ok": True}
+
+
+HANDLERS = {"net": lambda r: net(), "wifi_scan": lambda r: wifi_scan(),
+            "wifi_connect": wifi_connect, "zones": lambda r: zones(),
+            "apply": apply, "finish": lambda r: finish()}
+
+
+def handle(conn):
+    with conn:
+        f = conn.makefile("rwb")
+        line = f.readline(65536)
+        try:
+            req = json.loads(line)
+            fn = HANDLERS.get(req.get("op"))
+            res = fn(req) if fn else {"ok": False, "error": "모르는 요청"}
+        except Exception as e:
+            res = {"ok": False, "error": f"처리하지 못했습니다: {type(e).__name__}"}
+        f.write((json.dumps(res, ensure_ascii=False) + "\n").encode())
+        f.flush()
+
+
+def main():
+    if os.geteuid() != 0:
+        print("관리자 권한이 필요합니다", file=sys.stderr)
+        return 1
+    if not os.path.exists(FLAG):
+        return 0
+    try:
+        os.unlink(SOCK)
+    except FileNotFoundError:
+        pass
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    old = os.umask(0o177)
+    s.bind(SOCK)
+    os.umask(old)
+    os.chown(SOCK, 0, grp.getgrnam(GREETER_GROUP).gr_gid)
+    os.chmod(SOCK, 0o660)
+    s.listen(4)
+    while True:
+        c, _ = s.accept()
+        threading.Thread(target=handle, args=(c,), daemon=True).start()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

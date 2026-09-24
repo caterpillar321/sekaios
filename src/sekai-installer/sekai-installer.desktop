@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Install SekaiOS
+Name[ko]=SekaiOS 설치
+Comment=Install SekaiOS on this computer
+Comment[ko]=이 컴퓨터에 SekaiOS 를 설치합니다
+Exec=sekai-installer
+Icon=sekaios
+Terminal=false
+Categories=System;

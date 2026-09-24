@@ -1,0 +1,229 @@
+#!/bin/bash
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 설치 — 실제 작업 (관리자 권한, 라이브 세션에서만)
+#
+#    sekai-install-backend --disk /dev/sdX [--esp-mb 512] [--swap-mb 0] --yes-erase
+#
+#  디스크 전체를 쓴다. 그 디스크에 SekaiOS 전용 ESP 를 새로 만든다
+#  (다른 디스크의 윈도우 ESP 는 건드리지 않는다 — 서로 독립).
+#    p1  ESP   FAT32  (기본 512MB)
+#    p2  swap         (선택)
+#    pN  root  ext4   나머지
+#
+#  계정·시간대·컴퓨터 이름은 여기서 정하지 않는다 — 첫 부팅의 OOBE 가 묻는다.
+#
+#  출력 (한 줄에 하나, 설치 화면이 읽는다):
+#    STEP <번호> <전체> <설명>
+#    PROGRESS <0-100> [설명]
+#    ERROR <설명>
+#    DONE
+#  자세한 기록은 /var/log/sekai-install.log
+# ═══════════════════════════════════════════════════════════════
+set -uo pipefail
+
+TARGET=/target
+LOG=/var/log/sekai-install.log
+TOTAL=6
+
+DISK=""; ESP_MB=512; SWAP_MB=0; YES=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --disk)      DISK="$2"; shift 2 ;;
+        --esp-mb)    ESP_MB="$2"; shift 2 ;;
+        --swap-mb)   SWAP_MB="$2"; shift 2 ;;
+        --yes-erase) YES=1; shift ;;
+        *) echo "ERROR 모르는 옵션: $1"; exit 2 ;;
+    esac
+done
+
+out()  { printf '%s\n' "$*"; }
+log()  { printf '%s\n' "$*" >> "$LOG"; }
+step() { out "STEP $1 $TOTAL $2"; log "==> [$1/$TOTAL] $2"; }
+prog() { out "PROGRESS $*"; }
+die()  { out "ERROR $*"; log "FATAL $*"; cleanup; exit 1; }
+run()  { log "\$ $*"; "$@" >>"$LOG" 2>&1 || die "명령 실패: $* (기록: $LOG)"; }
+
+cleanup() {
+    for m in "$TARGET/sys/firmware/efi/efivars" "$TARGET/boot/efi" \
+             "$TARGET/dev/pts" "$TARGET/dev" "$TARGET/proc" "$TARGET/sys" \
+             "$TARGET/run" "$TARGET"; do
+        mountpoint -q "$m" && umount -l "$m" 2>/dev/null
+    done
+    return 0
+}
+trap 'die "중단되었습니다"' INT TERM
+
+: > "$LOG"
+log "SekaiOS 설치 $(date)"
+log "disk=$DISK esp=$ESP_MB swap=$SWAP_MB"
+
+# ── 확인 ─────────────────────────────────────────────────
+[ "$(id -u)" -eq 0 ]            || die "관리자 권한이 필요합니다"
+[ -d /run/live/medium ]         || die "라이브 세션(설치 USB)에서만 실행할 수 있습니다"
+[ -d /sys/firmware/efi ]        || die "UEFI 모드로 부팅해야 합니다 (BIOS/레거시 모드는 지원하지 않음)"
+[ "$YES" = 1 ]                  || die "--yes-erase 없이는 디스크를 지우지 않습니다"
+[ -b "$DISK" ]                  || die "디스크가 없습니다: $DISK"
+[ "$(lsblk -dno TYPE "$DISK")" = disk ] || die "디스크가 아닙니다: $DISK"
+[[ "$ESP_MB" =~ ^[0-9]+$ ]] && [ "$ESP_MB" -ge 256 ] && [ "$ESP_MB" -le 4096 ] || die "ESP 크기가 이상합니다: $ESP_MB"
+[[ "$SWAP_MB" =~ ^[0-9]+$ ]] && [ "$SWAP_MB" -le 65536 ] || die "스왑 크기가 이상합니다: $SWAP_MB"
+
+LIVE_DEV="$(findmnt -n -o SOURCE /run/live/medium 2>/dev/null | sed 's/\[.*//')"
+if [ -n "$LIVE_DEV" ]; then
+    LIVE_DISK="/dev/$(lsblk -no PKNAME "$LIVE_DEV" 2>/dev/null | head -1)"
+    [ "$DISK" = "$LIVE_DISK" ] || [ "$DISK" = "$LIVE_DEV" ] && die "지금 켜져 있는 설치 USB 에는 설치할 수 없습니다"
+fi
+
+SIZE_MB=$(( $(lsblk -dnbo SIZE "$DISK") / 1024 / 1024 ))
+NEED_MB=$(( ESP_MB + SWAP_MB + 10240 ))
+[ "$SIZE_MB" -ge "$NEED_MB" ] || die "디스크가 너무 작습니다 (${SIZE_MB}MB, 최소 ${NEED_MB}MB)"
+
+SQUASH=""
+for p in /run/live/medium/live/filesystem.squashfs /lib/live/mount/medium/live/filesystem.squashfs; do
+    [ -f "$p" ] && { SQUASH="$p"; break; }
+done
+[ -n "$SQUASH" ] || die "설치할 시스템 이미지(filesystem.squashfs)를 찾지 못했습니다"
+
+# ── 1. 파티션 ────────────────────────────────────────────
+step 1 "디스크 준비"
+prog 1 "디스크를 비우는 중"
+cleanup
+swapoff -a 2>/dev/null || true
+for p in $(lsblk -ln -o NAME "$DISK" | tail -n +2); do umount -f "/dev/$p" 2>/dev/null || true; done
+
+run wipefs -a "$DISK"
+run sgdisk --zap-all "$DISK"
+run sgdisk --new=1:0:+${ESP_MB}M --typecode=1:ef00 --change-name=1:SEKAI-ESP "$DISK"
+PN=2
+if [ "$SWAP_MB" -gt 0 ]; then
+    run sgdisk --new=2:0:+${SWAP_MB}M --typecode=2:8200 --change-name=2:SEKAI-SWAP "$DISK"
+    PN=3
+fi
+run sgdisk --new=${PN}:0:0 --typecode=${PN}:8304 --change-name=${PN}:SEKAI-ROOT "$DISK"
+run partprobe "$DISK"
+udevadm settle 2>/dev/null || sleep 2
+
+if [[ "$DISK" =~ (nvme|mmcblk|loop) ]]; then PFX="${DISK}p"; else PFX="$DISK"; fi
+ESP_DEV="${PFX}1"
+if [ "$SWAP_MB" -gt 0 ]; then SWAP_DEV="${PFX}2"; else SWAP_DEV=""; fi
+ROOT_DEV="${PFX}${PN}"
+for i in 1 2 3 4 5; do [ -b "$ROOT_DEV" ] && break; sleep 1; done
+[ -b "$ESP_DEV" ] && [ -b "$ROOT_DEV" ] || die "파티션을 만들지 못했습니다"
+prog 2
+
+# ── 2. 포맷 ──────────────────────────────────────────────
+step 2 "파일 시스템 만들기"
+run mkfs.vfat -F 32 -n SEKAIESP "$ESP_DEV"
+run mkfs.ext4 -F -L SekaiOS "$ROOT_DEV"
+[ -n "$SWAP_DEV" ] && run mkswap -L SEKAISWAP "$SWAP_DEV"
+mkdir -p "$TARGET"
+run mount "$ROOT_DEV" "$TARGET"
+mkdir -p "$TARGET/boot/efi"
+run mount "$ESP_DEV" "$TARGET/boot/efi"
+prog 4
+
+# ── 3. 파일 복사 (설치의 대부분) ─────────────────────────
+step 3 "파일 복사"
+# -percentage: 한 줄에 퍼센트 하나 → 4~76% 로 바꿔 보여 준다
+last=-1
+while read -r pct; do
+    [[ "$pct" =~ ^[0-9]+$ ]] || continue
+    [ "$pct" -eq "$last" ] && continue
+    last=$pct
+    prog $(( 4 + pct * 72 / 100 ))
+done < <(unsquashfs -f -percentage -d "$TARGET" "$SQUASH" 2>>"$LOG")
+[ -x "$TARGET/usr/bin/bash" ] || die "파일을 복사하지 못했습니다"
+prog 76
+
+# ── 4. 설정 ──────────────────────────────────────────────
+step 4 "시스템 설정"
+ROOT_UUID=$(blkid -s UUID -o value "$ROOT_DEV")
+ESP_UUID=$(blkid -s UUID -o value "$ESP_DEV")
+{
+    echo "# /etc/fstab — SekaiOS 설치 프로그램이 만듦"
+    echo "UUID=$ROOT_UUID  /          ext4  errors=remount-ro  0 1"
+    echo "UUID=$ESP_UUID   /boot/efi  vfat  umask=0077         0 2"
+    [ -n "$SWAP_DEV" ] && echo "UUID=$(blkid -s UUID -o value "$SWAP_DEV")  none  swap  sw  0 0"
+    echo "tmpfs  /tmp  tmpfs  defaults,nosuid,nodev  0 0"
+} > "$TARGET/etc/fstab"
+
+for fs in proc sys dev dev/pts run; do mkdir -p "$TARGET/$fs"; done
+mount -t proc  proc  "$TARGET/proc"
+mount -t sysfs sysfs "$TARGET/sys"
+mount --bind /dev     "$TARGET/dev"
+mount --bind /dev/pts "$TARGET/dev/pts"
+mount -t tmpfs tmpfs  "$TARGET/run"
+mkdir -p "$TARGET/sys/firmware/efi/efivars"
+mount --bind /sys/firmware/efi/efivars "$TARGET/sys/firmware/efi/efivars" 2>/dev/null || true
+
+cat > "$TARGET/tmp/sekai-post.sh" <<'POSTEOF'
+#!/bin/bash
+set -e
+export DEBIAN_FRONTEND=noninteractive
+
+# 임시 이름·시간대 — 첫 부팅 OOBE 가 사용자에게 물어 바꾼다
+echo sekaios > /etc/hostname
+cat > /etc/hosts <<HOSTS
+127.0.0.1	localhost
+127.0.1.1	sekaios
+::1		localhost ip6-localhost ip6-loopback
+ff02::1		ip6-allnodes
+ff02::2		ip6-allrouters
+HOSTS
+ln -sf /usr/share/zoneinfo/Asia/Seoul /etc/localtime
+echo Asia/Seoul > /etc/timezone
+
+# machine-id: 첫 부팅 때 새로 생성되도록 비움
+: > /etc/machine-id
+rm -f /var/lib/dbus/machine-id
+
+# 라이브·설치 전용 패키지 제거.
+#   autoremove 는 쓰지 않는다 — live-config 가 끌고 온 sudo 같은 것을 고아로 보고 지운다.
+apt-mark manual sudo openssh-server polkitd >/dev/null 2>&1 || true
+apt-get purge -y live-boot live-boot-initramfs-tools live-boot-doc \
+                 live-config live-config-systemd live-config-doc live-tools \
+                 sekai-installer >/dev/null 2>&1 || true
+command -v sudo >/dev/null 2>&1 || apt-get install -y --no-download sudo >/dev/null 2>&1 || true
+rm -rf /etc/live /lib/live /usr/lib/live
+rm -f /etc/sudoers.d/live* 2>/dev/null || true
+
+# 관리자는 sudo 로 — root 로 직접 로그인하지 않는다
+passwd -l root >/dev/null 2>&1 || true
+
+# refind 패키지가 업데이트 때 스스로 ESP 에 설치하지 않게 (sekai-bootloader 가 관리)
+echo "refind refind/install_to_esp boolean false" | debconf-set-selections
+
+# 첫 부팅 설정(OOBE) — 계정·지역·네트워크·컴퓨터 이름
+mkdir -p /var/lib/sekai
+: > /var/lib/sekai/oobe-pending
+systemctl enable sekai-oobe-helper.service >/dev/null 2>&1 || true
+
+# initramfs 재생성: 라이브(squashfs 찾기)용 → 디스크 부팅용
+update-initramfs -u -k all
+
+rm -f /tmp/sekai-post.sh
+POSTEOF
+chmod +x "$TARGET/tmp/sekai-post.sh"
+prog 78 "설치된 시스템을 설정하는 중"
+# initramfs 만들기가 오래 걸린다 — 도는 동안 조금씩 움직여 멈춘 것처럼 보이지 않게
+( p=78; while sleep 4; do [ $p -lt 90 ] && p=$((p+1)); echo "PROGRESS $p"; done ) &
+TICK=$!
+chroot "$TARGET" /tmp/sekai-post.sh >>"$LOG" 2>&1; rc=$?
+kill $TICK 2>/dev/null; wait $TICK 2>/dev/null
+[ $rc -eq 0 ] || die "시스템을 설정하지 못했습니다 (기록: $LOG)"
+prog 91
+
+# ── 5. 부트로더 ──────────────────────────────────────────
+step 5 "부팅 준비"
+chroot "$TARGET" /usr/sbin/sekai-bootloader install --disk "$DISK" --part 1 >>"$LOG" 2>&1 \
+    || die "부트로더를 설치하지 못했습니다 (기록: $LOG)"
+[ -f "$TARGET/boot/efi/EFI/sekai/refind.conf" ] || die "부팅 메뉴를 만들지 못했습니다"
+prog 97
+
+# ── 6. 마무리 ────────────────────────────────────────────
+step 6 "마무리"
+cp -f "$LOG" "$TARGET/var/log/sekai-install.log" 2>/dev/null || true
+sync
+cleanup
+prog 100
+log "완료 $(date)"
+out "DONE"

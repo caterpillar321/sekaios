@@ -15,6 +15,11 @@ locale -a 2>/dev/null | grep -qi '^ko_KR.utf8$' && export LANG=ko_KR.UTF-8
 #   ① 파일 주인이 그 사용자인지 ② 줄이 "monitor = 이름, 모드, 위치, 배율" 형식인지
 #   확인해서 통과한 줄만 새로 적는다.
 CONF=/usr/share/sekai/greeter/hyprland.conf
+# 설치 직후 첫 부팅이면 로그인 화면 대신 첫 부팅 설정(OOBE)
+if [ -e /var/lib/sekai/oobe-pending ] && [ -x /usr/bin/sekai-oobe ]; then
+    CONF=/usr/share/sekai/oobe/hyprland.conf
+    exec Hyprland -c "$CONF" >/dev/null 2>&1
+fi
 home=${HOME:-$(getent passwd "$(id -un)" | cut -d: -f6)}
 last=$(cat "$home/.cache/sekai-greeter/last-user" 2>/dev/null)
 case "$last" in *[!a-z0-9_-]*|"") last= ;; esac          # 사용자 이름 모양이 아니면 무시

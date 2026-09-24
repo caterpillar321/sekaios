@@ -1,0 +1,51 @@
+#!/bin/bash
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 설치 — 텍스트 모드 (그래픽 화면이 안 뜰 때 쓰는 비상용)
+#    sudo sekai-install
+#  그래픽 설치(sekai-installer)와 같은 백엔드를 쓴다.
+#  UI 는 영어 — 텍스트 콘솔은 한글을 그리지 못한다.
+# ═══════════════════════════════════════════════════════════════
+set -uo pipefail
+BACKEND=/usr/lib/sekai-installer/sekai-install-backend
+BT="SekaiOS 1.0 (Hatsune) Installer"
+wt() { whiptail --backtitle "$BT" "$@"; }
+
+[ "$(id -u)" -eq 0 ] || { echo "Run as root:  sudo sekai-install"; exit 1; }
+
+LIVE_DEV="$(findmnt -n -o SOURCE /run/live/medium 2>/dev/null | sed 's/\[.*//')"
+LIVE_DISK=""; [ -n "$LIVE_DEV" ] && LIVE_DISK="/dev/$(lsblk -no PKNAME "$LIVE_DEV" | head -1)"
+
+MENU=()
+while read -r name size model; do
+    dev="/dev/$name"; [ "$dev" = "$LIVE_DISK" ] && continue
+    mark=""; lsblk -no FSTYPE "$dev" | grep -qi ntfs && mark="  [WINDOWS?]"
+    MENU+=("$dev" "$size  ${model:-disk}$mark")
+done < <(lsblk -dn -o NAME,SIZE,MODEL -e 7,11,251)
+[ ${#MENU[@]} -gt 0 ] || { wt --msgbox "No installable disk found." 8 50; exit 1; }
+
+DISK=$(wt --title "Select disk" --menu \
+"\nSekaiOS uses the WHOLE disk and creates its own EFI partition on it.\nOther disks (e.g. Windows) are not touched.\n" \
+18 74 8 "${MENU[@]}" 3>&1 1>&2 2>&3) || exit 1
+
+DETAIL=$(lsblk -o NAME,SIZE,FSTYPE,LABEL "$DISK")
+wt --title "Confirm" --defaultno --yesno "This disk will be COMPLETELY ERASED:\n\n$DETAIL\n\nContinue?" 20 74 || exit 1
+C=$(wt --title "FINAL WARNING" --inputbox "\nType  DESTROY  to erase $DISK and install.\n" 11 60 3>&1 1>&2 2>&3) || exit 1
+[ "$C" = DESTROY ] || { wt --msgbox "Cancelled." 7 30; exit 1; }
+
+ERR=""
+{
+    "$BACKEND" --disk "$DISK" --yes-erase 2>&1 | while read -r kind rest; do
+        case "$kind" in
+            PROGRESS) echo "${rest%% *}" ;;
+            STEP)     printf 'XXX\n%s\nStep %s\nXXX\n' "" "$rest" ;;
+            ERROR)    echo "$rest" > /tmp/sekai-install.err ;;
+        esac
+    done
+} | wt --title "Installing" --gauge "Starting..." 8 70 0
+[ -s /tmp/sekai-install.err ] && ERR=$(cat /tmp/sekai-install.err) && rm -f /tmp/sekai-install.err
+
+if [ -n "$ERR" ]; then
+    wt --title "Installation failed" --msgbox "$ERR\n\nLog: /var/log/sekai-install.log" 12 70
+    exit 1
+fi
+wt --title "Done" --msgbox "SekaiOS has been installed.\n\nRemove the installation media and reboot.\nOn first boot you will create your account." 12 60

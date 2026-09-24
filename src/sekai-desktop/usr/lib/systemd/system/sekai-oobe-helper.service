@@ -1,0 +1,18 @@
+[Unit]
+Description=SekaiOS 첫 부팅 설정 도우미
+# 설치 직후 첫 부팅 동안에만 (OOBE 가 끝나면 표시 파일을 지우고 스스로 꺼진다)
+ConditionPathExists=/var/lib/sekai/oobe-pending
+Before=greetd.service
+After=systemd-user-sessions.service NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/sekai/sekai-oobe-helper
+Restart=on-failure
+# 계정·시간대·네트워크 말고는 손대지 않게 좁힌다
+ProtectHome=false
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

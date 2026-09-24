@@ -1,0 +1,571 @@
+#!/usr/bin/env python3
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 첫 부팅 설정 (OOBE)
+#
+#  설치 후 처음 켜면 로그인 화면 대신 뜬다 (sekai-greeter-session 이 고른다).
+#    언어 → 지역·키보드 → 네트워크 → 컴퓨터 이름 → 계정 → 꾸미기 → 준비
+#  관리자 권한이 필요한 일은 sekai-oobe-helper 에 부탁하고,
+#  다 끝나면 방금 만든 계정으로 바로 로그인한다 (greetd).
+#
+#  SEKAI_OOBE_DEMO=1 이면 도우미·greetd 없이 화면만 (확인용, 보통 창으로)
+# ═══════════════════════════════════════════════════════════════
+import json
+import os
+import re
+import socket
+import sys
+import threading
+import time
+
+import gi
+gi.require_version("Gtk", "3.0")
+gi.require_version("GtkLayerShell", "0.1")
+from gi.repository import Gtk, Gdk, GdkPixbuf, GLib, GtkLayerShell  # noqa: E402
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+if os.path.isdir(os.path.join(HERE, "sekaishell")):
+    sys.path.insert(0, HERE)
+from sekaishell import wizard as W  # noqa: E402
+
+DEMO = os.environ.get("SEKAI_OOBE_DEMO") == "1"
+SOCK = "/run/sekai-oobe.sock"
+WALLDIR = "/usr/share/backgrounds/sekai"
+SESSION_CMD = ["/usr/bin/sekai-session"]
+SESSION_ENV = ["XDG_SESSION_TYPE=wayland", "XDG_CURRENT_DESKTOP=Hyprland", "XDG_SESSION_DESKTOP=Hyprland"]
+
+LANGS = [("ko_KR.UTF-8", "한국어", "Korean"), ("en_US.UTF-8", "English", "영어 (미국)"),
+         ("ja_JP.UTF-8", "日本語", "Japanese")]
+ZONES = [("Asia/Seoul", "서울", "UTC+9"), ("Asia/Tokyo", "도쿄", "UTC+9"),
+         ("Asia/Shanghai", "베이징 · 상하이", "UTC+8"), ("Asia/Taipei", "타이베이", "UTC+8"),
+         ("Asia/Singapore", "싱가포르", "UTC+8"), ("Europe/London", "런던", "UTC+0"),
+         ("Europe/Berlin", "베를린 · 파리", "UTC+1"), ("America/New_York", "뉴욕", "UTC-5"),
+         ("America/Los_Angeles", "로스앤젤레스", "UTC-8"), ("UTC", "협정 세계시 (UTC)", "UTC")]
+ACCENTS = [("#39c5bb", "미쿠 틸"), ("#00e5ff", "시안"), ("#ff6b8a", "분홍"), ("#ffb454", "주황"),
+           ("#8a7cff", "보라"), ("#4c9aff", "파랑"), ("#5ad17a", "초록"), ("#f1f1f3", "흰색")]
+WALLS = [("hatsune", "Hatsune"), ("sakura", "Sakura"), ("midnight", "Midnight")]
+
+OOBE_CSS = """
+window.oobe { background: transparent; }
+.oobe-card {
+    background: @winbg;
+    border: 1px solid alpha(@fg, 0.10);
+    border-radius: 16px;
+    box-shadow: 0 16px 48px alpha(#000000, 0.55);
+}
+.oobe-card .wizard { background: transparent; }
+.oobe-card .wiz-foot { border-bottom-left-radius: 16px; border-bottom-right-radius: 16px; }
+button.swatch-btn { padding: 0; min-width: 44px; min-height: 44px; border-radius: 999px; border: 3px solid transparent; }
+button.swatch-btn.selected { border-color: @fg; }
+.wall-pick { border: 3px solid transparent; border-radius: 12px; padding: 2px; }
+.wall-pick.selected { border-color: @accent; }
+.field-err { font-size: 12px; color: #ff9aa8; }
+.setup-msg { font-size: 18px; color: @text2; }
+"""
+
+
+def helper(req, timeout=90):
+    """도우미에게 한 줄 JSON 을 보내고 답을 받는다"""
+    if DEMO:
+        time.sleep(0.4)
+        if req["op"] == "net":
+            return {"ok": True, "wifi": True, "connected": [{"type": "ethernet", "name": "유선 연결 1"}],
+                    "internet": True}
+        if req["op"] == "wifi_scan":
+            return {"ok": True, "networks": [{"ssid": "Sekai-Home", "signal": 82, "secure": True, "active": False},
+                                             {"ssid": "Cafe_Free", "signal": 45, "secure": False, "active": False}]}
+        return {"ok": True}
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        s.connect(SOCK)
+        s.sendall((json.dumps(req, ensure_ascii=False) + "\n").encode())
+        f = s.makefile("rb")
+        return json.loads(f.readline() or b"{}")
+    except Exception as e:
+        return {"ok": False, "error": f"설정 도우미와 연결하지 못했습니다 ({type(e).__name__})"}
+    finally:
+        s.close()
+
+
+def in_thread(fn, done):
+    threading.Thread(target=lambda: GLib.idle_add(done, fn()), daemon=True).start()
+
+
+class Oobe(Gtk.Window):
+    def __init__(self):
+        super().__init__()
+        self.get_style_context().add_class("oobe")
+        self.st = {"lang": "ko_KR.UTF-8", "timezone": "Asia/Seoul", "keyboard": "ko",
+                   "hostname": "sekai-pc", "fullname": "", "username": "", "password": "",
+                   "accent": "#39c5bb", "wallpaper": "hatsune"}
+        vis = Gdk.Screen.get_default().get_rgba_visual()
+        if vis:
+            self.set_visual(vis)
+        if DEMO:
+            self.set_default_size(1280, 800)
+        else:
+            GtkLayerShell.init_for_window(self)
+            GtkLayerShell.set_namespace(self, "sekai-oobe")
+            GtkLayerShell.set_layer(self, GtkLayerShell.Layer.OVERLAY)
+            for e in (GtkLayerShell.Edge.TOP, GtkLayerShell.Edge.BOTTOM,
+                      GtkLayerShell.Edge.LEFT, GtkLayerShell.Edge.RIGHT):
+                GtkLayerShell.set_anchor(self, e, True)
+            GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.EXCLUSIVE)
+            GtkLayerShell.set_exclusive_zone(self, -1)
+
+        self.bg = None
+        try:
+            self.bg = GdkPixbuf.Pixbuf.new_from_file(f"{WALLDIR}/hatsune.jpg")
+        except Exception:
+            pass
+        ov = Gtk.Overlay()
+        self.add(ov)
+        back = Gtk.DrawingArea()
+        back.connect("draw", self._draw_bg)
+        ov.add(back)
+
+        card = Gtk.Box()
+        card.get_style_context().add_class("oobe-card")
+        card.set_size_request(1000, 660)
+        card.set_halign(Gtk.Align.CENTER)
+        card.set_valign(Gtk.Align.CENTER)
+        ov.add_overlay(card)
+
+        self.wz = W.Wizard("SekaiOS 설정", [
+            ("lang", "언어"), ("region", "지역"), ("net", "네트워크"), ("name", "이름"),
+            ("account", "계정"), ("style", "꾸미기"), ("setup", None), ("error", None)])
+        card.pack_start(self.wz, True, True, 0)
+        for pid, fn in (("lang", self.build_lang), ("region", self.build_region), ("net", self.build_net),
+                        ("name", self.build_name), ("account", self.build_account),
+                        ("style", self.build_style), ("setup", self.build_setup), ("error", self.build_error)):
+            self.wz.add_page(pid, fn())
+
+    def _draw_bg(self, w, cr):
+        a = w.get_allocation()
+        if self.bg is not None:
+            bw, bh = self.bg.get_width(), self.bg.get_height()
+            s = max(a.width / bw, a.height / bh)
+            cr.save()
+            cr.translate((a.width - bw * s) / 2, (a.height - bh * s) / 2)
+            cr.scale(s, s)
+            Gdk.cairo_set_source_pixbuf(cr, self.bg, 0, 0)
+            cr.paint()
+            cr.restore()
+        else:
+            cr.set_source_rgb(0.08, 0.08, 0.09)
+            cr.paint()
+        cr.set_source_rgba(0, 0, 0, 0.35)
+        cr.paint()
+        return False
+
+    # ── 언어 ──
+    def build_lang(self):
+        box = W.page_box("언어를 고르세요", "Choose your language — 화면과 앱에 쓰는 언어입니다. 나중에 설정에서 바꿀 수 있습니다.")
+        self.lang_list = W.ChoiceList(lambda k: self.st.update(lang=k))
+        for code, name, sub in LANGS:
+            v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            v.pack_start(W.label(name, "choice-title"), False, False, 0)
+            v.pack_start(W.label(sub, "choice-sub"), False, False, 0)
+            self.lang_list.add(code, v)
+        box.pack_start(self.lang_list, False, False, 6)
+        return box
+
+    def go_lang(self, forward=True):
+        self.lang_list.select(self.st["lang"])
+        self.wz.show_page("lang", back=None, hint="SekaiOS 에 오신 것을 환영합니다", forward=forward)
+        self.wz.on_next = self.go_region
+
+    # ── 지역·키보드 ──
+    def build_region(self):
+        box = W.page_box("지역과 키보드", "시계를 맞출 시간대와 키보드 배열을 고르세요.")
+        box.pack_start(W.label("시간대", "section-title"), False, False, 0)
+        self.tz_combo = Gtk.ComboBoxText()
+        for z, name, off in ZONES:
+            self.tz_combo.append(z, f"{name}   ·   {off}")
+        self.tz_combo.connect("changed", lambda c: self.st.update(timezone=c.get_active_id() or "Asia/Seoul"))
+        box.pack_start(self.tz_combo, False, False, 0)
+        box.pack_start(W.label("키보드", "section-title"), False, False, 0)
+        self.kb_list = W.ChoiceList(lambda k: self.st.update(keyboard=k))
+        for code, name, sub in (("ko", "한국어 (두벌식)", "한/영 키 또는 오른쪽 Alt 로 한글·영어 전환 · 한자 키 = 오른쪽 Ctrl"),
+                                ("us", "영어 (미국)", "한글 입력 없이")):
+            v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            v.pack_start(W.label(name, "choice-title"), False, False, 0)
+            v.pack_start(W.label(sub, "choice-sub"), False, False, 0)
+            self.kb_list.add(code, v)
+        box.pack_start(self.kb_list, False, False, 0)
+        return box
+
+    def go_region(self, forward=True):
+        self.tz_combo.set_active_id(self.st["timezone"])
+        self.kb_list.select(self.st["keyboard"])
+        self.wz.show_page("region", back=lambda: self.go_lang(False), forward=forward)
+        self.wz.on_next = self.go_net
+
+    # ── 네트워크 ──
+    def build_net(self):
+        box = W.page_box("인터넷에 연결하세요", "업데이트를 받고 시계를 맞추는 데 씁니다. 지금 건너뛰고 나중에 연결해도 됩니다.")
+        self.net_status = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        self.net_status.get_style_context().add_class("choice")
+        self.net_icon = W.icon("network-wired-symbolic", 28)
+        self.net_status.pack_start(self.net_icon, False, False, 0)
+        v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self.net_title = W.label("확인하는 중…", "choice-title")
+        self.net_sub = W.label("", "choice-sub")
+        v.pack_start(self.net_title, False, False, 0)
+        v.pack_start(self.net_sub, False, False, 0)
+        self.net_status.pack_start(v, True, True, 0)
+        box.pack_start(self.net_status, False, False, 4)
+
+        self.wifi_head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        self.wifi_head.pack_start(W.label("Wi-Fi", "section-title"), True, True, 0)
+        rescan = Gtk.Button(label="다시 찾기")
+        rescan.connect("clicked", lambda *_: self._scan())
+        self.wifi_head.pack_end(rescan, False, False, 0)
+        box.pack_start(self.wifi_head, False, False, 0)
+        self.wifi_list = W.ChoiceList(self._pick_wifi, spacing=6)
+        box.pack_start(self.wifi_list, False, False, 0)
+        self.wifi_pw_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.wifi_pw = Gtk.Entry()
+        self.wifi_pw.set_visibility(False)
+        self.wifi_pw.set_placeholder_text("Wi-Fi 암호")
+        self.wifi_pw.set_input_purpose(Gtk.InputPurpose.PASSWORD)
+        self.wifi_pw.connect("activate", lambda *_: self._connect())
+        self.wifi_pw_box.pack_start(self.wifi_pw, True, True, 0)
+        self.wifi_btn = Gtk.Button(label="연결")
+        self.wifi_btn.connect("clicked", lambda *_: self._connect())
+        self.wifi_pw_box.pack_start(self.wifi_btn, False, False, 0)
+        box.pack_start(self.wifi_pw_box, False, False, 0)
+        self.wifi_err = W.label("", "field-err")
+        box.pack_start(self.wifi_err, False, False, 0)
+        return box
+
+    def go_net(self, forward=True):
+        for w in (self.wifi_head, self.wifi_list, self.wifi_pw_box, self.wifi_err):
+            w.hide()
+        self.wz.show_page("net", back=lambda: self.go_region(False), next_label="건너뛰기",
+                          hint="나중에 작업 표시줄의 네트워크 아이콘에서도 연결할 수 있습니다", forward=forward)
+        self.wz.on_next = self.go_name
+        in_thread(lambda: helper({"op": "net"}), self._net_done)
+
+    def _net_done(self, r):
+        conns = r.get("connected") or []
+        if conns:
+            c = conns[0]
+            wired = c.get("type") == "ethernet"
+            self.net_icon.set_from_icon_name("network-wired-symbolic" if wired else
+                                             "network-wireless-signal-excellent-symbolic", Gtk.IconSize.DIALOG)
+            self.net_title.set_text(("유선 네트워크" if wired else "Wi-Fi") + "에 연결되었습니다")
+            self.net_sub.set_text(c.get("name", "") + ("  ·  인터넷 사용 가능" if r.get("internet") else ""))
+            self.wz.next_btn.set_label("다음")
+        else:
+            self.net_icon.set_from_icon_name("network-offline-symbolic", Gtk.IconSize.DIALOG)
+            self.net_title.set_text("연결되어 있지 않습니다")
+            self.net_sub.set_text("아래에서 Wi-Fi 를 고르거나 랜선을 꽂으세요" if r.get("wifi") else "랜선을 꽂으면 자동으로 연결됩니다")
+        if r.get("wifi"):
+            self.wifi_head.show_all()
+            self.wifi_list.show_all()
+            self._scan()
+        return False
+
+    def _scan(self):
+        self.wifi_list.clear()
+        self.wifi_list.pack_start(W.label("찾는 중…", "choice-sub"), False, False, 0)
+        self.wifi_list.show_all()
+        in_thread(lambda: helper({"op": "wifi_scan"}), self._scan_done)
+
+    def _scan_done(self, r):
+        self.wifi_list.clear()
+        self.nets = {n["ssid"]: n for n in r.get("networks") or []}
+        for n in self.nets.values():
+            h = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            lvl = "excellent" if n["signal"] > 70 else "good" if n["signal"] > 45 else "ok" if n["signal"] > 25 else "weak"
+            h.pack_start(W.icon(f"network-wireless-signal-{lvl}-symbolic", 20), False, False, 0)
+            h.pack_start(W.label(n["ssid"], "choice-title"), True, True, 0)
+            h.pack_end(W.label("연결됨" if n["active"] else "보안" if n["secure"] else "개방", "choice-sub"),
+                       False, False, 0)
+            self.wifi_list.add(n["ssid"], h)
+        if not self.nets:
+            self.wifi_list.pack_start(W.label("주변에 Wi-Fi 가 없습니다", "choice-sub"), False, False, 0)
+        self.wifi_list.show_all()
+        return False
+
+    def _pick_wifi(self, ssid):
+        self.pick_ssid = ssid
+        n = self.nets.get(ssid, {})
+        self.wifi_err.hide()
+        self.wifi_pw.set_text("")
+        self.wifi_pw.set_visible(n.get("secure", True))
+        self.wifi_pw_box.show()
+        (self.wifi_pw if n.get("secure", True) else self.wifi_btn).grab_focus()
+
+    def _connect(self):
+        self.wifi_btn.set_sensitive(False)
+        self.wifi_btn.set_label("연결하는 중…")
+        req = {"op": "wifi_connect", "ssid": self.pick_ssid, "password": self.wifi_pw.get_text()}
+        in_thread(lambda: helper(req), self._connect_done)
+
+    def _connect_done(self, r):
+        self.wifi_btn.set_sensitive(True)
+        self.wifi_btn.set_label("연결")
+        if r.get("ok"):
+            self.wifi_pw_box.hide()
+            in_thread(lambda: helper({"op": "net"}), self._net_done)
+        else:
+            self.wifi_err.set_text(r.get("error", "연결하지 못했습니다"))
+            self.wifi_err.show()
+        return False
+
+    # ── 컴퓨터 이름 ──
+    def build_name(self):
+        box = W.page_box("이 컴퓨터의 이름을 정하세요",
+                         "네트워크에서 다른 기기에 보이는 이름입니다. 영문, 숫자, 하이픈(-)만 쓸 수 있습니다.")
+        self.host = Gtk.Entry()
+        self.host.set_max_length(63)
+        self.host.set_width_chars(30)
+        self.host.set_halign(Gtk.Align.START)
+        self.host.connect("changed", lambda *_: self._check_host())
+        self.host.connect("activate", lambda *_: self.wz.next_btn.get_sensitive() and self.go_account())
+        box.pack_start(self.host, False, False, 8)
+        self.host_err = W.label("", "field-err")
+        box.pack_start(self.host_err, False, False, 0)
+        return box
+
+    def _check_host(self):
+        t = self.host.get_text()
+        ok = bool(re.match(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$", t))
+        self.host_err.set_text("" if ok or not t else "영문, 숫자, 하이픈(-)만 쓸 수 있고 하이픈으로 시작·끝날 수 없습니다")
+        self.wz.set_next_enabled(ok)
+        if ok:
+            self.st["hostname"] = t
+
+    def go_name(self, forward=True):
+        self.host.set_text(self.st["hostname"])
+        self.wz.show_page("name", back=lambda: self.go_net(False), forward=forward)
+        self.wz.on_next = self.go_account
+        self._check_host()
+        GLib.idle_add(self.host.grab_focus)
+
+    # ── 계정 ──
+    def build_account(self):
+        box = W.page_box("계정을 만드세요", "이 컴퓨터를 쓸 사람의 이름과 암호입니다. 이 계정은 관리자 권한(sudo)을 가집니다.")
+        g = Gtk.Grid(column_spacing=16, row_spacing=10)
+        g.set_margin_top(8)
+        self.f_full, self.f_user, self.f_pw, self.f_pw2 = (Gtk.Entry() for _ in range(4))
+        self.f_full.set_placeholder_text("예: 하츠네 미쿠")
+        self.f_user.set_placeholder_text("영문 소문자로 시작")
+        for e in (self.f_pw, self.f_pw2):
+            e.set_visibility(False)
+            e.set_input_purpose(Gtk.InputPurpose.PASSWORD)
+        rows = [("이름", self.f_full, "화면에 보이는 이름 — 한글도 됩니다"),
+                ("사용자 이름", self.f_user, "로그인·홈 폴더 이름 — 영문 소문자·숫자"),
+                ("암호", self.f_pw, ""), ("암호 확인", self.f_pw2, "")]
+        for i, (k, e, sub) in enumerate(rows):
+            g.attach(W.label(k, "row-title"), 0, i, 1, 1)
+            e.set_width_chars(28)
+            g.attach(e, 1, i, 1, 1)
+            g.attach(W.label(sub, "row-sub"), 2, i, 1, 1)
+        box.pack_start(g, False, False, 0)
+        self.acct_err = W.label("", "field-err")
+        box.pack_start(self.acct_err, False, False, 0)
+        self.user_touched = False
+        self.f_full.connect("changed", lambda *_: self._auto_user())
+        self.f_user.connect("changed", lambda *_: self._check_acct())
+        self.f_user.connect("key-press-event", lambda *_: setattr(self, "user_touched", True))
+        for e in (self.f_pw, self.f_pw2):
+            e.connect("changed", lambda *_: self._check_acct())
+        self.f_pw2.connect("activate", lambda *_: self.wz.next_btn.get_sensitive() and self.go_style())
+        return box
+
+    def _auto_user(self):
+        if self.user_touched:
+            self._check_acct()
+            return
+        # 이름이 영문이면 거기서 사용자 이름을 만들고, 한글이면 비워 두고 직접 쓰게 한다
+        base = re.sub(r"[^a-z0-9]", "", self.f_full.get_text().lower().split(" ")[0])
+        if base and base[0].isalpha():
+            self.f_user.set_text(base[:20])
+        self._check_acct()
+
+    def _check_acct(self):
+        u, p1, p2 = self.f_user.get_text(), self.f_pw.get_text(), self.f_pw2.get_text()
+        err = ""
+        if u and not re.match(r"^[a-z][a-z0-9_-]{0,30}$", u):
+            err = "사용자 이름은 영문 소문자로 시작하고 영문 소문자·숫자·_·- 만 쓸 수 있습니다"
+        elif u in ("root", "admin", "daemon", "bin", "sys", "nobody", "sekai-oobe"):
+            err = "쓸 수 없는 사용자 이름입니다"
+        elif p2 and p1 != p2:
+            err = "암호가 서로 다릅니다"
+        self.acct_err.set_text(err)
+        ok = bool(u and p1 and p1 == p2 and not err)
+        self.wz.set_next_enabled(ok)
+        if ok:
+            self.st.update(fullname=self.f_full.get_text().strip(), username=u, password=p1)
+        self.wz.hint.set_text("암호는 잊지 않을 만한 것으로 — 로그인과 관리자 작업에 씁니다"
+                              if not p1 or len(p1) >= 6 else "6자 이상을 권장합니다")
+
+    def go_account(self, forward=True):
+        self.wz.show_page("account", back=lambda: self.go_name(False), next_enabled=False, forward=forward)
+        self.wz.on_next = self.go_style
+        self._check_acct()
+        GLib.idle_add((self.f_full if not self.f_full.get_text() else self.f_pw).grab_focus)
+
+    # ── 꾸미기 ──
+    def build_style(self):
+        box = W.page_box("나만의 색을 고르세요", "강조색과 배경화면입니다. 언제든 설정 › 색 및 모양에서 바꿀 수 있습니다.")
+        box.pack_start(W.label("강조색", "section-title"), False, False, 0)
+        sw = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.swatches = {}
+        for hexc, name in ACCENTS:
+            b = Gtk.Button()
+            b.get_style_context().add_class("swatch-btn")
+            b.set_tooltip_text(name)
+            prov = Gtk.CssProvider()
+            prov.load_from_data(f"button {{ background: {hexc}; }}".encode())
+            b.get_style_context().add_provider(prov, Gtk.STYLE_PROVIDER_PRIORITY_USER + 1)
+            b.connect("clicked", lambda _b, h=hexc: self._pick_accent(h))
+            sw.pack_start(b, False, False, 0)
+            self.swatches[hexc] = b
+        box.pack_start(sw, False, False, 0)
+        box.pack_start(W.label("배경화면", "section-title"), False, False, 0)
+        wb = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        self.walls = {}
+        for key, name in WALLS:
+            ev = Gtk.EventBox()
+            v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            v.get_style_context().add_class("wall-pick")
+            try:
+                pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(f"{WALLDIR}/{key}.jpg", 240, 135, False)
+                v.pack_start(Gtk.Image.new_from_pixbuf(pb), False, False, 0)
+            except Exception:
+                v.pack_start(W.icon("image-x-generic", 64), False, False, 0)
+            v.pack_start(W.label(name, "choice-sub", 0.5), False, False, 0)
+            ev.add(v)
+            ev.connect("button-press-event", lambda *_a, k=key: self._pick_wall(k))
+            wb.pack_start(ev, False, False, 0)
+            self.walls[key] = v
+        box.pack_start(wb, False, False, 0)
+        return box
+
+    def _pick_accent(self, h):
+        self.st["accent"] = h
+        for k, b in self.swatches.items():
+            (b.get_style_context().add_class if k == h else b.get_style_context().remove_class)("selected")
+
+    def _pick_wall(self, k):
+        self.st["wallpaper"] = k
+        for key, v in self.walls.items():
+            (v.get_style_context().add_class if key == k else v.get_style_context().remove_class)("selected")
+        try:
+            self.bg = GdkPixbuf.Pixbuf.new_from_file(f"{WALLDIR}/{k}.jpg")
+            self.queue_draw()
+        except Exception:
+            pass
+
+    def go_style(self, forward=True):
+        self._pick_accent(self.st["accent"])
+        self._pick_wall(self.st["wallpaper"])
+        self.wz.show_page("style", back=lambda: self.go_account(False), next_label="마치기", forward=forward)
+        self.wz.on_next = self.go_setup
+
+    # ── 준비 ──
+    def build_setup(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
+        box.set_valign(Gtk.Align.CENTER)
+        box.set_halign(Gtk.Align.CENTER)
+        lg = W.logo_widget(80)
+        lg.set_halign(Gtk.Align.CENTER)
+        box.pack_start(lg, False, False, 0)
+        self.setup_title = W.label("잠시만 기다려 주세요", "wiz-title", 0.5)
+        box.pack_start(self.setup_title, False, False, 0)
+        self.setup_msg = W.label("", "setup-msg", 0.5)
+        box.pack_start(self.setup_msg, False, False, 0)
+        sp = Gtk.Spinner()
+        sp.set_size_request(28, 28)
+        sp.start()
+        box.pack_start(sp, False, False, 6)
+        return box
+
+    def go_setup(self):
+        name = self.st["fullname"] or self.st["username"]
+        self.setup_title.set_text(f"{name}님, 환영합니다")
+        self.wz.show_page("setup", back=None, next_label=None, footer=False)
+        msgs = iter(["계정을 만드는 중", "설정을 적용하는 중", "바탕화면을 준비하는 중"])
+        self.setup_msg.set_text(next(msgs))
+
+        def rotate():
+            m = next(msgs, None)
+            if m and self.wz.stack.get_visible_child_name() == "setup":
+                self.setup_msg.set_text(m)
+                return True
+            return False
+        GLib.timeout_add(1600, rotate)
+        req = dict(self.st, op="apply")
+        in_thread(lambda: helper(req, timeout=180), self._applied)
+
+    def _applied(self, r):
+        if not r.get("ok"):
+            self.go_error(r.get("error", "설정하지 못했습니다"))
+            return False
+        in_thread(lambda: helper({"op": "finish"}), self._finished)
+        return False
+
+    def _finished(self, _r):
+        # 다음 로그인 화면이 이 사람을 먼저 보여 주게
+        try:
+            d = os.path.expanduser("~/.cache/sekai-greeter")
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "last-user"), "w") as f:
+                f.write(self.st["username"])
+        except OSError:
+            pass
+        in_thread(self._login, self._logged_in)
+        return False
+
+    def _login(self):
+        if DEMO:
+            time.sleep(1.5)
+            return None
+        from sekaishell.greetd import Greetd, GreetdError
+        try:
+            return Greetd().login(self.st["username"], self.st["password"], SESSION_CMD, SESSION_ENV)
+        except (GreetdError, OSError) as e:
+            return f"로그인하지 못했습니다 ({e})"
+
+    def _logged_in(self, err):
+        self.st["password"] = ""
+        if err:
+            # 계정은 만들어졌다 — 로그인 화면으로 넘겨 직접 들어가게
+            self.setup_msg.set_text("로그인 화면에서 암호를 입력해 주세요")
+            GLib.timeout_add(2500, Gtk.main_quit)
+            return False
+        self.setup_msg.set_text("거의 다 됐습니다")
+        GLib.timeout_add(400, Gtk.main_quit)          # 이 화면이 끝나야 greetd 가 세션을 연다
+        return False
+
+    # ── 오류 ──
+    def build_error(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        box.set_valign(Gtk.Align.CENTER)
+        box.pack_start(W.icon(["dialog-error-symbolic", "dialog-error"], 56), False, False, 0)
+        box.pack_start(W.label("설정하지 못했습니다", "wiz-title", 0.5), False, False, 0)
+        self.err_lbl = W.label("", "wiz-sub", 0.5, wrap=True)
+        box.pack_start(self.err_lbl, False, False, 0)
+        return box
+
+    def go_error(self, msg):
+        self.err_lbl.set_text(msg)
+        self.wz.show_page("error", back=lambda: self.go_account(False), next_label="다시 시도")
+        self.wz.on_next = self.go_setup
+
+
+def main():
+    W.load_css(OOBE_CSS)
+    win = Oobe()
+    win.connect("destroy", Gtk.main_quit)
+    win.show_all()
+    win.go_lang()
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    main()

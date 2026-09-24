@@ -18,7 +18,7 @@ STAGE_D="$(mktemp -d)"
 trap 'rm -rf "$STAGE" "$STAGE_D"' EXIT
 
 # 옛 빌드 정리 — 남겨 두면 finalize 의 *.deb 가 두 버전을 동시에 설치하려 한다
-rm -f "$OUT"/sekai-shell_*.deb "$OUT"/sekai-desktop_*.deb
+rm -f "$OUT"/sekai-shell_*.deb "$OUT"/sekai-desktop_*.deb "$OUT"/sekai-installer_*.deb
 
 echo "==> 스테이징"
 install -Dm755 "$SRC/sekai-panel"     "$STAGE/usr/bin/sekai-panel"
@@ -29,6 +29,7 @@ install -Dm755 "$SRC/sekai-lock"      "$STAGE/usr/bin/sekai-lock"
 install -Dm755 "$SRC/sekai-idle"      "$STAGE/usr/bin/sekai-idle"
 install -Dm755 "$SRC/sekai-ctl"       "$STAGE/usr/bin/sekai-ctl"
 install -Dm755 "$SRC/sekai-screenshot" "$STAGE/usr/bin/sekai-screenshot"
+install -Dm755 "$SRC/sekai-oobe"      "$STAGE/usr/bin/sekai-oobe"
 install -Dm755 "$SRC/sekai-session"   "$STAGE/usr/bin/sekai-session"
 install -Dm755 "$SRC/sekai-greeter"   "$STAGE/usr/bin/sekai-greeter"
 install -Dm755 "$SRC/sekai-greeter-session" "$STAGE/usr/bin/sekai-greeter-session"
@@ -183,7 +184,7 @@ Depends: sekai-shell (= ${FULL}),
  hyprland, hyprbars (>= 0.50.0-sekai4), hyprexpo, xwayland, binutils,
  xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr,
  foot, fuzzel, swaybg, swayidle, swaylock, grim, slurp,
- brightnessctl, playerctl, wtype, pkexec, refind, efibootmgr,
+ brightnessctl, playerctl, wtype, pkexec, refind, efibootmgr, open-vm-tools,
  wl-clipboard, cliphist, lxpolkit, libnotify-bin, wayland-utils,
  pipewire, pipewire-audio, pipewire-pulse, wireplumber, pavucontrol,
  network-manager, network-manager-gnome, systemd-resolved,
@@ -215,4 +216,36 @@ dpkg-deb --root-owner-group --build "$STAGE_D" \
          "$OUT/sekai-desktop_${FULL}_all.deb" > /dev/null
 ls -lh "$OUT/sekai-desktop_${FULL}_all.deb" | awk '{print "    "$5"  "$9}'
 echo "    conffiles:"; sed 's/^/      /' "$STAGE_D/DEBIAN/conffiles"
+# ═══════════════════════════════════════════════════════════
+#  sekai-installer — 설치 화면 (라이브 이미지에만 들어간다)
+#  설치가 끝난 시스템에서는 설치 백엔드가 이 패키지를 지운다.
+# ═══════════════════════════════════════════════════════════
+echo "==> sekai-installer 스테이징"
+STAGE_I="$(mktemp -d)"
+ISRC="$P/src/sekai-installer"
+install -Dm755 "$ISRC/sekai-installer"         "$STAGE_I/usr/bin/sekai-installer"
+install -Dm755 "$ISRC/sekai-install"           "$STAGE_I/usr/sbin/sekai-install"
+install -Dm755 "$ISRC/sekai-install-backend"   "$STAGE_I/usr/lib/sekai-installer/sekai-install-backend"
+install -Dm644 "$ISRC/sekai-installer.desktop" "$STAGE_I/usr/share/applications/sekai-installer.desktop"
+copyright "$STAGE_I" sekai-installer
+mkdir -p "$STAGE_I/DEBIAN"
+cat > "$STAGE_I/DEBIAN/control" <<CTRL
+Package: sekai-installer
+Version: ${FULL}
+Architecture: all
+Maintainer: SekaiOS <sekai@localhost>
+Section: admin
+Priority: optional
+Depends: sekai-shell (= ${FULL}), sekai-desktop (= ${FULL}),
+ gdisk, parted, dosfstools, e2fsprogs, squashfs-tools, efibootmgr,
+ util-linux, whiptail, sudo, python3-gi
+Description: SekaiOS installer
+ Graphical installer used from the SekaiOS live session. Installs the
+ system to a whole disk with its own EFI system partition. Account,
+ region and network are configured on first boot (OOBE).
+CTRL
+dpkg-deb --root-owner-group --build "$STAGE_I" "$OUT/sekai-installer_${FULL}_all.deb" > /dev/null
+ls -lh "$OUT/sekai-installer_${FULL}_all.deb" | awk '{print "    "$5"  "$9}'
+rm -rf "$STAGE_I"
+
 echo "==> 버전 ${FULL}"
