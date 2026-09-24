@@ -326,6 +326,15 @@ class TrayBox(Gtk.Box):
         self._start_watcher()
 
     # ── Watcher ────────────────────────────────────────────
+    def refresh_icons(self):
+        """아이콘 테마가 바뀌었을 때(다크/라이트) 트레이 아이콘을 새 테마로 다시 그린다"""
+        for item in list(self.items.values()):
+            try:
+                if getattr(item, "props", None):
+                    item._apply()
+            except Exception:
+                pass
+
     def _start_watcher(self):
         try:
             self._reg_id = D.export(self.conn, WATCHER_PATH,

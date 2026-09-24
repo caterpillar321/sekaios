@@ -2,7 +2,10 @@
 # 기본 화면 모드의 xfwm4 설정 — SekaiOS 모양·Windows 식 단축키
 q() { xfconf-query -c "$1" -p "$2" -n -t "$3" -s "$4" 2>/dev/null || xfconf-query -c "$1" -p "$2" -s "$4" 2>/dev/null; }
 W=xfwm4
-q $W /general/theme string Sekai
+# 다크/라이트 모드에 맞는 창 테두리 (설정 앱의 색 및 모양 > 모드)
+MODE=$(python3 -c 'from sekaisettings.store import Store; print(Store().get("appearance").get("mode", "dark"))' 2>/dev/null)
+[ "$MODE" = light ] && THEME=Sekai-Light || THEME=Sekai
+q $W /general/theme string "$THEME"
 q $W /general/title_font string "Pretendard SemiBold 10"
 q $W /general/title_alignment string left
 q $W /general/button_layout string "O|HMC"

@@ -155,9 +155,12 @@ class SettingsWindow(Gtk.Window):
 
     # ── 설정이 바뀌면 ───────────────────────────────────
     def _on_change(self, section, key, value):
-        if section == "appearance" and key in ("accent", "bg", "surface", "fg"):
+        if section == "appearance" and key in ("accent", "bg", "surface", "fg", "mode"):
             # 창 자신의 색도 즉시 따라가게 CSS 를 다시 읽는다
             GLib.idle_add(self._reload_css)
+        if section == "appearance" and key == "mode":
+            from sekaishell import theme
+            theme.apply_gtk_settings(Gtk.Settings.get_default(), theme.mode_of({"mode": value}))
 
     def _reload_css(self):
         if self._css is not None:
@@ -193,13 +196,8 @@ def main(argv=None):
     # 처음 실행이면 조각 파일을 만들어 둔다
     store.write_hypr_fragment()
 
-    st = Gtk.Settings.get_default()
-    if st:
-        st.set_property("gtk-application-prefer-dark-theme", True)
-        for cand in ("Papirus-Dark", "Papirus", "Adwaita"):
-            if os.path.isdir(f"/usr/share/icons/{cand}"):
-                st.set_property("gtk-icon-theme-name", cand)
-                break
+    from sekaishell import theme
+    theme.apply_gtk_settings(Gtk.Settings.get_default(), theme.mode_of(store.get("appearance")))
 
     win = SettingsWindow(store, start)
     win.show_all()

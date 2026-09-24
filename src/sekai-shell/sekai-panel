@@ -1078,13 +1078,13 @@ def main():
 
     load_css()
 
-    # 아이콘 테마 — 다크 배경에 맞는 것을 우선
-    st = Gtk.Settings.get_default()
-    for cand in ("Papirus-Dark", "Papirus", "Adwaita"):
-        if os.path.isdir(f"/usr/share/icons/{cand}"):
-            st.set_property("gtk-icon-theme-name", cand)
-            dbg(f"icon theme: {cand}")
-            break
+    # 다크/라이트 모드 — 아이콘 테마(어두운 바탕엔 Papirus-Dark, 밝은 바탕엔 Papirus)와 GTK 다크 여부
+    from sekaishell import theme as _theme
+
+    def apply_mode():
+        _theme.apply_gtk_settings(Gtk.Settings.get_default(),
+                                  _theme.mode_of(sekai_settings().get("appearance", {})))
+    apply_mode()
 
     # Wayland(Hyprland) 이면 IPC 소켓, X11 기본 화면 모드면 libwnck 로 흉내
     if _layer.WAYLAND:
@@ -1161,6 +1161,8 @@ def main():
                 panel.set_size_request(-1, new_h)
                 GtkLayerShell.auto_exclusive_zone_enable(panel)
             load_css()
+            apply_mode()                    # 다크/라이트가 바뀌었을 수 있다 (아이콘 테마)
+            panel.tray.refresh_icons()
             # 방해 금지는 설정 앱에서도 바꿀 수 있다 — 상태를 다시 읽는다
             try:
                 from sekaishell import config as _c

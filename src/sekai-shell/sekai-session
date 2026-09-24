@@ -63,7 +63,10 @@ mkdir -p "$LOGDIR"
 # 설정 앱이 만드는 Hyprland 조각(~/.config/hypr/sekai.conf)을 지금의 기본값으로 다시 쓴다.
 #   사용자가 바꾼 값은 settings.json 에 있어 그대로 남고, 바꾸지 않은 값은 업데이트로 바뀐
 #   기본값(예: 최대화 여백 0)을 따르게 된다. 설정 앱을 한 번도 안 열었어도.
-timeout 10 python3 -c 'from sekaisettings.store import Store; Store().write_hypr_fragment()' \
+#   다크/라이트 모드도 일반 앱(gsettings·GTK 설정 파일)에 다시 맞춘다.
+timeout 10 python3 -c 'from sekaisettings.store import Store
+from sekaishell import theme
+s = Store(); s.write_hypr_fragment(); theme.apply_system(theme.mode_of(s.get("appearance")))' \
     >/dev/null 2>&1 || true
 
 # 그래픽 드라이버가 없으면(hw-env.sh 가 SEKAI_BASIC=1) 처음부터 기본 화면 모드(X11)

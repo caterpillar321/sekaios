@@ -13,7 +13,8 @@ REV="sekai2"
 #   hyprbars sekai5: 끌어서 스냅 — 제목줄 끌기를 셸에 IPC 이벤트로 알림 (patch-hyprbars-snap.py)
 #   hyprbars sekai6: 스냅 레이아웃 — 최대화 버튼에 마우스 올림/벗어남 알림
 #   hyprbars sekai7: 끄는 중 손을 떼면 커서 밑이 레이어여도 끌기를 끝냄 (위쪽 레이아웃 바)
-rev_for() { case "$1" in hyprbars) echo sekai7 ;; *) echo "$REV" ;; esac; }
+#   hyprbars sekai8: 버튼 마우스 올림 배경을 글자색에서 (라이트 모드)
+rev_for() { case "$1" in hyprbars) echo sekai8 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
@@ -352,6 +353,7 @@ build_plugin() {
         python3 /build/patch-hyprbars-icons.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패"
         python3 /build/patch-hyprbars-hover.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (hover)"
         python3 /build/patch-hyprbars-snap.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (snap)"
+        python3 /build/patch-hyprbars-theme.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (theme)"
     fi
 
     say "빌드(plugin): $pkg $ver"

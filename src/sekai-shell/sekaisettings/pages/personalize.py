@@ -125,9 +125,88 @@ def _notice(text):
     return l
 
 
+def _bare_row(widget):
+    """제목 없이 위젯만 담은 항목 줄"""
+    r = Gtk.ListBoxRow()
+    r.set_activatable(False)
+    r.get_style_context().add_class("row")
+    r.add(widget)
+    return r
+
+
+def _draw_mode_preview(area, cr, mode, store):
+    """모드 미리보기 — 배경 위에 작은 창과 작업 표시줄"""
+    from sekaishell import theme as _t
+    pal = _t.PALETTES[mode]
+    accent = store.get("appearance", "accent") or "#39c5bb"
+
+    def rgb(h, a=1.0):
+        h = h.lstrip("#")
+        cr.set_source_rgba(int(h[0:2], 16) / 255, int(h[2:4], 16) / 255, int(h[4:6], 16) / 255, a)
+    w, h = area.get_allocated_width(), area.get_allocated_height()
+
+    def rrect(x, y, ww, hh, r):
+        import math
+        cr.new_sub_path()
+        cr.arc(x + ww - r, y + r, r, -math.pi / 2, 0)
+        cr.arc(x + ww - r, y + hh - r, r, 0, math.pi / 2)
+        cr.arc(x + r, y + hh - r, r, math.pi / 2, math.pi)
+        cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+        cr.close_path()
+    rgb("#2a6f76" if mode == "dark" else "#8fd3d0")         # 배경 사진 대신 단색
+    rrect(0, 0, w, h, 8); cr.fill()
+    rgb(pal["titlebar_bg"]); rrect(w * 0.18, h * 0.14, w * 0.64, h * 0.56, 5); cr.fill()
+    rgb(pal["surface"]); cr.rectangle(w * 0.18, h * 0.26, w * 0.64, h * 0.44); cr.fill()
+    rgb(pal["fg"], 0.55); cr.rectangle(w * 0.24, h * 0.34, w * 0.30, 4); cr.fill()
+    rgb(pal["fg"], 0.30); cr.rectangle(w * 0.24, h * 0.44, w * 0.42, 4); cr.fill()
+    rgb(accent); rrect(w * 0.24, h * 0.54, w * 0.16, 9, 3); cr.fill()
+    rgb(pal["surface"], 0.95); cr.rectangle(0, h * 0.84, w, h * 0.16); cr.fill()
+    rgb(accent); cr.arc(w * 0.08, h * 0.92, 4, 0, 6.3); cr.fill()
+    return False
+
+
 def build_appearance(store):
     p = Page("색 및 모양", "강조색과 창 테두리, 여백을 조정합니다.")
     a = store.get("appearance")
+
+    # ── 모드 (다크 / 라이트) ──
+    s = p.section("모드")
+    modes = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+    mode_btns = {}
+
+    def pick_mode(m):
+        if store.get("appearance", "mode") == m:
+            _sync_modes()
+            return
+        store.set_mode(m)
+        from sekaishell import theme as _t
+        for key, btn in color_btns.items():
+            _set_color_button(btn, _t.PALETTES[m][key])
+        _sync_modes()
+
+    def _sync_modes():
+        cur = store.get("appearance", "mode") or "dark"
+        for m, b in mode_btns.items():
+            ctx = b.get_style_context()
+            (ctx.add_class if m == cur else ctx.remove_class)("mode-on")
+
+    for m, label in (("light", "라이트"), ("dark", "다크")):
+        b = Gtk.Button()
+        b.get_style_context().add_class("mode-card")
+        v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        prev = Gtk.DrawingArea()
+        prev.set_size_request(168, 100)
+        prev.connect("draw", _draw_mode_preview, m, store)
+        v.pack_start(prev, False, False, 0)
+        v.pack_start(Gtk.Label(label=label), False, False, 0)
+        b.add(v)
+        b.connect("clicked", lambda _b, m=m: pick_mode(m))
+        mode_btns[m] = b
+        modes.pack_start(b, False, False, 0)
+    row(s, "앱과 작업 표시줄의 밝기", "창·메뉴·설정 앱 그리고 일반 앱(GTK·Chromium)의 색이 함께 바뀝니다",
+        icon=["preferences-desktop-theme", "applications-graphics"])
+    s.add(_bare_row(modes))
+    _sync_modes()
 
     s = p.section("색")
     accent_btn = color_button(a["accent"], lambda v: store.set("appearance", "accent", v))
@@ -155,14 +234,15 @@ def build_appearance(store):
         pal.pack_start(b, False, False, 0)
     row(s, "프리셋", "자주 쓰는 색", control=pal)
 
-    row(s, "패널 배경색", "작업 표시줄·시작 메뉴·팝업의 바탕",
-        control=color_button(a["surface"],
-                             lambda v: store.set("appearance", "surface", v)))
-    row(s, "제목 표시줄 색", "창 위쪽 막대",
-        control=color_button(a["titlebar_bg"],
-                             lambda v: store.set("appearance", "titlebar_bg", v)))
-    row(s, "글자색",
-        control=color_button(a["fg"], lambda v: store.set("appearance", "fg", v)))
+    color_btns = {
+        "surface": color_button(a["surface"], lambda v: store.set("appearance", "surface", v)),
+        "titlebar_bg": color_button(a["titlebar_bg"], lambda v: store.set("appearance", "titlebar_bg", v)),
+        "fg": color_button(a["fg"], lambda v: store.set("appearance", "fg", v)),
+    }
+    row(s, "패널 배경색", "작업 표시줄·시작 메뉴·팝업의 바탕 (모드를 바꾸면 그 모드의 색으로)",
+        control=color_btns["surface"])
+    row(s, "제목 표시줄 색", "창 위쪽 막대", control=color_btns["titlebar_bg"])
+    row(s, "글자색", control=color_btns["fg"])
 
     s = p.section("창")
     row(s, "제목 표시줄", "창 위에 제목과 버튼을 보여줍니다",

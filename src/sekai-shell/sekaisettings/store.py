@@ -16,6 +16,7 @@ import signal
 import subprocess
 
 from .util import dbg, hex_to_rgba, keyword, run
+from sekaishell import theme
 
 HOME = os.path.expanduser("~")
 CFG_DIR = os.path.join(HOME, ".config", "sekai")
@@ -25,6 +26,7 @@ HYPR_FRAG = os.path.join(HYPR_DIR, "sekai.conf")
 
 DEFAULTS = {
     "appearance": {
+        "mode": "dark",           # dark / light — 아래 네 색을 sekaishell/theme.py 의 묶음으로 바꾼다
         "accent": "#39c5bb",      # 미쿠 틸
         "bg": "#151517",
         "surface": "#1e1e22",     # 작업 표시줄·메뉴·팝업의 면
@@ -182,6 +184,28 @@ class Store:
     def connect(self, cb):
         self._listeners.append(cb)
 
+    def set_mode(self, mode):
+        """다크 / 라이트 — 네 기본색을 그 모드의 묶음으로 바꾸고, 셸·창 제목줄·일반 앱에 알린다"""
+        if mode not in theme.PALETTES:
+            return
+        a = self.data.setdefault("appearance", {})
+        a["mode"] = mode
+        a.update(theme.PALETTES[mode])
+        self.save()                         # 조각 파일 다시 쓰기 + 패널·바탕화면에 SIGHUP
+        theme.apply_system(mode)            # GTK·Chromium 등
+        if os.environ.get("WAYLAND_DISPLAY"):
+            # 제목줄 버튼 색은 설정을 다시 읽어야 바뀐다 (hyprbars 가 다시 읽을 때 버튼을 새로 만든다)
+            run(["hyprctl", "reload"])
+        else:
+            # 기본 화면 모드(X11): xfwm4 창 테두리 테마를 바로 바꾼다
+            run(["xfconf-query", "-c", "xfwm4", "-p", "/general/theme",
+                 "-s", "Sekai-Light" if mode == "light" else "Sekai"])
+        for cb in self._listeners:
+            try:
+                cb("appearance", "mode", mode)
+            except Exception as e:
+                dbg("리스너 예외", e)
+
     def reset_section(self, section):
         self.data[section] = copy.deepcopy(DEFAULTS.get(section, {}))
         self.save()
@@ -245,6 +269,13 @@ class Store:
         lines.append(f"        enabled = {1 if a['titlebar'] else 0}")
         lines.append(f"        bar_color = {hex_to_rgba(a['titlebar_bg'])}")
         lines.append(f"        col.text = {hex_to_rgba(a['fg'])}")
+        # 창 조작 버튼 — 오른쪽부터 역순 배치 → 화면에는 최소화 · 최대화 · 닫기.
+        #   아이콘 sekai:* 는 SekaiOS 가 패치한 hyprbars 가 선으로 그린다 (크기 16 → 아이콘 10px)
+        bb, bf = hex_to_rgba(a["titlebar_bg"]), hex_to_rgba(a["fg"])
+        for icon, cmd in (("sekai:close", "hyprctl dispatch killactive"),
+                          ("sekai:max", "hyprctl dispatch fullscreen 1"),
+                          ("sekai:min", "hyprctl dispatch movetoworkspacesilent special:min")):
+            lines.append(f"        hyprbars-button = {bb}, 16, {icon}, {cmd}, {bf}")
         lines.append("    }")
         lines.append("}")
         lines.append("")

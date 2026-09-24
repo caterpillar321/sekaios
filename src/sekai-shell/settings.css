@@ -277,3 +277,16 @@ box.mok-card {
 }
 label.mok-password { color: @accent; margin: 4px 0; }
 textview.report-text, textview.report-text text { font-size: 13px; background: @card; }
+
+/* 모드 선택 카드 (다크 / 라이트) */
+button.mode-card {
+    background: @card;
+    background-image: none;
+    border: 2px solid transparent;
+    border-radius: 10px;
+    padding: 10px;
+    box-shadow: none;
+    color: @fg;
+}
+button.mode-card:hover { background: @hover; }
+button.mode-card.mode-on { border-color: @accent; }
