@@ -42,6 +42,32 @@ def _modes(mon):
 
 
 CONFIRM_SECS = 15
+VRR = [("0", "끄기"), ("1", "켜기"), ("2", "전체 화면일 때만 (게임·영상)")]
+
+
+def _split(mode):
+    """'2560x1440@164.96Hz' → ('2560x1440', '164.96')"""
+    res, _, hz = (mode or "").partition("@")
+    return res, hz.rstrip("Hz")
+
+
+def _by_res(modes):
+    """해상도 → 주사율 목록 (높은 것부터). 해상도 순서는 modes 순서(큰 것부터) 그대로."""
+    out = {}
+    for m in modes:
+        res, hz = _split(m)
+        if res and hz:
+            out.setdefault(res, [])
+            if hz not in out[res]:
+                out[res].append(hz)
+    for res in out:
+        out[res].sort(key=lambda h: -float(h))
+    return out
+
+
+def _hz_label(hz):
+    v = float(hz)
+    return f"{v:.0f} Hz" if abs(v - round(v)) < 0.02 else f"{v:.2f} Hz"
 
 
 def _scale_id(v):
@@ -63,7 +89,11 @@ def build(store):
         try:
             for n, w in ctl.items():
                 d = store.get("display").get(n, {})
-                w["mode"].set_active_id(d.get("mode") or "preferred")
+                res, hz = _split(d.get("mode"))
+                if not w["res"].set_active_id(res or "preferred"):
+                    w["res"].set_active_id("preferred")
+                w["fill"](w["rate"], w["res"].get_active_id(), hz)
+                w["vrr"].set_active_id(str(int(d.get("vrr", 0))))
                 w["scale"].set_active_id(_scale_id(d.get("scale", 1.0)))
                 w["tr"].set_active_id(str(int(d.get("transform", 0))))
                 w["en"].set_active(d.get("enabled", True))
@@ -134,23 +164,64 @@ def build(store):
 
         cur_mode = "%dx%d@%.2fHz" % (mon.get("width", 0), mon.get("height", 0),
                                      mon.get("refreshRate", 0.0))
-        modes = _modes(mon)
-        # 현재 모드가 목록에 없으면(주사율 표기 차이) 맨 위에 끼워 넣는다
-        items = [("preferred", "권장 (자동)")] + [(m, m) for m in modes]
-        active = saved.get("mode") or "preferred"
+        rates = _by_res(_modes(mon))
+        res_items = [("preferred", "권장 (자동)")] + [(r, r.replace("x", " × ")) for r in rates]
+        s_res, s_hz = _split(saved.get("mode"))
 
-        def on_mode(v, n=name):
-            if quiet["on"]:
-                return
+        def rate_items(res, rates=rates):            # 기본 인자로 묶는다 — 반복문의 늦은 바인딩 방지
+            return [(h, _hz_label(h)) for h in rates.get(res, [])]
+
+        def fill_rates(rc, res, active=None, rates=rates, rate_items=rate_items):
+            """주사율 목록을 해상도에 맞게 다시 채운다 (신호 없이)"""
+            prev, quiet["on"] = quiet["on"], True
+            try:
+                rc.remove_all()
+                for k, label in rate_items(res) or [("auto", "자동")]:
+                    rc.append(k, label)
+                if not (active and rc.set_active_id(active)):
+                    rc.set_active(0)
+                rc.set_sensitive(res != "preferred" and bool(rates.get(res)))
+            finally:
+                quiet["on"] = prev
+
+        def apply_mode(n, res, hz):
+            v = "preferred" if res == "preferred" else f"{res}@{hz}Hz"
             change(n, "mode", v)
             # 적용됐는지 실제 모니터 상태로 확인한다.
             #   드라이버가 모드를 거부하면 Hyprland 는 조용히 권장 모드로 되돌아간다.
             GLib.timeout_add(1500, _verify, n, v)
 
-        mode_combo = combo(items, active, on_mode)
-        mode_row = row(s, "해상도 및 주사율", f"현재: {cur_mode}",
-                       icon=["video-display", "preferences-desktop-display"],
-                       control=mode_combo)
+        def on_res(v, n=name):
+            if quiet["on"] or v is None:
+                return
+            rc = ctl[n]["rate"]
+            # 해상도를 바꾸면 그 해상도의 가장 높은 주사율로 (윈도우와 같게)
+            fill_rates(rc, v)
+            apply_mode(n, v, rc.get_active_id())
+
+        def on_rate(v, n=name):
+            if quiet["on"] or v is None or v == "auto":
+                return
+            apply_mode(n, ctl[n]["res"].get_active_id(), v)
+
+        res_combo = combo(res_items, s_res if s_res in rates else "preferred", on_res)
+        rate_combo = Gtk.ComboBoxText()
+        rate_combo.connect("changed", lambda w: on_rate(w.get_active_id()))
+        fill_rates(rate_combo, res_combo.get_active_id(), s_hz)
+
+        mode_row = row(s, "해상도", f"현재: {cur_mode}",
+                       icon=["video-display", "preferences-desktop-display"], control=res_combo)
+        row(s, "주사율", "1초에 화면을 몇 번 새로 그리는지 — 높을수록 부드럽습니다",
+            control=rate_combo)
+
+        def on_vrr(v, n=name):
+            change(n, "vrr", int(v))
+
+        vrr_combo = combo(VRR, str(int(saved.get("vrr", 0))), on_vrr)
+        row(s, "가변 주사율 (VRR)",
+            "G-Sync·FreeSync — 게임 프레임에 맞춰 주사율을 바꿔 끊김·찢어짐을 줄입니다. "
+            "모니터가 지원해야 하고, 켰을 때 깜빡이면 끄거나 '전체 화면일 때만'으로",
+            control=vrr_combo)
 
         # 드라이버가 거부했을 때의 안내 + 세션 재시작 버튼
         warn = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -213,7 +284,8 @@ def build(store):
         en_switch = switch(saved.get("enabled", True), on_enabled)
         row(s, "이 모니터 사용", "끄면 화면이 꺼집니다 (마지막 남은 모니터는 끌 수 없음)",
             control=en_switch)
-        ctl[name] = {"mode": mode_combo, "scale": scale_combo, "tr": tr_combo, "en": en_switch}
+        ctl[name] = {"res": res_combo, "rate": rate_combo, "fill": fill_rates, "scale": scale_combo,
+                     "tr": tr_combo, "en": en_switch, "vrr": vrr_combo}
 
         row(s, "위치", "다중 모니터 배치 (auto 는 자동 배열)",
             control=info(saved.get("position") or "auto"))

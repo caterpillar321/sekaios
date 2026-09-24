@@ -259,6 +259,8 @@ class Store:
             line = f"monitor = {name}, {mode}, {pos}, {scale}"
             if m.get("transform"):
                 line += f", transform, {int(m['transform'])}"
+            if m.get("vrr"):
+                line += f", vrr, {int(m['vrr'])}"       # 1 = 켜기, 2 = 전체 화면일 때만
             lines.append(line)
         lines.append("")
 
@@ -356,6 +358,8 @@ class Store:
             arg = f"{name}, {mode}, {m.get('position') or 'auto'}, {m.get('scale', 1.0)}"
             if m.get("transform"):
                 arg += f", transform, {int(m['transform'])}"
+            # vrr 는 끌 때도 0 을 명시해야 켜져 있던 것이 꺼진다
+            arg += f", vrr, {int(m.get('vrr', 0))}"
             keyword("monitor", arg)
 
     def apply_wallpaper(self):
