@@ -33,3 +33,8 @@ scripts/build-repo.sh             # 서명된 apt 저장소 (repo/)
 `local/env` 에 `SEKAI_VM`, `SEKAI_VM_PW` 를 적고 `scripts/deploy-vm.sh --restart`.
 개발 빌드에는 `local/overlay-dev/` 의 파일(개발용 SSH 키)이 들어간다.
 **배포용 ISO 는 `SEKAI_RELEASE=1 sudo -E scripts/finalize.sh`** 로 만든다.
+
+## 라이선스
+
+[Apache License 2.0](LICENSE).
+이미지에 들어가는 데비안·Hyprland 등 다른 패키지는 각자의 라이선스를 따른다.
