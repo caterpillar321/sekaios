@@ -142,12 +142,50 @@ class GraphicsPage:
             "NVIDIA 가 운영하는 데비안 13 공식 저장소 (developer.download.nvidia.com). "
             "설치를 누를 때만 추가됩니다.",
             control=info("NVIDIA 공식"))
+        row(s, "진단 정보", "화면 문제를 물어볼 때 이 내용을 찍어 보내 주세요",
+            control=button("보기", self._report))
 
         threading.Thread(target=self._load, daemon=True).start()
 
     @property
     def widget(self):
         return self.p
+
+    # ── 진단 정보 ──
+    def _report(self):
+        try:
+            text = subprocess.run([HELPER, "report"], capture_output=True, text=True,
+                                  timeout=30).stdout
+        except Exception as e:
+            text = f"진단 정보를 만들지 못했습니다: {e}"
+        win = Gtk.Window(title="그래픽 진단 정보")
+        win.get_style_context().add_class("settings-window")
+        top = self.p.get_toplevel()
+        if isinstance(top, Gtk.Window):
+            win.set_transient_for(top)
+        win.set_default_size(900, 620)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        for side in ("top", "bottom", "start", "end"):
+            getattr(box, f"set_margin_{side}")(14)
+        sw = Gtk.ScrolledWindow()
+        tv = Gtk.TextView()
+        tv.set_editable(False)
+        tv.set_monospace(True)
+        tv.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        tv.get_buffer().set_text(text)
+        tv.get_style_context().add_class("report-text")
+        sw.add(tv)
+        box.pack_start(sw, True, True, 0)
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+        def copy():
+            from gi.repository import Gdk
+            Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(text, -1)
+        bar.pack_end(button("닫기", win.destroy), False, False, 0)
+        bar.pack_end(button("복사", copy, cls="accent-btn"), False, False, 0)
+        box.pack_start(bar, False, False, 0)
+        win.add(box)
+        win.show_all()
 
     # ── 상태 표시 ──
     def _load(self):

@@ -6,6 +6,7 @@
 #    sekai-gpu install-nvidia   NVIDIA 공식 저장소의 드라이버(open 커널 모듈)를 설치한다
 #    sekai-gpu remove-nvidia    NVIDIA 드라이버를 지우고 기본 드라이버로 돌아간다
 #    sekai-gpu enroll-mok       보안 부팅 키 등록을 새 비밀번호로 다시 예약한다 (비밀번호를 잊었을 때)
+#    sekai-gpu report           진단 정보 (사람이 읽는 글, 권한 없이도 됨)
 #
 #  드라이버 출처
 #    데비안 13 의 nvidia-driver 는 550 이라 RTX 50(Blackwell) 을 모른다.
@@ -28,7 +29,7 @@
 #    MOKPASS <비밀번호>         다시 시작할 때 파란 화면에 넣을 비밀번호
 #    REBOOT                    다시 시작이 필요함
 #    ERROR <설명>
-#  인자는 위 네 가지만 받는다 — 관리자 권한으로 도는 프로그램이라
+#  인자는 위 다섯 가지만 받는다 — 관리자 권한으로 도는 프로그램이라
 #  바깥에서 명령·옵션을 넘길 수 없게 한다.
 # ═══════════════════════════════════════════════════════════════
 import glob
@@ -84,7 +85,10 @@ def out(*a):
 
 
 def sh(cmd, **kw):
-    return subprocess.run(cmd, env=ENV, capture_output=True, text=True, **kw)
+    try:
+        return subprocess.run(cmd, env=ENV, capture_output=True, text=True, **kw)
+    except FileNotFoundError:                   # 아직 설치되지 않은 명령 (dkms 등)
+        return subprocess.CompletedProcess(cmd, 127, "", f"{cmd[0]}: 없음")
 
 
 # ── 상태 ──────────────────────────────────────────────────
@@ -129,16 +133,27 @@ def nvidia_version():
     return None
 
 
+EFIVARS = "/sys/firmware/efi/efivars"
+SHIM_GUID = "605dab50-e046-4300-abb6-3dd810dd8b23"
+
+
 def mok_state():
-    if not os.path.exists(MOK_PUB):
+    """'enrolled' | 'pending' | 'missing' — 관리자 권한 없이도 알 수 있게 EFI 변수를 직접 본다.
+    mokutil --test-key 는 일반 사용자로는 커널 키링을 못 읽어 늘 '등록 안 됨'이라고 한다.
+      MokListRT : 등록된 키 목록 (누구나 읽기 가능) — 인증서(DER)가 그대로 들어 있다
+      MokNew    : 다음 부팅 때 등록할 예약 (root 만 읽기 가능 — 있는지만 본다)"""
+    try:
+        with open(MOK_PUB, "rb") as f:
+            cert = f.read()
+    except OSError:
         return "missing"
-    r = sh(["mokutil", "--test-key", MOK_PUB])
-    txt = (r.stdout + r.stderr).lower()
-    if "already enrolled" in txt:
-        return "enrolled"
-    # 등록을 예약해 두었는지 (다시 시작 대기 중)
-    r2 = sh(["mokutil", "--list-new"])
-    if r2.returncode == 0 and r2.stdout.strip():
+    try:
+        with open(f"{EFIVARS}/MokListRT-{SHIM_GUID}", "rb") as f:
+            if cert in f.read():
+                return "enrolled"
+    except OSError:
+        pass
+    if os.path.exists(f"{EFIVARS}/MokNew-{SHIM_GUID}"):
         return "pending"
     return "missing"
 
@@ -151,6 +166,73 @@ def status():
     v = nvidia_version()
     out("NVIDIA", v or "-")
     out("MOK", mok_state() if sb else "-")
+    return 0
+
+
+def _read(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def report():
+    """그래픽 문제를 알아보는 데 필요한 것을 한 장에 — 휴대폰으로 찍어 보낼 수 있게 짧게"""
+    lines = []
+    add = lines.append
+    osr = dict(re.findall(r'^(\w+)="?([^"\n]*)"?', _read("/etc/os-release"), re.M))
+    add(f"{osr.get('PRETTY_NAME', '?')} · 커널 {os.uname().release}")
+    add(f"부팅 옵션: {_read('/proc/cmdline')}")
+    add(f"보안 부팅: {'켜짐' if secure_boot() else '꺼짐'} · "
+        f"라이브: {'예' if os.path.isdir('/run/live/medium') else '아니오'}")
+    add("")
+    add("[그래픽 카드]")
+    for slot, ven, drv, name in gpus():
+        dev = f"/sys/bus/pci/devices/{slot}"
+        ids = f"{_read(dev + '/vendor')[2:]}:{_read(dev + '/device')[2:]}"
+        boot = " (부팅 화면)" if _read(dev + "/boot_vga") == "1" else ""
+        add(f"  {slot} {ids} {name} — 드라이버 {drv}{boot}")
+    v = nvidia_version()
+    add(f"  NVIDIA 드라이버: {v or '없음'}"
+        + (f" · 모듈 {_read('/sys/module/nvidia/version')}" if os.path.isdir("/sys/module/nvidia") else ""))
+    add("")
+    add("[화면 장치]")
+    cards = sorted(glob.glob("/sys/class/drm/card[0-9]"))
+    if not cards:
+        add("  DRM 없음")
+    for c in cards:
+        drv = os.path.basename(os.path.realpath(c + "/device/driver")) if os.path.exists(c + "/device/driver") else "-"
+        outs = []
+        for con in sorted(glob.glob(c + "-*")):
+            st = _read(con + "/status")
+            if st == "connected":
+                modes = _read(con + "/modes").splitlines()
+                outs.append(f"{os.path.basename(con).split('-', 1)[1]} {modes[0] if modes else ''}")
+        add(f"  {os.path.basename(c)} ({drv}): " + (", ".join(outs) if outs else "연결된 모니터 없음"))
+    add(f"  프레임버퍼: {_read('/sys/class/graphics/fb0/name') or '없음'} "
+        f"{_read('/sys/class/graphics/fb0/virtual_size').replace(',', 'x')}")
+    add("")
+    add("[지금 화면]")
+    mode = ("기본 화면 모드 (X11)" if os.environ.get("SEKAI_BASIC") or not os.environ.get("WAYLAND_DISPLAY")
+            else "CPU 렌더링" if os.environ.get("SEKAI_SOFTWARE_RENDER") else "하드웨어 가속")
+    add(f"  {mode}" + (f" · 이유 {os.environ['SEKAI_BASIC_REASON']}" if os.environ.get("SEKAI_BASIC_REASON") else ""))
+    for k in ("AQ_DRM_DEVICES", "LIBGL_ALWAYS_SOFTWARE", "SEKAI_NVIDIA"):
+        if os.environ.get(k):
+            add(f"  {k}={os.environ[k]}")
+    r = sh(["eglinfo", "-B", "-p", "gbm"], timeout=10) if cards else None
+    if r is not None:
+        m = re.search(r"OpenGL ES profile renderer: (.+)", r.stdout)
+        add(f"  렌더러(GBM): {m.group(1) if m else '확인 못 함'}")
+    k = sh(["journalctl", "-k", "-b", "-q", "--no-pager", "-p", "warning", "-g",
+            "nvidia|nouveau|amdgpu|i915|xe |drm|efifb|simpledrm"], timeout=10)
+    msgs = [re.sub(r"^\S+ \S+ \S+ \S+ kernel: ", "", l) for l in k.stdout.splitlines()][-6:]
+    if msgs:
+        add("")
+        add("[커널 경고 (마지막 6줄)]")
+        for l in msgs:
+            add("  " + l[:150])
+    print("\n".join(lines))
     return 0
 
 
@@ -168,7 +250,7 @@ def run_status(cmd, lo, hi):
             log.append(line.rstrip())
             # DKMS 빌드는 수 분 걸리고 apt 진행률이 멈춰 보인다 → 알려 준다
             if "Building module" in line or "Building for" in line:
-                out("PROGRESS", hi - 8, "커널 모듈을 만드는 중 (몇 분 걸립니다)")
+                out("PROGRESS", hi - 1, "커널 모듈을 만드는 중 (몇 분 걸립니다)")
     t = threading.Thread(target=drain, daemon=True)
     t.start()
     with os.fdopen(r, "r", errors="replace") as f:
@@ -323,11 +405,11 @@ def remove_nvidia():
 
 def main():
     cmds = {"status": status, "install-nvidia": install_nvidia, "remove-nvidia": remove_nvidia,
-            "enroll-mok": reenroll_mok}
+            "enroll-mok": reenroll_mok, "report": report}
     if len(sys.argv) != 2 or sys.argv[1] not in cmds:
-        out("ERROR", "사용법: sekai-gpu status|install-nvidia|remove-nvidia|enroll-mok")
+        out("ERROR", "사용법: sekai-gpu status|install-nvidia|remove-nvidia|enroll-mok|report")
         return 2
-    if sys.argv[1] != "status" and os.geteuid() != 0:
+    if sys.argv[1] not in ("status", "report") and os.geteuid() != 0:
         out("ERROR", "관리자 권한이 필요합니다")
         return 1
     return cmds[sys.argv[1]]()

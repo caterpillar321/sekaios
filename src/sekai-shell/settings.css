@@ -276,3 +276,4 @@ box.mok-card {
     border-radius: 8px;
 }
 label.mok-password { color: @accent; margin: 4px 0; }
+textview.report-text, textview.report-text text { font-size: 13px; background: @card; }
