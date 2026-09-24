@@ -1092,7 +1092,11 @@ def main():
     if _layer.WAYLAND:
         # 끌어서 스냅 미리보기 (X11 기본 화면 모드에선 xfwm4 가 가장자리 스냅을 직접 한다)
         from sekaishell.snappreview import SnapPreview
+        from sekaishell.snaplayouts import SnapLayouts
+        from sekaishell.snapassist import SnapAssist
         wm.preview = SnapPreview()
+        wm.assist = SnapAssist(wm)            # 스냅한 뒤 남은 칸에 둘 창 고르기
+        wm.layouts = SnapLayouts(wm)          # 최대화 버튼에 마우스를 올리면 뜨는 배치 그림
     panel.event_hooks.append(wm.on_event)
 
     def volume(action):

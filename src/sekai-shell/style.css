@@ -480,3 +480,47 @@ window.snap-preview-win { background: transparent; }
     border: 2px solid alpha(@accent, 0.70);
     border-radius: 12px;
 }
+
+/* ═══ 스냅 레이아웃 (최대화 버튼 위) ═══════════════════════════════ */
+window.snap-layouts-win { background: transparent; }
+.snap-layouts {
+    background: @glass;
+    border: 1px solid @line;
+    border-radius: 10px;
+    padding: 12px;
+}
+.snap-frame {
+    background: alpha(@fg, 0.06);
+    border-radius: 6px;
+    padding: 3px;
+}
+button.snap-zone {
+    background: alpha(@fg, 0.20);
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    border-radius: 4px;
+    min-height: 0;
+    min-width: 0;
+    padding: 0;
+}
+button.snap-zone:hover { background: @accent; }
+
+/* ═══ 스냅 도우미 (남은 칸에 둘 창 고르기) ═════════════════════════ */
+window.snap-assist-win { background: transparent; }
+.snap-assist {
+    background: @glass;
+    border: 1px solid @line;
+    border-radius: 12px;
+    padding: 16px;
+}
+.snap-assist-title { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+button.snap-card {
+    background: @raised;
+    background-image: none;
+    border: 1px solid @line;
+    box-shadow: none;
+    border-radius: 10px;
+    color: @fg;
+}
+button.snap-card:hover { background: @hover; border-color: @accent; }

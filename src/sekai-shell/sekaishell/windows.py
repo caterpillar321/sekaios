@@ -44,6 +44,8 @@ class WindowManager:
         self.known = {}            # 주소 → 마지막으로 본 창 정보 (닫힐 때 크기를 알려고)
         self.drag_start = {}       # 주소 → 끌기 시작 때 ((x, y), (w, h))
         self.preview = None        # 끌어서 스냅 미리보기 (sekai-panel 이 넣어 준다)
+        self.layouts = None        # 스냅 레이아웃 팝업 (sekai-panel 이 넣어 준다)
+        self.assist = None         # 스냅 도우미 (sekai-panel 이 넣어 준다)
         self.sizes = self._load()
         GLib.timeout_add_seconds(3, self._poll)
 
@@ -122,15 +124,21 @@ class WindowManager:
         g = self._gap() // 2
         hw, hh = aw / 2 - g, ah / 2 - g
         rx, by = ax + aw / 2 + g, ay + ah / 2 + g
+        t = (aw - 4 * g) / 3                               # 3등분 한 칸 (칸 사이 틈 두 개)
         return {"max": (ax, ay, aw, ah),
                 "left": (ax, ay, hw, ah), "right": (rx, ay, hw, ah),
                 "tl": (ax, ay, hw, hh), "tr": (rx, ay, hw, hh),
-                "bl": (ax, by, hw, hh), "br": (rx, by, hw, hh)}.get(zone)
+                "bl": (ax, by, hw, hh), "br": (rx, by, hw, hh),
+                # 스냅 레이아웃의 2/3·1/3·3등분
+                "l23": (ax, ay, 2 * t + 2 * g, ah), "r13": (ax + 2 * t + 4 * g, ay, t, ah),
+                "l13": (ax, ay, t, ah), "r23": (ax + t + 2 * g, ay, 2 * t + 2 * g, ah),
+                "c1": (ax, ay, t, ah), "c2": (ax + t + 2 * g, ay, t, ah),
+                "c3": (ax + 2 * t + 4 * g, ay, t, ah)}.get(zone)
 
     def _client(self, addr):
         return next((x for x in (self.hypr.query("clients") or []) if x.get("address") == addr), None)
 
-    def snap_to(self, addr, zone, c=None, mon_name=None):
+    def snap_to(self, addr, zone, c=None, mon_name=None, assist=True, rest=None):
         """창을 영역에 배치한다. 처음 스냅할 때의 크기·위치를 기억해 둔다 (풀 때 되돌리려고)."""
         c = c or self._client(addr)
         if not c:
@@ -157,6 +165,9 @@ class WindowManager:
         bar = self._bar(c)
         self._place(addr, x, y + bar, w, h - bar)
         self.snapped[addr] = zone
+        if assist and self.assist is not None:
+            # 스냅 도우미: 남은 칸에 둘 창을 고르게 (창이 자리 잡은 뒤에)
+            GLib.timeout_add(250, lambda: self.assist.start(addr, zone, rest, mon_name) and False)
         # 앱의 최소 크기가 칸보다 크면 창이 덜 줄어들고, Hyprland 가 칸 가운데에 맞추면서
         # 제목줄이 화면 밖으로 나갈 수 있다 → 실제 크기를 보고 칸 쪽 모서리에 붙여 화면 안으로
         GLib.timeout_add(200, self._fit, addr, zone, rect, bar)
@@ -170,7 +181,7 @@ class WindowManager:
         if cw <= w + 1 and ch <= h - bar + 1:
             return False                                  # 칸에 맞게 들어갔다
         ax, ay, aw, ah = self._work_area(c)
-        nx = x + w - cw if zone in ("right", "tr", "br") else x      # 칸의 바깥쪽 모서리에 붙인다
+        nx = x + w - cw if zone in ("right", "tr", "br", "r13", "r23", "c3") else x  # 칸의 바깥쪽 모서리에
         ny = y + h - ch if zone in ("bl", "br") else y + bar
         nx = min(max(nx, ax), ax + aw - cw)
         ny = min(max(ny, ay + bar), ay + ah - ch)
@@ -205,7 +216,7 @@ class WindowManager:
         elif to == "restore":
             self._restore(addr)
         elif to != cur:
-            self.snap_to(addr, to, c)
+            self.snap_to(addr, to, c, assist=False)     # 키보드로 연달아 누르는 중엔 도우미를 띄우지 않는다
 
     def _restore(self, addr):
         g = self.saved.pop(addr, None)
@@ -282,6 +293,12 @@ class WindowManager:
         elif name == "sekaisnap":
             zone, _, mon = arg.partition(",")
             GLib.idle_add(self._drag_zone, zone, mon.strip())
+        elif name == "sekaimaxhover" and self.layouts is not None:
+            p = arg.strip().split(",")
+            if p[0] == "on" and len(p) == 4:
+                GLib.idle_add(lambda: self.layouts.hover(True, "0x" + p[1], int(p[2]), int(p[3])) and False)
+            elif p[0] == "off":
+                GLib.idle_add(lambda: self.layouts.hover(False, None) and False)
         elif name == "sekaisnapdrop":
             parts = arg.strip().split(",")
             if len(parts) == 3:
