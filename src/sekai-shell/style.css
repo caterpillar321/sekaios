@@ -227,13 +227,16 @@ window.toast-stack {
 .tile:active { background: @pressed; }
 
 /* 전원 메뉴 */
-.power-panel {
-    background: @raised;
+/* 전원 메뉴 — 전원 버튼 옆에 뜨는 작은 메뉴 */
+popover.power-pop {
+    background: @surface;
     border: 1px solid @line;
     border-radius: 10px;
     padding: 6px;
-    margin-top: 12px;
+    box-shadow: 0 8px 24px alpha(black, 0.45);
 }
+popover.power-pop .power-btn { min-width: 170px; }
+.power-sep { background: @line; min-height: 1px; margin: 2px 6px; }
 .power-btn {
     border-radius: 6px;
     padding: 8px 12px;

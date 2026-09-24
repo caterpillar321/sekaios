@@ -374,6 +374,7 @@ class StartMenu(Gtk.Window):
         self.add(root)
 
         root.pack_start(self._build_rail(), False, False, 0)
+        self.power_box = self._build_power()
         root.pack_start(self._build_applist(), False, False, 0)
         root.pack_start(self._build_tiles(), True, True, 0)
 
@@ -413,9 +414,9 @@ class StartMenu(Gtk.Window):
                                  "설정",
                                  lambda: self._run("sekai-settings")), False, False, 0)
 
-        rail.pack_end(rail_btn(["system-shutdown-symbolic", "system-shutdown"],
-                               "전원", self._toggle_power, "rail-power"),
-                      False, False, 0)
+        self.power_btn = rail_btn(["system-shutdown-symbolic", "system-shutdown"],
+                                  "전원", self._toggle_power, "rail-power")
+        rail.pack_end(self.power_btn, False, False, 0)
         return rail
 
     # ── 가운데: 모든 앱 ──────────────────────────────────
@@ -478,37 +479,48 @@ class StartMenu(Gtk.Window):
         self.flow.set_homogeneous(True)
         col.pack_start(self.flow, False, False, 0)
 
-        # 전원 패널 (레일의 전원 버튼으로 토글)
-        self.power_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        self.power_box.get_style_context().add_class("power-panel")
-        self.power_box.set_no_show_all(True)
-        for label, cls, icon, action in (
-            ("잠금",        "pw-lock",   "system-lock-screen-symbolic", lambda: subprocess.Popen(["sekai-lock"])),
-            ("사용자 전환", "pw-switch", "system-switch-user-symbolic",
-             lambda: subprocess.Popen(["sh", "-c", SWITCH_USER_CMD])),
-            ("로그아웃",    "pw-exit",   "system-log-out-symbolic",     lambda: self.hypr.dispatch("exit")),
-            ("다시 시작",   "pw-reboot", "system-reboot-symbolic",      lambda: subprocess.Popen(["systemctl", "reboot"])),
-            ("시스템 종료", "pw-off",    "system-shutdown-symbolic",    lambda: subprocess.Popen(["systemctl", "poweroff"])),
-        ):
-            b = Gtk.Button()
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-            row.pack_start(icon_image(icon, 16), False, False, 0)
-            row.pack_start(Gtk.Label(label=label, xalign=0), True, True, 0)
-            b.add(row)
-            b.get_style_context().add_class("power-btn")
-            b.get_style_context().add_class(cls)
-            b.connect("clicked", lambda _w, a=action: (self.close(), a()))
-            self.power_box.pack_start(b, False, False, 0)
-        col.pack_end(self.power_box, False, False, 0)
         return col
+
+    def _build_power(self):
+        """전원 메뉴 — 전원 버튼 옆에 뜨는 작은 메뉴 (윈도우 11 처럼)"""
+        pop = Gtk.Popover()
+        pop.set_relative_to(self.power_btn)
+        pop.set_position(Gtk.PositionType.RIGHT)
+        pop.get_style_context().add_class("power-pop")
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        groups = (
+            (("잠금",        "pw-lock",    "system-lock-screen-symbolic", lambda: subprocess.Popen(["sekai-lock"])),
+             ("사용자 전환", "pw-switch",  "system-switch-user-symbolic",
+              lambda: subprocess.Popen(["sh", "-c", SWITCH_USER_CMD])),
+             ("로그아웃",    "pw-exit",    "system-log-out-symbolic",     lambda: self.hypr.dispatch("exit"))),
+            (("절전",        "pw-suspend", "weather-clear-night-symbolic", lambda: subprocess.Popen(["systemctl", "suspend"])),
+             ("다시 시작",   "pw-reboot",  "system-reboot-symbolic",      lambda: subprocess.Popen(["systemctl", "reboot"])),
+             ("시스템 종료", "pw-off",     "system-shutdown-symbolic",    lambda: subprocess.Popen(["systemctl", "poweroff"]))),
+        )
+        for gi_, group in enumerate(groups):
+            if gi_:
+                sep = Gtk.Separator()
+                sep.get_style_context().add_class("power-sep")
+                box.pack_start(sep, False, False, 4)
+            for label, cls, icon, action in group:
+                b = Gtk.Button()
+                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+                row.pack_start(icon_image([icon, "system-shutdown-symbolic"], 16), False, False, 0)
+                row.pack_start(Gtk.Label(label=label, xalign=0), True, True, 0)
+                b.add(row)
+                b.get_style_context().add_class("power-btn")
+                b.get_style_context().add_class(cls)
+                b.connect("clicked", lambda _w, a=action: (pop.popdown(), self.close(), a()))
+                box.pack_start(b, False, False, 0)
+        box.show_all()
+        pop.add(box)
+        return pop
 
     def _toggle_power(self):
         if self.power_box.get_visible():
-            self.power_box.hide()
+            self.power_box.popdown()
         else:
-            self.power_box.show()
-            for c in self.power_box.get_children():
-                c.show()
+            self.power_box.popup()
 
     # ── 동작 ─────────────────────────────────────────────
     def _run(self, cmd):
