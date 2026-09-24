@@ -1089,6 +1089,10 @@ def main():
     clip = ClipboardPopup(hypr)
     clip.set_panel_height(int(sekai_conf("panel", "height", PANEL_HEIGHT)))
     wm = WindowManager(hypr)
+    if _layer.WAYLAND:
+        # 끌어서 스냅 미리보기 (X11 기본 화면 모드에선 xfwm4 가 가장자리 스냅을 직접 한다)
+        from sekaishell.snappreview import SnapPreview
+        wm.preview = SnapPreview()
     panel.event_hooks.append(wm.on_event)
 
     def volume(action):

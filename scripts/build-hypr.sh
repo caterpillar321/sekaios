@@ -90,6 +90,7 @@ install -m755 "$SELF/hypr/build-inner.sh"   "$BR/build/build-inner.sh"
 install -m644 "$SELF/hypr/cxx26-compat.hpp" "$BR/build/cxx26-compat.hpp"
 install -m644 "$SELF/hypr/patch-hyprbars-icons.py" "$BR/build/patch-hyprbars-icons.py"
 install -m644 "$SELF/hypr/patch-hyprbars-hover.py" "$BR/build/patch-hyprbars-hover.py"
+install -m644 "$SELF/hypr/patch-hyprbars-snap.py"  "$BR/build/patch-hyprbars-snap.py"
 
 # ── 빌드 ─────────────────────────────────────────────
 say "빌드 시작"; echo

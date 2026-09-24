@@ -10,7 +10,8 @@ REV="sekai2"
 #   hyprbars sekai2: 창 조작 버튼 벡터 아이콘 패치
 #   hyprbars sekai3: 버튼 마우스 올림 배경 (닫기 빨강)
 #   전체 sekai2 / hyprbars sekai4: 패키지에 저작권·라이선스 고지(/usr/share/doc/*/copyright) 추가
-rev_for() { case "$1" in hyprbars) echo sekai4 ;; *) echo "$REV" ;; esac; }
+#   hyprbars sekai5: 끌어서 스냅 — 제목줄 끌기를 셸에 IPC 이벤트로 알림 (patch-hyprbars-snap.py)
+rev_for() { case "$1" in hyprbars) echo sekai5 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
@@ -208,7 +209,7 @@ add_copyright() {
         echo "원본:    https://github.com/hyprwm/$repo  (태그 $tag)"
         case "$pkg" in
             hyprland) echo "수정:    GCC 14 빌드 호환 패치 (scripts/hypr/build-inner.sh 의 patch_hyprland)" ;;
-            hyprbars) echo "수정:    창 조작 버튼 벡터 아이콘·마우스 올림 배경 (scripts/hypr/patch-hyprbars-*.py)" ;;
+            hyprbars) echo "수정:    창 조작 버튼 벡터 아이콘·마우스 올림 배경·끌어서 스냅 알림 (scripts/hypr/patch-hyprbars-*.py)" ;;
             *)        echo "수정:    없음 (원본 그대로 빌드)" ;;
         esac
         echo
@@ -348,6 +349,7 @@ build_plugin() {
     if [ "$pkg" = hyprbars ]; then
         python3 /build/patch-hyprbars-icons.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패"
         python3 /build/patch-hyprbars-hover.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (hover)"
+        python3 /build/patch-hyprbars-snap.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (snap)"
     fi
 
     say "빌드(plugin): $pkg $ver"

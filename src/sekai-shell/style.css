@@ -472,3 +472,11 @@ tooltip {
     color: @fg;
 }
 tooltip label { font-size: 12px; }
+
+/* ═══ 끌어서 스냅 미리보기 (윈도우 11) ═══════════════════════════ */
+window.snap-preview-win { background: transparent; }
+.snap-preview {
+    background: alpha(@accent, 0.16);
+    border: 2px solid alpha(@accent, 0.70);
+    border-radius: 12px;
+}
