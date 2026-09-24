@@ -24,7 +24,8 @@ class SnapPreview(Gtk.Window):
         self.set_app_paintable(False)
         GtkLayerShell.init_for_window(self)
         GtkLayerShell.set_namespace(self, "sekai-snap")
-        GtkLayerShell.set_layer(self, GtkLayerShell.Layer.OVERLAY)
+        # TOP 층 — 창들보다는 위, 위쪽 레이아웃 바(OVERLAY)보다는 아래
+        GtkLayerShell.set_layer(self, GtkLayerShell.Layer.TOP)
         GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.NONE)
         GtkLayerShell.set_exclusive_zone(self, -1)      # 작업 표시줄 자리와 상관없이 좌표 그대로
         GtkLayerShell.set_anchor(self, E.TOP, True)

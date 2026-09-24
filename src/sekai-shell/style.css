@@ -527,3 +527,6 @@ button.snap-card {
     color: @fg;
 }
 button.snap-card:hover { background: @hover; border-color: @accent; }
+/* 위에서 내려오는 레이아웃 바의 칸 (끄는 중이라 셸이 직접 강조한다) */
+.snap-zone-cell { background: alpha(@fg, 0.20); border-radius: 4px; }
+.snap-zone-cell.hot { background: @accent; }

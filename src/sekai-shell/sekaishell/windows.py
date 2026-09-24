@@ -26,6 +26,7 @@ from . import dbg
 
 STATE = os.path.expanduser("~/.local/state/sekai/windows.json")
 MIN_W, MIN_H = 320, 200
+SNAP_GAP = 0               # 스냅한 창은 화면 끝과 서로에게 딱 붙인다 (윈도우 11)
 # 크기를 기억하지 않을 창 — 크기가 스스로 정해지는 것들
 SKIP_CLASSES = {"", "lxpolkit", "polkit-gnome-authentication-agent-1", "pinentry",
                 "org.freedesktop.impl.portal.desktop.gtk", "xdg-desktop-portal-gtk",
@@ -46,6 +47,10 @@ class WindowManager:
         self.preview = None        # 끌어서 스냅 미리보기 (sekai-panel 이 넣어 준다)
         self.layouts = None        # 스냅 레이아웃 팝업 (sekai-panel 이 넣어 준다)
         self.assist = None         # 스냅 도우미 (sekai-panel 이 넣어 준다)
+        self.topbar = None         # 위쪽에서 내려오는 레이아웃 바 (sekai-panel 이 넣어 준다)
+        self._poll_src = 0         # 끄는 동안 커서 위치를 읽는 타이머
+        self._bar_hit = None       # 바에서 가리킨 (영역, 나머지 칸들)
+        self._drag_mons = []
         self.sizes = self._load()
         GLib.timeout_add_seconds(3, self._poll)
 
@@ -89,19 +94,9 @@ class WindowManager:
         if mon.get("transform", 0) in (1, 3, 5, 7):
             w, h = h, w
         l, t, r, b = (mon.get("reserved") or [0, 0, 0, 0])[:4]
-        gap = self._gap()
+        gap = SNAP_GAP
         return (mon["x"] + l + gap, mon["y"] + t + gap,
                 w - l - r - 2 * gap, h - t - b - 2 * gap)
-
-    def _gap(self):
-        try:
-            opt = self.hypr.query("getoption general:gaps_out") or {}
-            v = opt.get("custom") or opt.get("int") or 0
-            if isinstance(v, str):
-                v = int(v.split()[0])
-            return int(v)
-        except Exception:
-            return 8
 
     def _bar(self, c):
         """hyprbars 제목 표시줄 높이. 제목줄은 창 영역 바깥 위에 그려진다."""
@@ -121,7 +116,7 @@ class WindowManager:
     def zone_rect(self, zone, c=None, mon_name=None):
         """영역이 차지할 자리 (x, y, w, h) — 제목줄까지 포함한 바깥 크기"""
         ax, ay, aw, ah = self._work_area(c, mon_name)
-        g = self._gap() // 2
+        g = SNAP_GAP // 2
         hw, hh = aw / 2 - g, ah / 2 - g
         rx, by = ax + aw / 2 + g, ay + ah / 2 + g
         t = (aw - 4 * g) / 3                               # 3등분 한 칸 (칸 사이 틈 두 개)
@@ -244,6 +239,10 @@ class WindowManager:
         c = self._client(addr)
         if not c:
             return False
+        if self.topbar is not None and not self._poll_src:
+            self._drag_mons = self.hypr.query("monitors") or []
+            self._bar_hit = None
+            self._poll_src = GLib.timeout_add(33, self._drag_poll)
         if c.get("fullscreen", 0) == 1:
             self.hypr.dispatch(f"focuswindow address:{addr}")
             self.hypr.dispatch("fullscreen 1")            # 최대화된 창을 끌면 먼저 최대화를 푼다
@@ -251,7 +250,69 @@ class WindowManager:
             self.drag_start[addr] = (c.get("at", [0, 0]), c.get("size", [800, 600]))
         return False
 
+    # 위쪽 가운데로 끌면 내려오는 레이아웃 바 — 커서가 이 띠 안에 있으면 보인다
+    BAND_Y, BAND_X = 150, 0.25      # 위에서 150px, 가운데에서 모니터 너비의 25% 안
+    LEAVE_Y, LEAVE_X = 260, 0.32    # 이만큼 벗어나면 다시 올라간다
+
+    def _drag_poll(self):
+        cur = self.hypr.query("cursorpos") or {}
+        if not isinstance(cur, dict) or "x" not in cur:
+            return True
+        x, y = cur["x"], cur["y"]
+        mon = None
+        for m in self._drag_mons:
+            sc = m.get("scale", 1.0) or 1.0
+            mw, mh = m["width"] / sc, m["height"] / sc
+            if m["x"] <= x < m["x"] + mw and m["y"] <= y < m["y"] + mh:
+                mon = (m, mw, mh)
+        if mon is None:
+            return True
+        m, mw, mh = mon
+        dx, dy = abs(x - (m["x"] + mw / 2)), y - m["y"]
+        bar = self.topbar
+        if not bar.get_visible():
+            if dy < self.BAND_Y and dx < mw * self.BAND_X:
+                from gi.repository import Gdk
+                geo = Gdk.Rectangle()
+                geo.x, geo.y, geo.width, geo.height = int(m["x"]), int(m["y"]), int(mw), int(mh)
+                bar.show_on(geo)
+            return True
+        if dy > self.LEAVE_Y or dx > mw * self.LEAVE_X:
+            bar.hide()
+            bar.set_hot(None)
+            self._bar_hit = None
+            if self.preview is not None:
+                self.preview.hide_now()
+            return True
+        hit = bar.zone_at(x, y)
+        if hit != self._bar_hit:
+            self._bar_hit = hit
+            bar.set_hot(hit[0] if hit else None)
+            rect = self.zone_rect(hit[0], mon_name=m.get("name")) if hit else None
+            if rect is None and dy <= 4:
+                rect = self.zone_rect("max", mon_name=m.get("name"))   # 바 밖 맨 위 = 최대화
+            if self.preview is not None:
+                if rect:
+                    self.preview.show_at(*rect)
+                else:
+                    self.preview.hide_now()
+        return True
+
+    def _stop_poll(self):
+        if self._poll_src:
+            GLib.source_remove(self._poll_src)
+            self._poll_src = 0
+        hit = self._bar_hit if (self.topbar is not None and self.topbar.get_visible()) else None
+        bar_open = self.topbar is not None and self.topbar.get_visible()
+        if self.topbar is not None:
+            self.topbar.hide()
+            self.topbar.set_hot(None)
+        self._bar_hit = None
+        return bar_open, hit
+
     def _drag_zone(self, zone, mon_name):
+        if self.topbar is not None and self.topbar.get_visible():
+            return False                                 # 바가 내려와 있으면 미리보기는 바 쪽이 정한다
         rect = self.zone_rect(zone, mon_name=mon_name) if zone != "none" else None
         if rect and self.preview is not None:
             self.preview.show_at(*rect)
@@ -260,8 +321,17 @@ class WindowManager:
         return False
 
     def _drag_drop(self, zone, mon_name, addr):
+        bar_open, hit = self._stop_poll()
         if self.preview is not None:
             self.preview.hide_now()
+        if bar_open:
+            # 레이아웃 바가 내려와 있었다 — 가리킨 칸으로, 칸 밖 맨 위면 최대화, 그 밖엔 그냥 둔다
+            if hit:
+                self.snap_to(addr, hit[0], mon_name=mon_name, rest=hit[1])
+            elif zone == "max":
+                self.snap_to(addr, "max", mon_name=mon_name)
+            self.drag_start.pop(addr, None)
+            return False
         if zone != "none":
             self.snap_to(addr, zone, mon_name=mon_name)
         elif addr in self.snapped:

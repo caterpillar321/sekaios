@@ -18,8 +18,8 @@ import sys
 
 path = sys.argv[1]
 s = open(path, encoding="utf-8").read()
-MARK, MARK2 = "SEKAI_SNAP", "SEKAI_SNAP_LAYOUT"
-if MARK2 in s:
+MARK, MARK2, MARK3 = "SEKAI_SNAP", "SEKAI_SNAP_LAYOUT", "SEKAI_SNAP_DROP"
+if MARK3 in s:
     print("이미 적용됨"); sys.exit(0)
 
 
@@ -125,12 +125,13 @@ static void sekaiSnapDrop(PHLWINDOW w) {
 if MARK not in s:
     s = patch(s)
 
-# 5. 최대화 버튼 올림/벗어남 (스냅 레이아웃) — SEKAI_SNAP_LAYOUT
-old = '''        if (hover != WAS) { // SEKAI_BUTTON_HOVER
+def patch_layout(s):
+    """5. 최대화 버튼 올림/벗어남 (스냅 레이아웃) — SEKAI_SNAP_LAYOUT"""
+    old = '''        if (hover != WAS) { // SEKAI_BUTTON_HOVER
             if (IDX < 32)
                 m_iSekaiHover ^= (1u << IDX);'''
-assert old in s, "hover 패치 기준점 없음 (patch-hyprbars-hover.py 먼저)"
-s = s.replace(old, old + '''
+    assert old in s, "hover 패치 기준점 없음 (patch-hyprbars-hover.py 먼저)"
+    return s.replace(old, old + '''
             if (b.icon == "sekai:max" && !m_bDraggingThis) { // SEKAI_SNAP_LAYOUT 스냅 레이아웃
                 const auto BOX = assignedBoxGlobal();
                 const auto PW  = m_pWindow.lock();
@@ -140,6 +141,31 @@ s = s.replace(old, old + '''
                 else
                     g_pEventManager->postEvent(SHyprIPCEvent{"sekaimaxhover", std::format("off,{:x}", (uintptr_t)PW.get())});
             }''', 1)
+
+
+def patch_drop(s):
+    """6. 끄는 중에 손을 떼면 커서 밑에 무엇이 있든 끌기를 끝낸다 — SEKAI_SNAP_DROP
+    업스트림은 커서가 TOP/OVERLAY 층(스냅 미리보기·레이아웃 바) 위면 입력을 통째로 무시해서
+    놓음이 처리되지 않았다."""
+    old = '''void CHyprBar::onMouseButton(SCallbackInfo& info, IPointer::SButtonEvent e) {
+    if (!inputIsValid())
+        return;
+'''
+    assert old in s, "onMouseButton 기준점 없음"
+    return s.replace(old, '''void CHyprBar::onMouseButton(SCallbackInfo& info, IPointer::SButtonEvent e) {
+    if (e.state != WL_POINTER_BUTTON_STATE_PRESSED && m_bDraggingThis) { // SEKAI_SNAP_DROP
+        handleUpEvent(info);
+        return;
+    }
+
+    if (!inputIsValid())
+        return;
+''', 1)
+
+
+if MARK2 not in s:
+    s = patch_layout(s)
+s = patch_drop(s)
 
 open(path, "w", encoding="utf-8").write(s)
 print("적용함")

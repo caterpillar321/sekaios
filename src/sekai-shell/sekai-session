@@ -60,6 +60,12 @@ fi
 # 출력은 파일로 — 안 그러면 로그인 직후 Hyprland 시작 로그가 화면에 잠깐 찍힌다
 LOGDIR="${XDG_STATE_HOME:-$HOME/.local/state}/sekai"
 mkdir -p "$LOGDIR"
+# 설정 앱이 만드는 Hyprland 조각(~/.config/hypr/sekai.conf)을 지금의 기본값으로 다시 쓴다.
+#   사용자가 바꾼 값은 settings.json 에 있어 그대로 남고, 바꾸지 않은 값은 업데이트로 바뀐
+#   기본값(예: 최대화 여백 0)을 따르게 된다. 설정 앱을 한 번도 안 열었어도.
+timeout 10 python3 -c 'from sekaisettings.store import Store; Store().write_hypr_fragment()' \
+    >/dev/null 2>&1 || true
+
 # 그래픽 드라이버가 없으면(hw-env.sh 가 SEKAI_BASIC=1) 처음부터 기본 화면 모드(X11)
 [ -n "${SEKAI_BASIC:-}" ] && exec /usr/lib/sekai/x11/start /usr/lib/sekai/x11/session
 # Hyprland 가 시작하자마자(10초 안) 비정상으로 끝나면 — 드라이버 문제 — 기본 화면 모드로 다시

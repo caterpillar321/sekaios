@@ -1108,6 +1108,8 @@ def main():
         from sekaishell.snapassist import SnapAssist
         wm.preview = SnapPreview()
         wm.assist = SnapAssist(wm)            # 스냅한 뒤 남은 칸에 둘 창 고르기
+        from sekaishell.snaplayouts import TopLayoutBar
+        wm.topbar = TopLayoutBar()            # 위쪽 가운데로 끌면 내려오는 레이아웃 바
         wm.layouts = SnapLayouts(wm)          # 최대화 버튼에 마우스를 올리면 뜨는 배치 그림
     panel.event_hooks.append(wm.on_event)
 

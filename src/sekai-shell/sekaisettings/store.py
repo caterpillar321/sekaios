@@ -33,7 +33,7 @@ DEFAULTS = {
         "rounding": 10,
         "border_size": 1,
         "gaps_in": 6,
-        "gaps_out": 12,
+        "gaps_out": 0,          # 최대화한 창이 화면에 꽉 차게 (윈도우처럼)
         "inactive_opacity": 1.0,
         "blur": True,
         "shadow": True,

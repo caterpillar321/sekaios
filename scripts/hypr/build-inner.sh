@@ -12,7 +12,8 @@ REV="sekai2"
 #   전체 sekai2 / hyprbars sekai4: 패키지에 저작권·라이선스 고지(/usr/share/doc/*/copyright) 추가
 #   hyprbars sekai5: 끌어서 스냅 — 제목줄 끌기를 셸에 IPC 이벤트로 알림 (patch-hyprbars-snap.py)
 #   hyprbars sekai6: 스냅 레이아웃 — 최대화 버튼에 마우스 올림/벗어남 알림
-rev_for() { case "$1" in hyprbars) echo sekai6 ;; *) echo "$REV" ;; esac; }
+#   hyprbars sekai7: 끄는 중 손을 떼면 커서 밑이 레이어여도 끌기를 끝냄 (위쪽 레이아웃 바)
+rev_for() { case "$1" in hyprbars) echo sekai7 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
