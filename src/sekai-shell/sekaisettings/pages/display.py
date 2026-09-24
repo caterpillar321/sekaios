@@ -61,7 +61,42 @@ def _by_res(modes):
             if hz not in out[res]:
                 out[res].append(hz)
     for res in out:
-        out[res].sort(key=lambda h: -float(h))
+        out[res] = _dedup_rates(sorted(out[res], key=lambda h: -float(h)))
+    return out
+
+
+VENDORS = {"ASUSTek COMPUTER INC": "ASUS", "Samsung Electric Company": "Samsung",
+           "LG Electronics": "LG", "Dell Inc.": "Dell", "Hewlett Packard": "HP", "HP Inc.": "HP",
+           "Lenovo Group Limited": "Lenovo", "Acer Technologies": "Acer", "BenQ Corporation": "BenQ",
+           "Microstep": "MSI", "Gigabyte Technology Co. Ltd.": "Gigabyte", "AOC": "AOC",
+           "Philips Consumer Electronics Company": "Philips", "VIEWSONIC CORPORATION": "ViewSonic"}
+
+
+def _monitor_title(mon):
+    """'ASUS VG249QE5A' — 제조사 긴 이름 줄이고 시리얼 번호는 뺀다"""
+    make = (mon.get("make") or "").strip()
+    model = (mon.get("model") or "").strip()
+    if not (make or model):
+        return mon.get("name", "?")
+    make = VENDORS.get(make, make)
+    return f"{make} {model}".strip()
+
+
+def _nice_mode(w, h, hz):
+    return f"{w} × {h}, {_hz_label(str(hz))}"
+
+
+def _dedup_rates(hzs):
+    """59.94 와 60, 119.88 과 120 처럼 사실상 같은 주사율(NTSC 표기 차이)은 정수 쪽만 보인다"""
+    ints = {round(float(h)) for h in hzs if abs(float(h) - round(float(h))) < 0.02}
+    out = []
+    for h in hzs:
+        v = float(h)
+        if abs(v - round(v)) >= 0.02 and round(v * 1.001) in ints:
+            continue
+        if any(abs(v - float(o)) < 0.05 for o in out):     # 59.94 와 59.93 같은 것
+            continue
+        out.append(h)
     return out
 
 
@@ -157,15 +192,19 @@ def build(store):
 
     for mon in mons:
         name = mon.get("name", "?")
-        desc = mon.get("description") or mon.get("model") or ""
         saved = store.get("display").get(name, {})
 
-        s = p.section(f"{name}  ·  {desc}" if desc else name)
+        s = p.section(f"{_monitor_title(mon)}  ·  {name}")
 
-        cur_mode = "%dx%d@%.2fHz" % (mon.get("width", 0), mon.get("height", 0),
-                                     mon.get("refreshRate", 0.0))
+        cur_mode = _nice_mode(mon.get("width", 0), mon.get("height", 0), mon.get("refreshRate", 0.0))
         rates = _by_res(_modes(mon))
-        res_items = [("preferred", "권장 (자동)")] + [(r, r.replace("x", " × ")) for r in rates]
+        # "자동"이 실제로 무엇이 되는지 보여 준다 — 모니터가 알려 준 기본 모드(보통 목록 첫째, 대개 60 Hz)
+        first = (mon.get("availableModes") or [""])[0]
+        f_res, f_hz = _split(first)
+        auto_label = (f"자동 ({f_res.replace('x', ' × ')}, {_hz_label(f_hz)})" if f_res and f_hz
+                      else "자동 (모니터 권장)")
+        res_items = [("preferred", auto_label)] + [
+            (r, r.replace("x", " × ") + ("  (권장)" if r == f_res else "")) for r in rates]
         s_res, s_hz = _split(saved.get("mode"))
 
         def rate_items(res, rates=rates):            # 기본 인자로 묶는다 — 반복문의 늦은 바인딩 방지
@@ -176,7 +215,10 @@ def build(store):
             prev, quiet["on"] = quiet["on"], True
             try:
                 rc.remove_all()
-                for k, label in rate_items(res) or [("auto", "자동")]:
+                items = rate_items(res) or [("auto", "자동")]
+                if active and active not in [k for k, _ in items] and rates.get(res):
+                    items.append((active, _hz_label(active)))   # 저장된 값이 목록에서 빠졌으면(59.94 등) 그대로 보인다
+                for k, label in items:
                     rc.append(k, label)
                 if not (active and rc.set_active_id(active)):
                     rc.set_active(0)
@@ -209,19 +251,40 @@ def build(store):
         rate_combo.connect("changed", lambda w: on_rate(w.get_active_id()))
         fill_rates(rate_combo, res_combo.get_active_id(), s_hz)
 
-        mode_row = row(s, "해상도", f"현재: {cur_mode}",
+        mode_row = row(s, "해상도", f"지금: {cur_mode}",
                        icon=["video-display", "preferences-desktop-display"], control=res_combo)
         row(s, "주사율", "1초에 화면을 몇 번 새로 그리는지 — 높을수록 부드럽습니다",
             control=rate_combo)
 
+        vrr_note = Gtk.Label(xalign=0)
+        vrr_note.get_style_context().add_class("notice")
+        vrr_note.set_line_wrap(True)
+        vrr_note.set_no_show_all(True)
+
+        def check_vrr(n, want, note=vrr_note):
+            """켜기로 했는데 실제로 안 켜졌으면 알려 준다 (모니터·연결 단자·드라이버가 지원해야 켜진다)"""
+            m = next((x for x in (hyprctl("monitors", js=True) or []) if x.get("name") == n), None)
+            if want == 1 and m is not None and not m.get("vrr"):
+                note.set_text("가변 주사율이 켜지지 않았습니다. 모니터가 지원하는지 확인해 주세요. "
+                              "NVIDIA 카드는 HDMI 2.1 또는 DisplayPort 연결에서만 됩니다.")
+                note.show()
+            else:
+                note.hide()
+            return False
+
         def on_vrr(v, n=name):
+            if quiet["on"]:
+                return
             change(n, "vrr", int(v))
+            GLib.timeout_add(1500, check_vrr, n, int(v))
 
         vrr_combo = combo(VRR, str(int(saved.get("vrr", 0))), on_vrr)
         row(s, "가변 주사율 (VRR)",
-            "G-Sync·FreeSync — 게임 프레임에 맞춰 주사율을 바꿔 끊김·찢어짐을 줄입니다. "
-            "모니터가 지원해야 하고, 켰을 때 깜빡이면 끄거나 '전체 화면일 때만'으로",
+            "G-Sync·FreeSync — 게임의 프레임에 맞춰 주사율을 바꿔 끊김·찢어짐을 줄입니다",
             control=vrr_combo)
+        p.add_widget(vrr_note)
+        if int(saved.get("vrr", 0)) == 1:
+            GLib.timeout_add(500, check_vrr, name, 1)
 
         # 드라이버가 거부했을 때의 안내 + 세션 재시작 버튼
         warn = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -243,14 +306,19 @@ def build(store):
             if m is None:
                 return False
             now = "%dx%d" % (m.get("width", 0), m.get("height", 0))
-            mode_row.sub_label.set_text("현재: %s@%.2fHz" % (now, m.get("refreshRate", 0)))
-            if wanted != "preferred" and not wanted.startswith(now + "@"):
+            mode_row.sub_label.set_text("지금: " + _nice_mode(m.get("width", 0), m.get("height", 0),
+                                                              m.get("refreshRate", 0)))
+            w_res, w_hz = _split(wanted)
+            rate_ok = not w_hz or abs(float(w_hz) - float(m.get("refreshRate", 0))) < 0.6
+            if wanted != "preferred" and (w_res != now or not rate_ok):
                 # VMware(vmwgfx)는 실행 중에 해상도를 키우는 걸 커널이 거부한다
                 #   (drmModeSetCrtc: No space left on device). 세션 시작 때는 된다.
                 warn.label.set_text(
-                    f"{wanted.split('@')[0]} 은(는) 저장했지만 지금 바로 적용하지 못했습니다 "
-                    f"(그래픽 드라이버가 거부해 {now} 로 유지).\n"
-                    "세션을 다시 시작하면 적용됩니다.")
+                    f"{w_res.replace('x', ' × ')}, {_hz_label(w_hz)} 은(는) 저장했지만 지금 바로 적용하지 "
+                    f"못했습니다 (그래픽 드라이버가 거부해 "
+                    f"{_nice_mode(m.get('width', 0), m.get('height', 0), m.get('refreshRate', 0))} 로 유지).\n"
+                    "세션을 다시 시작하면 적용됩니다. 그래도 안 되면 케이블·연결 단자가 그 주사율을 "
+                    "지원하는지 확인해 주세요.")
                 warn.show_all()
             else:
                 warn.hide()

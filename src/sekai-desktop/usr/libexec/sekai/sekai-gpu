@@ -75,6 +75,7 @@ options nvidia NVreg_PreserveVideoMemoryAllocations=1
 """
 # 드라이버 본체. nvidia-open(메타)은 CUDA 도구까지 끌고 와서 쓰지 않는다.
 NVIDIA_PKGS = ["nvidia-kernel-open-dkms", "nvidia-driver", "firmware-nvidia-gsp",
+               "nvidia-driver-cuda",   # nvidia-smi · CUDA · NVENC(영상 인코딩) — 윈도우 드라이버에 있는 것들
                "nvidia-settings"]
 MOK_KEY = "/var/lib/dkms/mok.key"
 MOK_PUB = "/var/lib/dkms/mok.pub"
