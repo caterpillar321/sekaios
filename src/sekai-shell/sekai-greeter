@@ -1,0 +1,422 @@
+#!/usr/bin/env python3
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 로그인 화면
+#
+#  greetd 가 로그인 화면용 Hyprland 안에서 이걸 띄운다
+#  (/usr/bin/sekai-greeter-session). 로그인에 성공하면 greetd 에
+#  세션 명령(sekai-session)을 넘기고 끝난다 → Hyprland 가 닫히고
+#  greetd 가 사용자 세션을 연다.
+#
+#  개발용: SEKAI_GREETER_DEMO=1 이면 greetd 없이 화면만 띄운다.
+# ═══════════════════════════════════════════════════════════════
+import os
+import pwd
+import subprocess
+import sys
+import threading
+import time
+
+import gi
+gi.require_version("Gtk", "3.0")
+gi.require_version("GtkLayerShell", "0.1")
+from gi.repository import Gtk, Gdk, GdkPixbuf, GLib, GtkLayerShell  # noqa: E402
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+if os.path.isdir(os.path.join(HERE, "sekaishell")):
+    sys.path.insert(0, HERE)
+
+from sekaishell import logo as sekai_logo          # noqa: E402
+from sekaishell.greetd import Greetd, GreetdError   # noqa: E402
+
+DEMO = os.environ.get("SEKAI_GREETER_DEMO") == "1"
+WALLPAPER = "/usr/share/backgrounds/sekai/hatsune.jpg"
+SESSION_CMD = ["/usr/bin/sekai-session"]
+SESSION_ENV = ["XDG_SESSION_TYPE=wayland", "XDG_CURRENT_DESKTOP=Hyprland",
+               "XDG_SESSION_DESKTOP=Hyprland"]
+STATE = os.path.expanduser("~/.cache/sekai-greeter")
+WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"]
+
+CSS = b"""
+@define-color accent #39c5bb;
+@define-color fg #f1f1f3;
+@define-color text2 #c8c8d0;
+@define-color glass rgba(30, 30, 34, 0.55);
+
+* { font-family: "Pretendard", sans-serif; text-shadow: none; -gtk-icon-shadow: none; }
+window { background: #151517; }
+
+.clock { font-size: 88px; font-weight: 300; color: @fg; font-feature-settings: "tnum"; }
+.date  { font-size: 22px; font-weight: 500; color: @text2; }
+
+.avatar { font-size: 44px; font-weight: 700; color: #0f1f1e; }
+.username { font-size: 26px; font-weight: 600; color: @fg; }
+
+entry.pw {
+    background: @glass;
+    border: 1px solid alpha(@fg, 0.18);
+    border-bottom: 2px solid alpha(@fg, 0.45);
+    border-radius: 8px;
+    color: @fg;
+    caret-color: @accent;
+    padding: 10px 14px;
+    font-size: 15px;
+    min-width: 280px;
+    box-shadow: none;
+}
+entry.pw:focus { border-bottom-color: @accent; }
+entry.pw:disabled { opacity: 0.6; }
+
+button.go {
+    background: @glass;
+    border: 1px solid alpha(@fg, 0.18);
+    border-radius: 8px;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+    box-shadow: none;
+    color: @fg;
+}
+button.go:hover { background: alpha(@accent, 0.35); }
+button.go image { color: @fg; }
+
+.msg      { font-size: 14px; color: #ffd0d8; }
+.msg.info { color: @text2; }
+
+button.corner {
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+    box-shadow: none;
+}
+button.corner:hover { background: alpha(@fg, 0.14); }
+button.corner image { color: @fg; }
+
+.userlist button {
+    background: transparent; border: none; border-radius: 8px; box-shadow: none;
+    padding: 8px 12px; color: @fg;
+}
+.userlist button:hover   { background: alpha(@fg, 0.12); }
+.userlist button.current { background: alpha(@fg, 0.18); }
+.userlist label { font-size: 14px; color: @fg; }
+.mini-avatar { font-size: 14px; font-weight: 700; color: #0f1f1e; }
+
+tooltip { background: #1e1e22; color: @fg; border-radius: 6px; }
+"""
+
+
+def login_users():
+    """로그인할 수 있는 사람 계정 (uid 1000~, 셸이 있는 것)."""
+    out = []
+    for p in pwd.getpwall():
+        if 1000 <= p.pw_uid < 60000 and not p.pw_shell.endswith(("nologin", "false")):
+            real = (p.pw_gecos or "").split(",")[0].strip()
+            out.append((p.pw_name, real or p.pw_name))
+    return sorted(out)
+
+
+def last_user():
+    try:
+        with open(os.path.join(STATE, "last-user")) as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def remember_user(name):
+    try:
+        os.makedirs(STATE, exist_ok=True)
+        with open(os.path.join(STATE, "last-user"), "w") as f:
+            f.write(name)
+    except OSError:
+        pass
+
+
+def draw_avatar(widget, cr, text, size):
+    """강조색 원 + 이름 첫 글자"""
+    a = widget.get_allocation()
+    cx, cy, r = a.width / 2, a.height / 2, size / 2
+    g = __import__("cairo").LinearGradient(0, 0, a.width, a.height)
+    g.add_color_stop_rgb(0, 0.37, 0.84, 0.81)
+    g.add_color_stop_rgb(1, 0.20, 0.62, 0.72)
+    cr.arc(cx, cy, r, 0, 6.2832)
+    cr.set_source(g)
+    cr.fill()
+    return False
+
+
+class Greeter(Gtk.Window):
+    def __init__(self):
+        super().__init__()
+        self.users = login_users() or [(os.environ.get("USER", "user"), "")]
+        names = [u for u, _ in self.users]
+        lu = last_user()
+        self.user = lu if lu in names else names[0]
+        self.busy = False
+
+        GtkLayerShell.init_for_window(self)
+        GtkLayerShell.set_namespace(self, "sekai-greeter")
+        GtkLayerShell.set_layer(self, GtkLayerShell.Layer.OVERLAY)
+        for e in (GtkLayerShell.Edge.TOP, GtkLayerShell.Edge.BOTTOM,
+                  GtkLayerShell.Edge.LEFT, GtkLayerShell.Edge.RIGHT):
+            GtkLayerShell.set_anchor(self, e, True)
+        GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.EXCLUSIVE)
+        GtkLayerShell.set_exclusive_zone(self, -1)
+
+        self.bg = None
+        try:
+            self.bg = GdkPixbuf.Pixbuf.new_from_file(WALLPAPER)
+        except Exception:
+            pass
+
+        ov = Gtk.Overlay()
+        self.add(ov)
+        back = Gtk.DrawingArea()
+        back.connect("draw", self._draw_bg)
+        ov.add(back)
+
+        # ── 왼쪽 위: 로고 ──
+        mark = Gtk.DrawingArea()
+        mark.set_size_request(28, 28)
+        mark.connect("draw", lambda w, cr: (sekai_logo.draw(cr, 28), False)[1])
+        mark.set_halign(Gtk.Align.START)
+        mark.set_valign(Gtk.Align.START)
+        mark.set_margin_start(36)
+        mark.set_margin_top(32)
+        ov.add_overlay(mark)
+
+        # ── 가운데: 계정 ──
+        center = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        center.set_halign(Gtk.Align.CENTER)
+        center.set_valign(Gtk.Align.CENTER)
+        center.set_margin_bottom(40)
+
+        self.avatar = Gtk.Overlay()
+        disc = Gtk.DrawingArea()
+        disc.set_size_request(112, 112)
+        disc.connect("draw", lambda w, cr: draw_avatar(w, cr, "", 112))
+        self.avatar.add(disc)
+        self.initial = Gtk.Label()
+        self.initial.get_style_context().add_class("avatar")
+        self.avatar.add_overlay(self.initial)
+        self.avatar.set_halign(Gtk.Align.CENTER)
+        center.pack_start(self.avatar, False, False, 0)
+
+        self.name = Gtk.Label()
+        self.name.get_style_context().add_class("username")
+        center.pack_start(self.name, False, False, 6)
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row.set_halign(Gtk.Align.CENTER)
+        self.pw = Gtk.Entry()
+        self.pw.get_style_context().add_class("pw")
+        self.pw.set_visibility(False)
+        self.pw.set_placeholder_text("비밀번호")
+        self.pw.set_input_purpose(Gtk.InputPurpose.PASSWORD)
+        self.pw.connect("activate", lambda *_: self.submit())
+        self.pw.connect("changed", lambda *_: self._set_msg(""))
+        row.pack_start(self.pw, False, False, 0)
+        self.go = Gtk.Button()
+        self.go.get_style_context().add_class("go")
+        img = Gtk.Image.new_from_icon_name("go-next-symbolic", Gtk.IconSize.BUTTON)
+        img.set_pixel_size(18)
+        self.go.add(img)
+        self.go.set_tooltip_text("로그인")
+        self.go.connect("clicked", lambda *_: self.submit())
+        row.pack_start(self.go, False, False, 0)
+        center.pack_start(row, False, False, 0)
+
+        self.msg = Gtk.Label()
+        self.msg.get_style_context().add_class("msg")
+        self.msg.set_size_request(-1, 22)
+        center.pack_start(self.msg, False, False, 0)
+        ov.add_overlay(center)
+
+        # ── 왼쪽 아래: 시계 ──
+        clk = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        clk.set_halign(Gtk.Align.START)
+        clk.set_valign(Gtk.Align.END)
+        clk.set_margin_start(56)
+        clk.set_margin_bottom(52)
+        self.clock = Gtk.Label(xalign=0)
+        self.clock.get_style_context().add_class("clock")
+        self.date = Gtk.Label(xalign=0)
+        self.date.get_style_context().add_class("date")
+        clk.pack_start(self.clock, False, False, 0)
+        clk.pack_start(self.date, False, False, 0)
+        ov.add_overlay(clk)
+
+        # ── 왼쪽 가운데 아래: 계정이 여럿이면 목록 (윈도우처럼) ──
+        if len(self.users) > 1:
+            ul = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            ul.get_style_context().add_class("userlist")
+            ul.set_halign(Gtk.Align.START)
+            ul.set_valign(Gtk.Align.END)
+            ul.set_margin_start(40)
+            ul.set_margin_bottom(220)
+            self.user_buttons = {}
+            for uname, real in self.users:
+                b = Gtk.Button()
+                h = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+                o = Gtk.Overlay()
+                d = Gtk.DrawingArea()
+                d.set_size_request(30, 30)
+                d.connect("draw", lambda w, cr: draw_avatar(w, cr, "", 30))
+                o.add(d)
+                il = Gtk.Label(label=(real or uname)[:1].upper())
+                il.get_style_context().add_class("mini-avatar")
+                o.add_overlay(il)
+                h.pack_start(o, False, False, 0)
+                h.pack_start(Gtk.Label(label=real or uname, xalign=0), False, False, 0)
+                b.add(h)
+                b.connect("clicked", lambda _b, u=uname: self.pick(u))
+                ul.pack_start(b, False, False, 0)
+                self.user_buttons[uname] = b
+            ov.add_overlay(ul)
+
+        # ── 오른쪽 아래: 전원 ──
+        corner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        corner.set_halign(Gtk.Align.END)
+        corner.set_valign(Gtk.Align.END)
+        corner.set_margin_end(36)
+        corner.set_margin_bottom(36)
+        for icon, tip, cmd in (("system-reboot-symbolic", "다시 시작", ["systemctl", "reboot"]),
+                               ("system-shutdown-symbolic", "시스템 종료", ["systemctl", "poweroff"])):
+            b = Gtk.Button()
+            b.get_style_context().add_class("corner")
+            im = Gtk.Image.new_from_icon_name(icon, Gtk.IconSize.BUTTON)
+            im.set_pixel_size(20)
+            b.add(im)
+            b.set_tooltip_text(tip)
+            b.connect("clicked", lambda _b, c=cmd: subprocess.Popen(c))
+            corner.pack_start(b, False, False, 0)
+        ov.add_overlay(corner)
+
+        self.connect("key-press-event", self._key)
+        self.pick(self.user)
+        self._tick()
+        GLib.timeout_add_seconds(1, self._tick)
+
+    # ── 그리기 ──
+    def _draw_bg(self, w, cr):
+        a = w.get_allocation()
+        if self.bg is not None:
+            bw, bh = self.bg.get_width(), self.bg.get_height()
+            s = max(a.width / bw, a.height / bh)          # 화면을 꽉 채우게 (잘림 허용)
+            cr.save()
+            cr.translate((a.width - bw * s) / 2, (a.height - bh * s) / 2)
+            cr.scale(s, s)
+            Gdk.cairo_set_source_pixbuf(cr, self.bg, 0, 0)
+            cr.paint()
+            cr.restore()
+        else:
+            cr.set_source_rgb(0.08, 0.08, 0.09)
+            cr.paint()
+        # 글자가 잘 읽히게 전체를 살짝 어둡게 + 아래쪽을 더 어둡게
+        import cairo
+        cr.set_source_rgba(0, 0, 0, 0.25)
+        cr.paint()
+        g = cairo.LinearGradient(0, a.height * 0.45, 0, a.height)
+        g.add_color_stop_rgba(0, 0, 0, 0, 0)
+        g.add_color_stop_rgba(1, 0, 0, 0, 0.45)
+        cr.set_source(g)
+        cr.paint()
+        return False
+
+    def _tick(self):
+        t = time.localtime()
+        self.clock.set_text(time.strftime("%H:%M", t))
+        self.date.set_text(f"{t.tm_mon}월 {t.tm_mday}일 {WEEKDAYS[t.tm_wday]}요일")
+        return True
+
+    # ── 동작 ──
+    def pick(self, uname):
+        self.user = uname
+        real = dict(self.users).get(uname) or uname
+        self.name.set_text(real)
+        self.initial.set_text(real[:1].upper())
+        for u, b in getattr(self, "user_buttons", {}).items():
+            ctx = b.get_style_context()
+            (ctx.add_class if u == uname else ctx.remove_class)("current")
+        self.pw.set_text("")
+        self._set_msg("")
+        self.pw.grab_focus()
+
+    def _key(self, _w, ev):
+        if ev.keyval == Gdk.KEY_Escape:
+            self.pw.set_text("")
+            return True
+        # Caps Lock 경고 — 비밀번호가 안 맞는 가장 흔한 이유
+        if not self.busy:
+            caps = Gdk.Keymap.get_for_display(Gdk.Display.get_default()).get_caps_lock_state()
+            if caps and not self.msg.get_text():
+                self._set_msg("Caps Lock 이 켜져 있습니다.", info=True)
+            elif not caps and self.msg.get_text().startswith("Caps"):
+                self._set_msg("")
+        return False
+
+    def _set_msg(self, text, info=False):
+        self.msg.set_text(text)
+        ctx = self.msg.get_style_context()
+        (ctx.add_class if info else ctx.remove_class)("info")
+
+    def submit(self):
+        if self.busy:
+            return
+        password = self.pw.get_text()
+        if not password:
+            self._set_msg("비밀번호를 입력하세요.", info=True)
+            return
+        self.busy = True
+        self.pw.set_sensitive(False)
+        self.go.set_sensitive(False)
+        self._set_msg("로그인하는 중…", info=True)
+        threading.Thread(target=self._login, args=(self.user, password), daemon=True).start()
+
+    def _login(self, user, password):
+        # PAM 은 틀리면 몇 초 기다리게 한다 → 화면이 멈추지 않게 따로 돈다
+        if DEMO:
+            time.sleep(1.0)
+            err = None if password == "demo" else "비밀번호가 올바르지 않습니다."
+        else:
+            try:
+                err = Greetd().login(user, password, SESSION_CMD, SESSION_ENV)
+            except (GreetdError, OSError) as e:
+                err = f"로그인 관리자와 통신하지 못했습니다 ({e})"
+        GLib.idle_add(self._done, user, err)
+
+    def _done(self, user, err):
+        self.busy = False
+        if err is None:
+            remember_user(user)
+            self._set_msg("환영합니다", info=True)
+            GLib.timeout_add(250, Gtk.main_quit)     # 그리터가 끝나야 greetd 가 세션을 연다
+            return False
+        self.pw.set_sensitive(True)
+        self.go.set_sensitive(True)
+        self.pw.set_text("")
+        self._set_msg(err)
+        self.pw.grab_focus()
+        return False
+
+
+def main():
+    prov = Gtk.CssProvider()
+    prov.load_from_data(CSS)
+    Gtk.StyleContext.add_provider_for_screen(
+        Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_USER)
+    st = Gtk.Settings.get_default()
+    if st:
+        st.set_property("gtk-application-prefer-dark-theme", True)
+        if os.path.isdir("/usr/share/icons/Papirus-Dark"):
+            st.set_property("gtk-icon-theme-name", "Papirus-Dark")
+    w = Greeter()
+    w.connect("destroy", Gtk.main_quit)
+    w.show_all()
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    main()

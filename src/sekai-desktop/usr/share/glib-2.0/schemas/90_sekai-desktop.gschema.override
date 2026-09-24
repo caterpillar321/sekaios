@@ -1,0 +1,31 @@
+# SekaiOS 기본 모양 — 셸이 어두우니 앱도 어둡게.
+#   GTK3/4(Wayland), libadwaita, 크로미움(포털 경유)이 전부 여기를 본다.
+#   사용자가 바꾼 값(dconf)이 있으면 그쪽이 이긴다.
+[org.gnome.desktop.interface]
+color-scheme='prefer-dark'
+gtk-theme='Adwaita-dark'
+icon-theme='Papirus-Dark'
+cursor-size=24
+font-name='Pretendard 10'
+monospace-font-name='JetBrains Mono 10'
+
+# 창 버튼은 윈도우처럼 오른쪽에 최소화·최대화·닫기
+#   (기본값은 GNOME 식 'appmenu:close' 라 크로미움·헤더바 앱에 닫기만 보인다)
+[org.gnome.desktop.wm.preferences]
+button-layout=':minimize,maximize,close'
+
+# 한글 입력기 (ibus)
+#   엔진은 한글 하나. 영문/한글 전환은 엔진 안에서 한/영 키(오른쪽 Alt)로 한다.
+[org.freedesktop.ibus.general]
+preload-engines=['hangul']
+engines-order=['hangul']
+
+# use-event-forwarding: 기본값 true 면 조합을 끝내는 키(스페이스·마침표 등)를
+#   '다시 보내기'로 처리하는데, ibus 의 Wayland 입력기 경로가 이걸 구현하지 않아
+#   "한글 입력" 이 "한글입력" 이 된다 (공백·문장부호가 사라짐). 끄면 정상.
+[org.freedesktop.ibus.engine.hangul]
+use-event-forwarding=false
+initial-input-mode='latin'
+# 한/영 전환: 한/영 키만. 오른쪽 Alt 는 xkb 옵션(korean:ralt_hangul)으로 한/영 키가 된다.
+#   Shift+Space 는 뺐다 — 영문 대문자 뒤 스페이스에서 한글로 넘어가 버린다.
+switch-keys='Hangul'

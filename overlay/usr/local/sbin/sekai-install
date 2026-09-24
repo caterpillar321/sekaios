@@ -1,0 +1,416 @@
+#!/bin/bash
+#
+# SekaiOS Installer
+#   라이브 세션에서 실행 → squashfs 를 디스크에 전개하고 rEFInd 로 부팅 가능하게 만듦
+#   UI 는 영어 — 리눅스 텍스트 콘솔은 한글 글리프를 렌더링할 수 없음
+#
+set -uo pipefail
+
+VERSION="0.1"
+TARGET="/target"
+LOG="/var/log/sekai-install.log"
+BOOTLOADER_ID="sekai"
+BACKTITLE="SekaiOS 1.0 (Hatsune) Installer v${VERSION}"
+
+# ─────────────────────────────────────────────────────────
+# 출력 헬퍼
+# ─────────────────────────────────────────────────────────
+C_R=$'\033[1;31m'; C_G=$'\033[1;32m'; C_Y=$'\033[1;33m'
+C_B=$'\033[1;36m'; C_0=$'\033[0m'
+
+log()  { printf '%s\n' "$*" >> "$LOG"; }
+say()  { printf '%s==>%s %s\n' "$C_B" "$C_0" "$*"; log "==> $*"; }
+ok()   { printf '%s  ok%s  %s\n' "$C_G" "$C_0" "$*"; log "  OK $*"; }
+warn() { printf '%s  !!%s  %s\n' "$C_Y" "$C_0" "$*"; log "  WARN $*"; }
+die()  { printf '%s  ERROR: %s%s\n' "$C_R" "$*" "$C_0"; log "  FATAL $*"; cleanup_mounts; exit 1; }
+run()  { log "\$ $*"; "$@" >>"$LOG" 2>&1 || die "command failed: $*"; }
+
+wt() { whiptail --backtitle "$BACKTITLE" "$@"; }
+
+cleanup_mounts() {
+    for m in "$TARGET/sys/firmware/efi/efivars" "$TARGET/boot/efi" \
+             "$TARGET/dev/pts" "$TARGET/dev" "$TARGET/proc" "$TARGET/sys" \
+             "$TARGET/run" "$TARGET"; do
+        mountpoint -q "$m" && umount -l "$m" 2>/dev/null
+    done
+    return 0
+}
+trap 'echo; echo "Aborted."; cleanup_mounts; exit 130' INT TERM
+
+# ─────────────────────────────────────────────────────────
+# 0. 사전 점검
+# ─────────────────────────────────────────────────────────
+: > "$LOG"
+say "SekaiOS Installer v$VERSION"
+
+[ "$(id -u)" -eq 0 ] || die "Must run as root:  sudo sekai-install"
+
+for c in whiptail sgdisk parted mkfs.ext4 mkfs.vfat unsquashfs blkid lsblk efibootmgr wipefs partprobe; do
+    command -v "$c" >/dev/null || die "missing required tool: $c"
+done
+
+[ -d /sys/firmware/efi ] || die "UEFI firmware required. Reboot in UEFI mode (not legacy BIOS/CSM)."
+ok "firmware: UEFI"
+
+SQUASH=""
+for p in /run/live/medium/live/filesystem.squashfs \
+         /lib/live/mount/medium/live/filesystem.squashfs \
+         /cdrom/live/filesystem.squashfs; do
+    [ -f "$p" ] && { SQUASH="$p"; break; }
+done
+[ -n "$SQUASH" ] || die "filesystem.squashfs not found - run this from the live session"
+ok "system image: $SQUASH ($(du -h "$SQUASH" | cut -f1))"
+
+# 부팅에 쓰인 매체는 후보에서 제외
+LIVE_DEV="$(findmnt -n -o SOURCE /run/live/medium 2>/dev/null | sed 's/\[.*//')"
+LIVE_DISK=""
+[ -n "$LIVE_DEV" ] && LIVE_DISK="/dev/$(lsblk -no PKNAME "$LIVE_DEV" 2>/dev/null | head -1)"
+
+# ─────────────────────────────────────────────────────────
+# 1. 디스크 선택
+# ─────────────────────────────────────────────────────────
+declare -a MENU=()
+while read -r name size model; do
+    dev="/dev/$name"
+    [ "$dev" = "$LIVE_DISK" ] && continue
+    mark=""
+    lsblk -no FSTYPE "$dev" 2>/dev/null | grep -qi ntfs && mark="  [WINDOWS?]"
+    MENU+=("$dev" "$size  ${model:-unknown}$mark")
+done < <(lsblk -dn -o NAME,SIZE,MODEL -e 7,11 2>/dev/null)
+
+[ ${#MENU[@]} -gt 0 ] || die "no installable disk found"
+
+DISK=$(wt --title "Select target disk" \
+    --menu "\nChoose the disk to install SekaiOS on.\n\nWARNING: ALL DATA on the selected disk will be erased.\n[WINDOWS?] marks a disk containing an NTFS partition.\n" \
+    20 74 8 "${MENU[@]}" 3>&1 1>&2 2>&3) || die "cancelled"
+
+DETAIL=$(lsblk -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT "$DISK" 2>/dev/null)
+WARNTXT=""
+lsblk -no FSTYPE "$DISK" 2>/dev/null | grep -qi ntfs && \
+  WARNTXT=$'\n\n  *** This disk contains an NTFS partition.\n  *** Windows may be installed on it!'
+
+wt --title "Confirm target disk" --yesno \
+"This disk will be COMPLETELY ERASED:
+
+$DETAIL$WARNTXT
+
+Continue?" 22 74 --defaultno || die "cancelled"
+
+# ─────────────────────────────────────────────────────────
+# 2. 설치 옵션
+# ─────────────────────────────────────────────────────────
+ESP_MB=$(wt --title "EFI System Partition" --inputbox \
+"\nSize of the EFI System Partition, in MB.\n\n512 is recommended - leaves room for several\nkernels and firmware updates.\n" \
+14 64 "512" 3>&1 1>&2 2>&3) || die "cancelled"
+[[ "$ESP_MB" =~ ^[0-9]+$ ]] && [ "$ESP_MB" -ge 128 ] || die "invalid ESP size: $ESP_MB"
+
+RAM_MB=$(awk '/MemTotal/{printf "%d", $2/1024}' /proc/meminfo)
+SWAP_MB=$(wt --title "Swap partition" --inputbox \
+"\nSwap size in MB.  0 = no swap partition.\n\nDetected RAM: ${RAM_MB} MB\nHibernation requires swap >= RAM.\n" \
+14 64 "0" 3>&1 1>&2 2>&3) || die "cancelled"
+[[ "$SWAP_MB" =~ ^[0-9]+$ ]] || die "invalid swap size: $SWAP_MB"
+
+# ─────────────────────────────────────────────────────────
+# 3. 사용자 정보
+# ─────────────────────────────────────────────────────────
+HOSTNAME=$(wt --title "Hostname" --inputbox "\nName of this computer\n" 10 60 "sekai" 3>&1 1>&2 2>&3) || die "cancelled"
+USERNAME=$(wt --title "User account" --inputbox "\nLogin name (lowercase, no spaces)\n" 10 60 "sekai" 3>&1 1>&2 2>&3) || die "cancelled"
+[[ "$USERNAME" =~ ^[a-z_][a-z0-9_-]*$ ]] || die "invalid username: $USERNAME"
+FULLNAME=$(wt --title "Full name" --inputbox "\nDisplay name\n" 10 60 "SekaiOS User" 3>&1 1>&2 2>&3) || die "cancelled"
+
+while true; do
+    PASS1=$(wt --title "Password" --passwordbox "\nPassword for $USERNAME\n(also used for root)\n" 11 60 3>&1 1>&2 2>&3) || die "cancelled"
+    PASS2=$(wt --title "Confirm password" --passwordbox "\nType it again\n" 10 60 3>&1 1>&2 2>&3) || die "cancelled"
+    [ -n "$PASS1" ] && [ "$PASS1" = "$PASS2" ] && break
+    wt --title "Error" --msgbox "\nPassword is empty or does not match.\n" 9 50
+done
+
+TIMEZONE=$(wt --title "Time zone" --inputbox "\nTime zone (e.g. Asia/Seoul, UTC)\n" 10 60 "Asia/Seoul" 3>&1 1>&2 2>&3) || die "cancelled"
+[ -f "/usr/share/zoneinfo/$TIMEZONE" ] || die "unknown time zone: $TIMEZONE"
+
+# ─────────────────────────────────────────────────────────
+# 4. 최종 확인
+# ─────────────────────────────────────────────────────────
+SWAPTXT=$([ "$SWAP_MB" -gt 0 ] && echo "${SWAP_MB} MB" || echo "none")
+wt --title "Review" --yesno \
+"  Disk        : $DISK   (ERASED)
+  ESP         : ${ESP_MB} MB   FAT32
+  Swap        : $SWAPTXT
+  Root        : remaining space, ext4
+  Boot loader : rEFInd  ->  /EFI/$BOOTLOADER_ID/
+
+  Hostname    : $HOSTNAME
+  User        : $USERNAME ($FULLNAME)
+  Time zone   : $TIMEZONE
+
+Proceed with installation?" 20 70 --defaultno || die "cancelled"
+
+CONFIRM=$(wt --title "FINAL WARNING" --inputbox \
+"\nEverything on $DISK will be permanently destroyed.\n\nType  DESTROY  (uppercase) to continue.\n" 13 64 "" 3>&1 1>&2 2>&3) || die "cancelled"
+[ "$CONFIRM" = "DESTROY" ] || die "confirmation text did not match"
+
+clear
+say "Starting installation.  Log: $LOG"
+echo
+
+# ─────────────────────────────────────────────────────────
+# 5a. 파티션
+# ─────────────────────────────────────────────────────────
+say "[1/9] Partitioning $DISK"
+cleanup_mounts
+swapoff -a 2>/dev/null || true
+for p in $(lsblk -ln -o NAME "$DISK" 2>/dev/null | tail -n +2); do
+    umount -f "/dev/$p" 2>/dev/null || true
+done
+
+run wipefs -a "$DISK"
+run sgdisk --zap-all "$DISK"
+run sgdisk --new=1:0:+${ESP_MB}M --typecode=1:ef00 --change-name=1:SEKAI-ESP "$DISK"
+PN=2
+if [ "$SWAP_MB" -gt 0 ]; then
+    run sgdisk --new=2:0:+${SWAP_MB}M --typecode=2:8200 --change-name=2:SEKAI-SWAP "$DISK"
+    PN=3
+fi
+run sgdisk --new=${PN}:0:0 --typecode=${PN}:8304 --change-name=${PN}:SEKAI-ROOT "$DISK"
+run partprobe "$DISK"
+sleep 2
+
+if [[ "$DISK" =~ (nvme|mmcblk|loop) ]]; then PFX="${DISK}p"; else PFX="$DISK"; fi
+ESP_DEV="${PFX}1"
+if [ "$SWAP_MB" -gt 0 ]; then SWAP_DEV="${PFX}2"; ROOT_DEV="${PFX}3"; else SWAP_DEV=""; ROOT_DEV="${PFX}2"; fi
+[ -b "$ESP_DEV" ]  || die "partition not created: $ESP_DEV"
+[ -b "$ROOT_DEV" ] || die "partition not created: $ROOT_DEV"
+ok "ESP=$ESP_DEV  ROOT=$ROOT_DEV  SWAP=${SWAP_DEV:-none}"
+
+# ─────────────────────────────────────────────────────────
+# 5b. 포맷
+# ─────────────────────────────────────────────────────────
+say "[2/9] Creating filesystems"
+run mkfs.vfat -F 32 -n SEKAIESP "$ESP_DEV"
+run mkfs.ext4 -F -L SekaiOS "$ROOT_DEV"
+[ -n "$SWAP_DEV" ] && run mkswap -L SEKAISWAP "$SWAP_DEV"
+ok "formatted"
+
+# ─────────────────────────────────────────────────────────
+# 5c. 마운트
+# ─────────────────────────────────────────────────────────
+say "[3/9] Mounting target"
+mkdir -p "$TARGET"
+run mount "$ROOT_DEV" "$TARGET"
+mkdir -p "$TARGET/boot/efi"
+run mount "$ESP_DEV" "$TARGET/boot/efi"
+[ -n "$SWAP_DEV" ] && swapon "$SWAP_DEV" 2>/dev/null
+ok "mounted at $TARGET"
+
+# ─────────────────────────────────────────────────────────
+# 5d. 시스템 전개  ← 설치의 본체
+# ─────────────────────────────────────────────────────────
+say "[4/9] Extracting system image (this takes a few minutes)"
+unsquashfs -f -d "$TARGET" "$SQUASH" 2>&1 | tail -3
+[ -x "$TARGET/usr/bin/bash" ] || die "extraction failed"
+ok "extracted ($(du -sh "$TARGET" 2>/dev/null | cut -f1))"
+
+# ─────────────────────────────────────────────────────────
+# 5e. fstab
+# ─────────────────────────────────────────────────────────
+say "[5/9] Writing /etc/fstab"
+ROOT_UUID=$(blkid -s UUID -o value "$ROOT_DEV")
+ESP_UUID=$(blkid -s UUID -o value "$ESP_DEV")
+{
+    echo "# /etc/fstab - generated by SekaiOS installer"
+    echo "UUID=$ROOT_UUID  /          ext4  errors=remount-ro  0 1"
+    echo "UUID=$ESP_UUID   /boot/efi  vfat  umask=0077         0 2"
+    [ -n "$SWAP_DEV" ] && echo "UUID=$(blkid -s UUID -o value "$SWAP_DEV")  none  swap  sw  0 0"
+    echo "tmpfs  /tmp  tmpfs  defaults,nosuid,nodev  0 0"
+} > "$TARGET/etc/fstab"
+ok "root UUID = $ROOT_UUID"
+
+# ─────────────────────────────────────────────────────────
+# 5f. chroot 설정
+# ─────────────────────────────────────────────────────────
+say "[6/9] Configuring installed system"
+for fs in proc sys dev dev/pts run; do mkdir -p "$TARGET/$fs"; done
+mount -t proc  proc  "$TARGET/proc"
+mount -t sysfs sysfs "$TARGET/sys"
+mount --bind /dev     "$TARGET/dev"
+mount --bind /dev/pts "$TARGET/dev/pts"
+mount -t tmpfs tmpfs  "$TARGET/run"
+mkdir -p "$TARGET/sys/firmware/efi/efivars"
+mount --bind /sys/firmware/efi/efivars "$TARGET/sys/firmware/efi/efivars" 2>/dev/null || true
+
+cat > "$TARGET/tmp/sekai-post.sh" <<POSTEOF
+#!/bin/bash
+set -e
+export DEBIAN_FRONTEND=noninteractive
+
+echo "$HOSTNAME" > /etc/hostname
+cat > /etc/hosts <<HOSTS
+127.0.0.1	localhost
+127.0.1.1	$HOSTNAME
+::1		localhost ip6-localhost ip6-loopback
+ff02::1		ip6-allnodes
+ff02::2		ip6-allrouters
+HOSTS
+
+ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
+echo "$TIMEZONE" > /etc/timezone
+
+# machine-id: 첫 부팅 때 새로 생성되도록 비움
+: > /etc/machine-id
+rm -f /var/lib/dbus/machine-id
+
+# 라이브 전용 구성 제거
+# 라이브 전용 패키지만 정확히 지정해서 제거한다.
+# autoremove 는 쓰지 않는다 — live-config 가 끌고 온 sudo 같은 패키지를
+# "고아"로 판단해 같이 지워버리기 때문 (실제로 sudo 가 사라진 적 있음).
+# 대신 시스템에 꼭 필요한 것들을 manual 로 표시해 고아가 되지 않게 한다.
+apt-mark manual sudo openssh-server polkitd 2>/dev/null || true
+apt-get purge -y live-boot live-boot-initramfs-tools live-boot-doc \
+                 live-config live-config-systemd live-config-doc \
+                 live-tools 2>/dev/null || true
+
+# 안전망: 위 과정에서 사라졌다면 다시 설치 (오프라인이면 조용히 실패)
+if ! command -v sudo >/dev/null 2>&1; then
+    apt-get install -y --no-download sudo 2>/dev/null || true
+fi
+rm -rf /etc/live /lib/live /usr/lib/live
+rm -f  /etc/sudoers.d/live* 2>/dev/null || true
+
+# 사용자 생성 (존재하는 그룹만 지정 — 없는 그룹이 하나라도 있으면 useradd 전체가 실패)
+WANT="sudo audio video plugdev netdev cdrom dialout"
+HAVE=""
+for g in \$WANT; do
+    getent group "\$g" >/dev/null 2>&1 && HAVE="\${HAVE:+\$HAVE,}\$g"
+done
+if ! id "$USERNAME" >/dev/null 2>&1; then
+    useradd -m -s /bin/bash -c "$FULLNAME" \${HAVE:+-G "\$HAVE"} "$USERNAME"
+fi
+echo "$USERNAME:$PASS1" | chpasswd
+echo "root:$PASS1"      | chpasswd
+
+systemctl enable systemd-networkd systemd-resolved 2>/dev/null || true
+
+# initramfs 재생성: 라이브(squashfs 탐색)용 → 디스크 부팅용
+update-initramfs -u -k all
+
+rm -f /tmp/sekai-post.sh
+POSTEOF
+chmod +x "$TARGET/tmp/sekai-post.sh"
+chroot "$TARGET" /tmp/sekai-post.sh >>"$LOG" 2>&1 || die "target configuration failed - see $LOG"
+ok "configured"
+
+# ─────────────────────────────────────────────────────────
+# 5g. rEFInd
+# ─────────────────────────────────────────────────────────
+say "[7/9] Installing rEFInd boot loader"
+RS="$TARGET/usr/share/refind"
+[ -d "$RS" ] || die "refind package is not present in the image"
+
+EFIDIR="$TARGET/boot/efi/EFI/$BOOTLOADER_ID"
+mkdir -p "$EFIDIR"/{drivers_x64,icons,fonts,banners}
+cp "$RS/refind/refind_x64.efi"           "$EFIDIR/refind_x64.efi"
+cp "$RS"/refind/drivers_x64/ext4_x64.efi "$EFIDIR/drivers_x64/" 2>/dev/null || true
+cp "$RS"/refind/icons/*.png              "$EFIDIR/icons/"
+# SekaiOS 로고 (두 별) — sekai-desktop 패키지가 제공
+[ -f "$TARGET/usr/share/sekai/refind/os_sekai.png" ] && \
+    cp "$TARGET/usr/share/sekai/refind/os_sekai.png" "$EFIDIR/icons/os_sekai.png"
+mkdir -p "$EFIDIR/themes/sekai"
+cp "$TARGET"/usr/share/sekai/refind/{background,selection_big,selection_small}.png "$EFIDIR/themes/sekai/" 2>/dev/null || true
+cp "$RS"/fonts/*.png                     "$EFIDIR/fonts/"
+cp "$RS"/banners/refind_banner.png       "$EFIDIR/banners/" 2>/dev/null || true
+
+# 커널/initramfs 를 ESP(FAT) 에 복사 — 펌웨어가 드라이버 없이 네이티브로 읽음
+mkdir -p "$TARGET/boot/efi/$BOOTLOADER_ID"
+KVER=$(ls "$TARGET"/boot/vmlinuz-* 2>/dev/null | sed 's|.*/vmlinuz-||' | sort -V | tail -1)
+[ -n "$KVER" ] || die "no kernel found in target /boot"
+cp "$TARGET/boot/vmlinuz-$KVER"    "$TARGET/boot/efi/$BOOTLOADER_ID/vmlinuz"
+cp "$TARGET/boot/initrd.img-$KVER" "$TARGET/boot/efi/$BOOTLOADER_ID/initrd.img"
+ok "kernel $KVER copied to ESP"
+
+cat > "$EFIDIR/refind.conf" <<REFEOF
+# manual  : 아래 정의한 SekaiOS 항목
+# internal: 다른 내장 디스크 스캔 → 윈도우 등을 자동 탐지
+#   external/optical 은 뺀다 — 꽂아 둔 설치 USB·ISO 가 부팅 항목으로 뜨지 않게
+scanfor manual, internal
+scan_driver_dirs EFI/$BOOTLOADER_ID/drivers_x64
+icons_dir icons
+timeout 3
+resolution max
+
+# 조용한 부팅: rEFInd 가 텍스트 화면으로 바꾸지 않고(파란 머리글 화면 없음) 그대로 넘긴다
+use_graphics_for osx, windows, linux
+hideui hints, badges
+
+# SekaiOS 테마 — 경로는 rEFInd 가 있는 폴더 기준 (EFI/... 로 쓰면 못 찾고 기본 배너로 돌아간다)
+banner          themes/sekai/background.png
+banner_scale    fillscreen
+selection_big   themes/sekai/selection_big.png
+selection_small themes/sekai/selection_small.png
+# firmware = 펌웨어(BIOS·UEFI) 설정 화면으로 재시작
+# rEFInd 0.14.2 는 showtools 에 쓴 칸만 덮어쓰고 나머지 칸의 기본 도구(정보·종료·재시작·펌웨어)를
+#   그대로 남긴다 → 뒤쪽을 없는 도구(gptsync)로 채워 기본값을 밀어낸다 (없는 도구는 표시되지 않음)
+showtools shutdown, reboot, firmware, gptsync, gptsync, gptsync, gptsync, gptsync, gptsync, gptsync, gptsync, gptsync
+
+# ESP 에 복사해 둔 커널(/sekai/vmlinuz)을 '리눅스 하나 더'로 잡지 않게.
+#   .efi 가 붙은 커널만 자동 탐지 → 윈도우 등 다른 OS 는 계속 잡힌다
+scan_all_linux_kernels false
+
+menuentry "SekaiOS" {
+    icon   /EFI/$BOOTLOADER_ID/icons/os_sekai.png
+    loader /$BOOTLOADER_ID/vmlinuz
+    initrd /$BOOTLOADER_ID/initrd.img
+    options "root=UUID=$ROOT_UUID ro quiet splash loglevel=3 rd.udev.log_level=3 systemd.show_status=auto vt.global_cursor_default=0"
+
+    submenuentry "Verbose boot" {
+        options "root=UUID=$ROOT_UUID ro systemd.log_level=info"
+    }
+    submenuentry "Recovery (single user)" {
+        options "root=UUID=$ROOT_UUID ro single"
+    }
+}
+REFEOF
+
+# 폴백 경로 — 전용 디스크이므로 안전 (윈도우 ESP 가 아님)
+mkdir -p "$TARGET/boot/efi/EFI/BOOT"
+cp "$EFIDIR/refind_x64.efi" "$TARGET/boot/efi/EFI/BOOT/BOOTX64.EFI"
+cp "$EFIDIR/refind.conf"    "$TARGET/boot/efi/EFI/BOOT/refind.conf"
+ok "rEFInd installed to /EFI/$BOOTLOADER_ID/ (+ fallback /EFI/BOOT/)"
+
+# ─────────────────────────────────────────────────────────
+# 5h. NVRAM
+# ─────────────────────────────────────────────────────────
+say "[8/9] Registering UEFI boot entry"
+efibootmgr -B -L "SekaiOS" >/dev/null 2>&1 || true
+if efibootmgr --create --disk "$DISK" --part 1 \
+     --loader "\\EFI\\$BOOTLOADER_ID\\refind_x64.efi" \
+     --label "SekaiOS" >>"$LOG" 2>&1; then
+    ok "NVRAM entry created"
+else
+    warn "NVRAM registration failed - will boot via fallback /EFI/BOOT/BOOTX64.EFI"
+fi
+
+# ─────────────────────────────────────────────────────────
+# 5i. 마무리
+# ─────────────────────────────────────────────────────────
+say "[9/9] Finishing up"
+sync
+cleanup_mounts
+ok "unmounted"
+
+echo
+wt --title "Installation complete" --msgbox \
+"SekaiOS has been installed.
+
+  Disk    : $DISK
+  User    : $USERNAME   (sudo enabled)
+  root    : same password
+  Kernel  : $KVER
+
+Remove the installation media and reboot.
+
+If no boot menu appears, pick 'SekaiOS'
+from the firmware boot menu (F12 / F8 / Esc).
+
+Log: $LOG" 20 62
+
+say "Done.  Run 'reboot' when ready."

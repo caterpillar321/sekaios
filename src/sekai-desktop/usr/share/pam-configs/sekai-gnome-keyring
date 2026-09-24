@@ -1,0 +1,9 @@
+Name: Unlock GNOME Keyring at login (SekaiOS)
+Default: yes
+Priority: 0
+Auth-Type: Additional
+Auth-Final:
+	optional	pam_gnome_keyring.so
+Session-Type: Additional
+Session-Final:
+	optional	pam_gnome_keyring.so auto_start

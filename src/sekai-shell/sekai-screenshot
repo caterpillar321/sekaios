@@ -1,0 +1,62 @@
+#!/bin/sh
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 스크린샷
+#
+#    sekai-screenshot            화면 전체            (Print)
+#    sekai-screenshot region     영역 고르기          (Win+Shift+S, Shift+Print)
+#    sekai-screenshot window     지금 창              (Alt+Print)
+#
+#  찍은 그림은 사진/스크린샷 폴더에 저장하고 클립보드에도 넣는다.
+#  알림의 [열기] 로 그림 보기, [폴더] 로 파일 관리자를 연다.
+# ═══════════════════════════════════════════════════════════════
+set -u
+mode=${1:-full}
+
+pics=$(xdg-user-dir PICTURES 2>/dev/null)
+[ -n "$pics" ] && [ "$pics" != "$HOME" ] || pics="$HOME/Pictures"
+dir="$pics/스크린샷"
+mkdir -p "$dir"
+file="$dir/스크린샷 $(date +%Y-%m-%d\ %H%M%S).png"
+
+case "$mode" in
+    region)
+        # 선택 영역: 강조색 테두리, 바깥은 어둡게
+        geom=$(slurp -d -b 00000077 -c 39c5bbff -s 39c5bb18 -w 2 -F Pretendard 2>/dev/null) || exit 0
+        [ -n "$geom" ] || exit 0
+        grim -g "$geom" "$file" ;;
+    window)
+        geom=$(hyprctl -j activewindow 2>/dev/null | python3 -c '
+import json, sys
+try:
+    w = json.load(sys.stdin)
+    (x, y), (a, b) = w["at"], w["size"]
+    print(f"{x},{y} {a}x{b}")
+except Exception:
+    pass')
+        if [ -n "$geom" ]; then grim -g "$geom" "$file"; else grim "$file"; fi ;;
+    *)
+        # 마우스가 있는 모니터만 (여러 모니터면 그 화면을 찍는다)
+        out=$(hyprctl -j monitors 2>/dev/null | python3 -c '
+import json, sys
+try:
+    print(next(m["name"] for m in json.load(sys.stdin) if m.get("focused")))
+except Exception:
+    pass')
+        if [ -n "$out" ]; then grim -o "$out" "$file"; else grim "$file"; fi ;;
+esac
+
+[ -s "$file" ] || { notify-send -a 스크린샷 -i dialog-error "스크린샷을 찍지 못했습니다"; exit 1; }
+
+# wl-copy 는 뒤에 남아 클립보드를 지킨다 — 부른 쪽 출력을 붙잡지 않게 떼어 둔다
+wl-copy --type image/png < "$file" >/dev/null 2>&1
+
+# 알림 — 누른 단추에 따라 열기 (알림이 닫힐 때까지 기다리므로 뒤에서)
+(
+    act=$(notify-send -a 스크린샷 -i "$file" \
+        --action=default=열기 --action=open=열기 --action=folder=폴더 \
+        "스크린샷을 찍었습니다" "클립보드에 복사했고 스크린샷 폴더에 저장했습니다." 2>/dev/null)
+    case "$act" in
+        open|default) xdg-open "$file" ;;
+        folder) thunar "$dir" 2>/dev/null || xdg-open "$dir" ;;
+    esac
+) >/dev/null 2>&1 &

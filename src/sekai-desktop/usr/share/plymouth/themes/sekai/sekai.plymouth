@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=SekaiOS
+Description=SekaiOS boot splash — two stars
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/sekai
+ScriptFile=/usr/share/plymouth/themes/sekai/sekai.script

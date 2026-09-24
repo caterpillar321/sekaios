@@ -1,0 +1,3 @@
+# SekaiOS 잠금 화면 (sekai-lock) — 비밀번호 확인만 한다
+@include common-auth
+@include common-account

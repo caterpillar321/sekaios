@@ -1,0 +1,17 @@
+# ── 빌드 결과물 (다시 만들 수 있다, 수 GB) ──
+/buildroot/
+/rootfs/
+/build/
+/iso/
+/cache/
+/packages/
+/repo/
+
+# ── 이 컴퓨터 전용: VM 비밀번호, 개발용 SSH 키 등 — 절대 올리지 않는다 ──
+/local/
+
+# ── 기타 ──
+__pycache__/
+*.pyc
+*.swp
+*~

@@ -1,0 +1,6 @@
+[Desktop Entry]
+# SekaiOS: 실행기·메뉴에서 숨긴다 (터미널 내부 구성요소 — 사용자가 직접 켤 일이 없다)
+Type=Application
+Name=Foot Server
+Exec=foot-server
+NoDisplay=true

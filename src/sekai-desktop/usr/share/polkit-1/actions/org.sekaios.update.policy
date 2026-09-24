@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- SekaiOS 업데이트 도우미 — 설정 앱의 "업데이트" 페이지가 pkexec 로 부른다 -->
+<policyconfig>
+  <vendor>SekaiOS</vendor>
+  <action id="org.sekaios.update">
+    <description>Install software updates</description>
+    <description xml:lang="ko">소프트웨어 업데이트</description>
+    <message>Authentication is required to check for and install updates</message>
+    <message xml:lang="ko">업데이트를 확인하고 설치하려면 인증이 필요합니다</message>
+    <icon_name>system-software-update</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <!-- 한 번 인증하면 잠시 동안(확인 → 설치) 다시 묻지 않는다 -->
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/sekai/sekai-update</annotate>
+  </action>
+</policyconfig>

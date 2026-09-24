@@ -1,0 +1,7 @@
+
+  SekaiOS 1.0 (Hatsune)  -  based on Debian 13 (trixie)
+
+    Install to disk    sudo sekai-install
+    Network status     ip a
+    Installer log      /var/log/sekai-install.log
+

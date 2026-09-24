@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 업데이트 도우미 — 관리자 권한으로 실행된다 (pkexec)
+#
+#    sekai-update check    패키지 목록을 새로 받고, 설치할 업데이트를 알려 준다
+#    sekai-update apply    업데이트를 설치한다
+#
+#  출력은 한 줄에 하나씩, 설정 앱이 읽는 형식:
+#    PROGRESS <0-100> <설명>
+#    PKG <이름> <지금 버전> <새 버전>
+#    COUNT <개수>
+#    REBOOT                    다시 시작이 필요함
+#    ERROR <설명>
+#  인자는 위 두 가지만 받는다 — 관리자 권한으로 도는 프로그램이라
+#  바깥에서 명령·옵션을 넘길 수 없게 한다.
+# ═══════════════════════════════════════════════════════════════
+import os
+import re
+import subprocess
+import sys
+
+ENV = dict(os.environ, DEBIAN_FRONTEND="noninteractive", LANG="C.UTF-8", LC_ALL="C.UTF-8",
+           PATH="/usr/sbin:/usr/bin:/sbin:/bin")
+APT_OPTS = ["-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold",
+            "-o", "Dpkg::Use-Pty=0"]
+
+
+def out(*a):
+    print(*a, flush=True)
+
+
+def run_status(cmd, lo, hi, label):
+    """apt 의 기계용 진행 정보(Status-Fd)를 읽어 PROGRESS 로 바꾼다."""
+    r, w = os.pipe()
+    p = subprocess.Popen(cmd + ["-o", f"APT::Status-Fd={w}"], env=ENV, pass_fds=(w,),
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    os.close(w)
+    log = []
+    import threading
+
+    def drain():
+        for line in p.stdout:
+            log.append(line.rstrip())
+    t = threading.Thread(target=drain, daemon=True)
+    t.start()
+    with os.fdopen(r, "r", errors="replace") as f:
+        for line in f:
+            # dlstatus:1:33.3:받는 중…  /  pmstatus:pkg:57.1:Unpacking pkg
+            parts = line.rstrip("\n").split(":", 3)
+            if len(parts) == 4 and parts[0] in ("dlstatus", "pmstatus"):
+                try:
+                    pct = float(parts[2])
+                except ValueError:
+                    continue
+                what = "내려받는 중" if parts[0] == "dlstatus" else "설치하는 중"
+                name = parts[1] if parts[0] == "pmstatus" else ""
+                out("PROGRESS", int(lo + (hi - lo) * pct / 100), f"{what} {name}".strip())
+    p.wait()
+    t.join(2)
+    return p.returncode, log
+
+
+def pending():
+    """설치될 업데이트 목록 (시뮬레이션)"""
+    res = subprocess.run(["apt-get", "-s", "-q", "full-upgrade"], env=ENV,
+                         capture_output=True, text=True)
+    pk = []
+    for line in res.stdout.splitlines():
+        # Inst 이름 [지금버전] (새버전 저장소 [아키])  /  Inst 이름 (새버전 …)  ← 새로 설치
+        m = re.match(r"Inst (\S+) (?:\[(\S+)\] )?\((\S+)", line)
+        if m:
+            pk.append((m.group(1), m.group(2) or "-", m.group(3)))
+    return pk
+
+
+def check():
+    out("PROGRESS", 2, "패키지 목록을 받는 중")
+    rc, log = run_status(["apt-get", "-q", "update"], 2, 90, "목록")
+    if rc != 0:
+        err = next((l for l in reversed(log) if l.startswith(("E:", "W:", "Err"))), "알 수 없는 오류")
+        out("ERROR", f"목록을 받지 못했습니다: {err}")
+    pk = pending()
+    for name, old, new in pk:
+        out("PKG", name, old, new)
+    out("COUNT", len(pk))
+    out("PROGRESS", 100, "완료")
+    return 0
+
+
+# 이것들이 바뀌면 다시 시작해야 새 것이 쓰인다
+#   (데비안은 /run/reboot-required 를 스스로 만들지 않는다)
+REBOOT_PKGS = re.compile(r"^(linux-image-|linux-base$|libc6$|systemd$|dbus$|dbus-daemon$|"
+                         r"hyprland$|aquamarine$|mesa-|libgl1-mesa|nvidia-|firmware-|intel-microcode$|amd64-microcode$)")
+
+
+def apply():
+    out("PROGRESS", 1, "준비하는 중")
+    before = [name for name, _o, _n in pending()]
+    rc, log = run_status(["apt-get", "-y", "-q"] + APT_OPTS + ["full-upgrade"], 1, 99, "설치")
+    if rc != 0:
+        # 중간에 끊긴 설치를 이어서 마무리해 본다
+        subprocess.run(["dpkg", "--configure", "-a"], env=ENV,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        err = next((l for l in reversed(log) if l.startswith("E:")), "알 수 없는 오류")
+        out("ERROR", f"설치하지 못했습니다: {err}")
+        return 1
+    out("PROGRESS", 100, "완료")
+    out("COUNT", len(pending()))
+    if (os.path.exists("/run/reboot-required")
+            or any(REBOOT_PKGS.match(n) for n in before)):
+        out("REBOOT")
+    return 0
+
+
+def main():
+    if os.geteuid() != 0:
+        out("ERROR", "관리자 권한이 필요합니다")
+        return 1
+    if len(sys.argv) != 2 or sys.argv[1] not in ("check", "apply"):
+        out("ERROR", "사용법: sekai-update check|apply")
+        return 2
+    return check() if sys.argv[1] == "check" else apply()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

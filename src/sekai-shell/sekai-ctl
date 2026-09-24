@@ -1,0 +1,48 @@
+#!/bin/sh
+# ═══════════════════════════════════════════════════════════════
+#  sekai-ctl — 단축키에서 셸(작업 표시줄)에 일을 시키는 작은 명령
+#
+#    sekai-ctl switch next|prev|commit      Alt+Tab 창 전환기
+#    sekai-ctl volume up|down|mute|mic-mute  음량 + 화면 표시
+#    sekai-ctl brightness up|down           밝기 + 화면 표시
+#    sekai-ctl snap left|right|up|down      창 배치 (Win+화살표)
+#    sekai-ctl clipboard                    클립보드 기록 (Win+V)
+#    sekai-ctl menu | notifications         시작 메뉴 / 알림 센터
+#    sekai-ctl osd <아이콘> <글>             화면에 잠깐 알림
+#
+#  셸이 떠 있지 않으면 음량·밝기는 그래도 바꾼다 (표시만 없다).
+# ═══════════════════════════════════════════════════════════════
+call() {
+    m=$1; shift
+    gdbus call --session --dest org.sekai.Shell --object-path /org/sekai/Shell \
+        --method "org.sekai.Shell.$m" "$@" >/dev/null 2>&1
+}
+
+case "$1" in
+    switch)
+        case "$2" in
+            prev)   call Switch -- -1 ;;
+            commit) call SwitchCommit ;;
+            *)      call Switch 1 ;;
+        esac ;;
+    volume)
+        call Volume "${2:-up}" || case "$2" in
+            up)       wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+ ;;
+            down)     wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%- ;;
+            mute)     wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle ;;
+            mic-mute) wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle ;;
+        esac ;;
+    brightness)
+        call Brightness "${2:-up}" || case "$2" in
+            up)   brightnessctl -q set 5%+ ;;
+            down) brightnessctl -q -n1 set 5%- ;;
+        esac ;;
+    snap)          call Snap "${2:-up}" ;;
+    clipboard)     call Clipboard ;;
+    menu)          call StartMenu ;;
+    notifications) call NotificationCenter ;;
+    osd)           call Osd "${2:-dialog-information-symbolic}" "${3:-}" ;;
+    *)
+        sed -n '3,13p' "$0" | sed 's/^# \{0,1\}//'
+        exit 2 ;;
+esac

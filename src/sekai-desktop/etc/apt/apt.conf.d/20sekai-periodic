@@ -1,0 +1,5 @@
+// SekaiOS — 하루 한 번 패키지 목록을 새로 받아 둔다 (apt-daily.timer).
+// 설치는 하지 않는다. 작업 표시줄이 받아 둔 목록으로 업데이트가 있는지 알려 준다.
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Download-Upgradeable-Packages "0";
+APT::Periodic::Unattended-Upgrade "0";

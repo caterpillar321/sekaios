@@ -1,0 +1,4 @@
+# SekaiOS — 크로미움을 Wayland 네이티브로 실행
+#   기본값(X11/XWayland)이면 흐릿하게 렌더링되고 스케일링도 어긋난다
+export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --ozone-platform-hint=auto --enable-features=WaylandWindowDecorations --enable-wayland-ime --wayland-text-input-version=3"
+#   --enable-wayland-ime: 한글 입력기(ibus)를 Wayland 입력기 프로토콜로 받는다

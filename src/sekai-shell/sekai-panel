@@ -1,0 +1,1138 @@
+#!/usr/bin/env python3
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS Panel — 윈도우 스타일 작업 표시줄
+#
+#  layer-shell 로 화면 하단에 고정되고, Hyprland IPC 로
+#  창 목록·포커스 상태를 실시간으로 받아온다.
+# ═══════════════════════════════════════════════════════════════
+import gi, os, json, socket, subprocess, shlex, time, sys, cairo
+gi.require_version("Gtk", "3.0")
+gi.require_version("GtkLayerShell", "0.1")
+from gi.repository import Gtk, Gdk, GLib, GtkLayerShell, Pango
+
+PANEL_HEIGHT = 48
+HERE = os.path.dirname(os.path.abspath(__file__))
+if os.path.isdir(os.path.join(HERE, "sekaishell")):
+    sys.path.insert(0, HERE)
+
+from sekaishell.popup import ClickCatcher, PanelPopup, make_translucent  # noqa: E402
+from sekaishell.tray import TrayBox                     # noqa: E402
+from sekaishell.notify import NotificationService       # noqa: E402
+from sekaishell import logo as sekai_logo                # noqa: E402
+from sekaishell.appicon import app_icon                  # noqa: E402
+from sekaishell.switcher import Switcher                 # noqa: E402
+from sekaishell.osd import Osd                           # noqa: E402
+from sekaishell.clipboard import ClipboardPopup          # noqa: E402
+from sekaishell.windows import WindowManager             # noqa: E402
+from sekaishell.shell import ShellService                # noqa: E402
+from sekaishell.updates import UpdateNotifier            # noqa: E402
+
+# 시작 버튼 로고: layers / world / diamond / blockS / nested / slashes
+DEBUG = os.environ.get("SEKAI_DEBUG") == "1"
+
+
+def dbg(*a):
+    if DEBUG:
+        print(*a, file=sys.stderr, flush=True)
+# 로고를 그릴 때 쓰는 색. 설정의 강조색을 따라간다 (refresh_logo_colors 참조).
+ACCENT = (0.224, 0.773, 0.733)  # #39c5bb (설정에서 다시 계산됨)
+
+
+def _hex_rgb(h, fallback):
+    try:
+        h = h.lstrip("#")
+        if len(h) == 3:
+            h = "".join(c * 2 for c in h)
+        return tuple(int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+    except Exception:
+        return fallback
+
+
+def refresh_logo_colors():
+    """설정의 강조색/배경색으로 로고 색을 다시 계산한다."""
+    global ACCENT
+    a = sekai_settings().get("appearance", {})
+    ACCENT = _hex_rgb(a.get("accent", "#39c5bb"), (0.224, 0.773, 0.733))
+
+
+def draw_logo(cr, size, kind=None):
+    """size x size 영역에 SekaiOS 로고(두 별)를 그린다. 큰 별은 강조색을 따른다."""
+    sekai_logo.draw(cr, size, ACCENT)
+
+
+# ───────────────────────────────────────────────────────────────
+# Hyprland IPC
+#   .socket.sock   — 명령 요청/응답 (hyprctl 과 동일한 프로토콜)
+#   .socket2.sock  — 이벤트 스트림 (창 생성/포커스/닫힘 …)
+# ───────────────────────────────────────────────────────────────
+
+# ── SekaiOS 설정 (sekai-settings 가 쓴다) ──────────────────────
+SEKAI_CFG = os.path.expanduser("~/.config/sekai/settings.json")
+
+_SEKAI_DEFAULTS = {
+    "appearance": {"accent": "#39c5bb", "bg": "#151517",
+                   "surface": "#1e1e22", "fg": "#f1f1f3"},
+    "panel": {"height": 48, "clock_format": "%H:%M", "show_date": False},
+    "apps": {"terminal": "foot", "browser": "chromium", "files": "thunar"},
+}
+
+
+def sekai_settings():
+    """설정 파일을 읽어 기본값 위에 덮어쓴 dict 를 돌려준다."""
+    import copy
+    out = copy.deepcopy(_SEKAI_DEFAULTS)
+    try:
+        with open(SEKAI_CFG, encoding="utf-8") as f:
+            data = json.load(f)
+        for k, v in data.items():
+            if isinstance(v, dict) and isinstance(out.get(k), dict):
+                out[k].update(v)
+            else:
+                out[k] = v
+    except Exception:
+        pass
+    return out
+
+
+def sekai_conf(section, key, default=None):
+    return sekai_settings().get(section, {}).get(key, default)
+
+
+def css_prelude():
+    """style.css 앞에 붙일 @define-color 정의들."""
+    a = sekai_settings().get("appearance", {})
+    g = _SEKAI_DEFAULTS["appearance"]
+    return (
+        "@define-color accent %s;\n"
+        "@define-color bg %s;\n"
+        "@define-color surface %s;\n"
+        "@define-color fg %s;\n"
+    ) % (a.get("accent", g["accent"]), a.get("bg", g["bg"]),
+         a.get("surface", g["surface"]), a.get("fg", g["fg"]))
+
+class Hypr:
+    def __init__(self):
+        sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
+        rt = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+        if not sig:
+            raise RuntimeError("HYPRLAND_INSTANCE_SIGNATURE 없음 — Hyprland 안에서 실행하세요")
+        self.dir = f"{rt}/hypr/{sig}"
+
+    def _request(self, payload: str) -> bytes:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(2)
+        s.connect(f"{self.dir}/.socket.sock")
+        s.sendall(payload.encode())
+        out = b""
+        while True:
+            chunk = s.recv(8192)
+            if not chunk:
+                break
+            out += chunk
+        s.close()
+        return out
+
+    def query(self, what: str):
+        """clients / workspaces / activewindow / monitors …"""
+        try:
+            return json.loads(self._request(f"j/{what}"))
+        except Exception:
+            return []
+
+    def dispatch(self, cmd: str):
+        try:
+            self._request(f"/dispatch {cmd}")
+        except Exception:
+            pass
+
+    def subscribe(self, on_event):
+        """이벤트 소켓을 GLib 메인루프에 연결"""
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.connect(f"{self.dir}/.socket2.sock")
+        s.setblocking(False)
+        self._buf = b""
+
+        def reader(sock, cond):
+            try:
+                data = sock.recv(8192)
+            except BlockingIOError:
+                return True
+            if not data:
+                return False
+            self._buf += data
+            while b"\n" in self._buf:
+                line, self._buf = self._buf.split(b"\n", 1)
+                text = line.decode("utf-8", "replace")
+                if ">>" in text:
+                    name, _, arg = text.partition(">>")
+                    on_event(name, arg)
+            return True
+
+        GLib.io_add_watch(s, GLib.IO_IN | GLib.IO_HUP, reader)
+        self._evsock = s
+
+
+# ───────────────────────────────────────────────────────────────
+# .desktop 앱 목록
+# ───────────────────────────────────────────────────────────────
+def _locale_keys():
+    """LANG=ko_KR.UTF-8 → ["ko_KR", "ko"]  (.desktop 의 Name[ko_KR], Name[ko] 순서로 찾는다)"""
+    lang = (os.environ.get("LC_ALL") or os.environ.get("LC_MESSAGES")
+            or os.environ.get("LANG") or "").split(".")[0].split("@")[0]
+    keys = []
+    if lang and lang not in ("C", "POSIX"):
+        keys.append(lang)
+        if "_" in lang:
+            keys.append(lang.split("_")[0])
+    return keys
+
+
+LOCALE_KEYS = _locale_keys()
+
+
+def localized(entry, key):
+    for loc in LOCALE_KEYS:
+        v = entry.get(f"{key}[{loc}]")
+        if v:
+            return v
+    return entry.get(key, "")
+
+
+# 한글 초성 — 윈도우처럼 한글 앱을 ㄱ ㄴ ㄷ … 으로 묶는다
+CHOSEONG = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ"
+CHOSEONG_GROUP = {"ㄲ": "ㄱ", "ㄸ": "ㄷ", "ㅃ": "ㅂ", "ㅆ": "ㅅ", "ㅉ": "ㅈ"}   # 된소리는 예사소리 칸에
+
+
+def index_letter(name):
+    """목록 머리글자: 영문은 A–Z, 한글은 초성, 그 밖(숫자·기호)은 #"""
+    c = (name or "#")[:1]
+    if "가" <= c <= "힣":
+        ch = CHOSEONG[(ord(c) - 0xAC00) // 588]
+        return CHOSEONG_GROUP.get(ch, ch)
+    if c.isascii() and c.isalpha():
+        return c.upper()
+    return "#"
+
+
+def sort_key(name):
+    """정렬: 한글 → 영문 → 기타 (윈도우 한국어판과 같은 순서)"""
+    c = (name or "")[:1]
+    group = 0 if "가" <= c <= "힣" else (1 if c.isascii() and c.isalpha() else 2)
+    return (group, name.lower())
+
+
+# 모든 앱 목록에서 숨길 것 — 사용자가 직접 실행할 일이 없는 내부 구성요소
+HIDDEN_APPS = {"foot-server", "footclient"}
+
+
+def load_apps():
+    dirs = [
+        os.path.expanduser("~/.local/share/applications"),
+        "/usr/local/share/applications",
+        "/usr/share/applications",
+    ]
+    apps, seen = [], set()
+    for d in dirs:
+        if not os.path.isdir(d):
+            continue
+        for fn in sorted(os.listdir(d)):
+            if not fn.endswith(".desktop") or fn in seen:
+                continue
+            seen.add(fn)
+            entry = {}
+            try:
+                with open(os.path.join(d, fn), encoding="utf-8", errors="replace") as f:
+                    in_main = False
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("["):
+                            in_main = line == "[Desktop Entry]"
+                            continue
+                        if not in_main or "=" not in line:
+                            continue
+                        k, _, v = line.partition("=")
+                        entry[k] = v
+            except OSError:
+                continue
+            if entry.get("NoDisplay", "").lower() == "true":
+                continue
+            if fn[:-len(".desktop")].lower() in HIDDEN_APPS:
+                continue
+            if entry.get("Type", "Application") != "Application":
+                continue
+            name, exe = localized(entry, "Name"), entry.get("Exec")
+            if not name or not exe:
+                continue
+            # %f %u %U %F %i %c %k 같은 필드 코드 제거
+            exe = " ".join(t for t in exe.split() if not (len(t) == 2 and t[0] == "%"))
+            apps.append({
+                "id": fn[:-len(".desktop")].lower(),
+                "name": name,
+                "exec": exe,
+                "icon": entry.get("Icon", "application-x-executable"),
+                "terminal": entry.get("Terminal", "").lower() == "true",
+                "comment": localized(entry, "Comment"),
+                "name_en": entry.get("Name", name),      # 영어 이름으로도 검색되게
+            })
+    apps.sort(key=lambda a: sort_key(a["name"]))
+    return apps
+
+
+def launch(app):
+    cmd = app["exec"]
+    if app.get("terminal"):
+        cmd = f"foot -e {cmd}"
+    try:
+        subprocess.Popen(shlex.split(cmd), start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
+# 요일 — 로캘에 기대지 않는다 (세션 로캘이 영어여도 한국어로)
+WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"]
+
+
+def korean_date(t=None, weekday_long=False):
+    t = t or time.localtime()
+    wd = WEEKDAYS[t.tm_wday] + ("요일" if weekday_long else "")
+    return f"{t.tm_mon}월 {t.tm_mday}일 ({wd})" if not weekday_long else f"{t.tm_mon}월 {t.tm_mday}일 {wd}"
+
+
+def icon_image(names, size):
+    """names 는 문자열 또는 후보 목록. 처음 찾아지는 것을 쓴다."""
+    if isinstance(names, str):
+        names = [names]
+    img = Gtk.Image()
+    img.set_pixel_size(size)
+    theme = Gtk.IconTheme.get_default()
+    for n in names:
+        if not n:
+            continue
+        if n.startswith("/") and os.path.exists(n):
+            img.set_from_file(n)
+            return img
+        if theme.has_icon(n):
+            img.set_from_icon_name(n, Gtk.IconSize.MENU)
+            return img
+    img.set_from_icon_name("application-x-executable", Gtk.IconSize.MENU)
+    return img
+
+
+# ───────────────────────────────────────────────────────────────
+# 시작 메뉴 — 윈도우 10 스타일
+#   [좌측 레일] [모든 앱 목록(알파벳 그룹)] [고정 타일]
+# ───────────────────────────────────────────────────────────────
+
+# 고정 타일 기본값: (표시이름, .desktop 이름 후보들, 아이콘 후보들)
+DEFAULT_PINS = [
+    ("파일",     ["thunar", "pcmanfm", "org.gnome.nautilus"],               ["system-file-manager", "folder"]),
+    ("웹",       ["google-chrome", "chromium", "firefox-esr"],             ["chromium", "web-browser"]),
+    ("터미널",   ["foot", "footclient"],                                    ["utilities-terminal"]),
+    ("편집기",   ["org.xfce.mousepad", "mousepad", "org.gnome.texteditor"], ["accessories-text-editor"]),
+    ("계산기",   ["galculator", "org.gnome.calculator"],                    ["accessories-calculator"]),
+    ("설정",     ["sekai-settings"],                                        ["preferences-system"]),
+]
+
+
+class StartMenu(Gtk.Window):
+    W, H = 720, 600
+
+    def __init__(self, hypr):
+        super().__init__(type=Gtk.WindowType.TOPLEVEL)
+        self.hypr = hypr
+        self.apps = []
+        self.get_style_context().add_class("start-menu")
+        make_translucent(self)
+
+        GtkLayerShell.init_for_window(self)
+        GtkLayerShell.set_namespace(self, "sekai-menu")      # 뒤를 흐리게 (hyprland layerrule)
+        GtkLayerShell.set_layer(self, GtkLayerShell.Layer.OVERLAY)
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.BOTTOM, True)
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.LEFT, True)
+        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.BOTTOM, 10)
+        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.LEFT, 10)
+        GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.ON_DEMAND)
+        self.set_size_request(self.W, self.H)
+
+        self.catcher = ClickCatcher(self.close)
+
+        root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        root.get_style_context().add_class("menu-root")
+        self.add(root)
+
+        root.pack_start(self._build_rail(), False, False, 0)
+        root.pack_start(self._build_applist(), False, False, 0)
+        root.pack_start(self._build_tiles(), True, True, 0)
+
+        self.connect("key-press-event", self.on_key)
+
+    # ── 좌측 레일 ────────────────────────────────────────
+    def _build_rail(self):
+        rail = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        rail.get_style_context().add_class("rail")
+
+        mark = Gtk.DrawingArea()
+        mark.set_size_request(24, 24)
+        mark.connect("draw", self._draw_mark)
+        mark.set_margin_top(6)
+        mark.set_margin_bottom(16)
+        rail.pack_start(mark, False, False, 0)
+
+        def rail_btn(icons, tip, cb, cls=""):
+            b = Gtk.Button()
+            b.set_tooltip_text(tip)
+            b.get_style_context().add_class("rail-btn")
+            if cls:
+                b.get_style_context().add_class(cls)
+            b.add(icon_image(icons, 20))
+            b.connect("clicked", lambda *_: cb())
+            return b
+
+        rail.pack_start(rail_btn(["user-home-symbolic", "go-home-symbolic"],
+                                 os.environ.get("USER", "user"),
+                                 lambda: self._run(sekai_conf("apps", "files", "thunar"))), False, False, 0)
+        rail.pack_start(rail_btn(["folder-documents-symbolic", "folder-symbolic"],
+                                 "문서",
+                                 lambda: self._run(sekai_conf("apps", "files", "thunar") + " "
+                                                   + os.path.expanduser("~/Documents"))),
+                        False, False, 0)
+        rail.pack_start(rail_btn(["emblem-system-symbolic", "preferences-system-symbolic"],
+                                 "설정",
+                                 lambda: self._run("sekai-settings")), False, False, 0)
+
+        rail.pack_end(rail_btn(["system-shutdown-symbolic", "system-shutdown"],
+                               "전원", self._toggle_power, "rail-power"),
+                      False, False, 0)
+        return rail
+
+    # ── 가운데: 모든 앱 ──────────────────────────────────
+    def _build_applist(self):
+        col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        col.get_style_context().add_class("applist-col")
+        col.set_size_request(320, -1)
+
+        self.search = Gtk.SearchEntry()
+        self.search.set_placeholder_text("앱 검색")
+        self.search.get_style_context().add_class("menu-search")
+        self.search.connect("search-changed", lambda *_: self.refill())
+        self.search.connect("activate", self.on_activate_first)
+        self.search.connect("stop-search", lambda *_: self.close())
+        col.pack_start(self.search, False, False, 0)
+
+        lbl = Gtk.Label(label="모든 앱", xalign=0)
+        lbl.get_style_context().add_class("section-title")
+        col.pack_start(lbl, False, False, 0)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_vexpand(True)
+        self.listbox = Gtk.ListBox()
+        self.listbox.get_style_context().add_class("app-list")
+        self.listbox.set_header_func(self._letter_header, None)
+        self.listbox.connect("row-activated", self.on_row)
+        scroll.add(self.listbox)
+        col.pack_start(scroll, True, True, 0)
+        return col
+
+    def _letter_header(self, row, before, _d):
+        """알파벳이 바뀌는 지점에 글자 머리표를 넣는다 (윈도우 10 방식)"""
+        if not hasattr(row, "app"):
+            return
+        cur = index_letter(row.app["name"])
+        prev = index_letter(before.app["name"]) if before is not None and hasattr(before, "app") else None
+        if cur != prev:
+            h = Gtk.Label(label=cur, xalign=0)
+            h.get_style_context().add_class("letter-header")
+            h.show_all()
+            row.set_header(h)
+        else:
+            row.set_header(None)
+
+    # ── 우측: 고정 타일 ──────────────────────────────────
+    def _build_tiles(self):
+        col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        col.get_style_context().add_class("tiles-col")
+
+        lbl = Gtk.Label(label="고정됨", xalign=0)
+        lbl.get_style_context().add_class("section-title")
+        col.pack_start(lbl, False, False, 0)
+
+        self.flow = Gtk.FlowBox()
+        self.flow.get_style_context().add_class("tiles")
+        self.flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.flow.set_min_children_per_line(3)
+        self.flow.set_max_children_per_line(3)
+        self.flow.set_homogeneous(True)
+        col.pack_start(self.flow, False, False, 0)
+
+        # 전원 패널 (레일의 전원 버튼으로 토글)
+        self.power_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.power_box.get_style_context().add_class("power-panel")
+        self.power_box.set_no_show_all(True)
+        for label, cls, icon, action in (
+            ("잠금",        "pw-lock",   "system-lock-screen-symbolic", lambda: subprocess.Popen(["sekai-lock"])),
+            ("로그아웃",    "pw-exit",   "system-log-out-symbolic",     lambda: self.hypr.dispatch("exit")),
+            ("다시 시작",   "pw-reboot", "system-reboot-symbolic",      lambda: subprocess.Popen(["systemctl", "reboot"])),
+            ("시스템 종료", "pw-off",    "system-shutdown-symbolic",    lambda: subprocess.Popen(["systemctl", "poweroff"])),
+        ):
+            b = Gtk.Button()
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            row.pack_start(icon_image(icon, 16), False, False, 0)
+            row.pack_start(Gtk.Label(label=label, xalign=0), True, True, 0)
+            b.add(row)
+            b.get_style_context().add_class("power-btn")
+            b.get_style_context().add_class(cls)
+            b.connect("clicked", lambda _w, a=action: (self.close(), a()))
+            self.power_box.pack_start(b, False, False, 0)
+        col.pack_end(self.power_box, False, False, 0)
+        return col
+
+    def _toggle_power(self):
+        if self.power_box.get_visible():
+            self.power_box.hide()
+        else:
+            self.power_box.show()
+            for c in self.power_box.get_children():
+                c.show()
+
+    # ── 동작 ─────────────────────────────────────────────
+    def _run(self, cmd):
+        self.close()
+        try:
+            subprocess.Popen(shlex.split(cmd), start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+    def _draw_mark(self, widget, cr):
+        a = widget.get_allocation()
+        size = min(a.width, a.height)
+        cr.translate((a.width - size) / 2, (a.height - size) / 2)
+        draw_logo(cr, size)
+        return False
+
+    def on_key(self, _w, ev):
+        if ev.keyval == Gdk.KEY_Escape:
+            self.close()
+            return True
+        return False
+
+    def close(self):
+        self.power_box.hide()
+        self.hide()
+        self.catcher.hide()
+
+    def present_menu(self):
+        self.apps = load_apps()
+        self.search.set_text("")
+        self.refill()
+        self.fill_tiles()
+        self.power_box.hide()
+        self.catcher.show_all()
+        self.show_all()
+        self.power_box.hide()
+        self.present()
+        self.search.grab_focus()
+
+    def fill_tiles(self):
+        for c in self.flow.get_children():
+            self.flow.remove(c)
+        # 표시 이름만으로 찾으면 'Thunar File Manager' 같은 걸 놓친다.
+        # .desktop 파일 ID(thunar, org.xfce.mousepad …)를 먼저 본다.
+        by_key = {}
+        for a in self.apps:
+            by_key.setdefault(a["name"].lower(), a)
+            by_key[a["id"]] = a
+        for label, cands, icons in DEFAULT_PINS:
+            app = next((by_key[c] for c in cands if c in by_key), None)
+            if not app:
+                continue
+            btn = Gtk.Button()
+            btn.get_style_context().add_class("tile")
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            box.pack_start(icon_image(app["icon"] or icons[0], 32), False, False, 0)
+            t = Gtk.Label(label=label)
+            t.set_ellipsize(Pango.EllipsizeMode.END)
+            box.pack_start(t, False, False, 0)
+            btn.add(box)
+            btn.set_tooltip_text(app["name"])
+            btn.connect("clicked", lambda _w, a=app: (self.close(), launch(a)))
+            self.flow.add(btn)
+        self.flow.show_all()
+
+    def refill(self):
+        q = self.search.get_text().strip().lower()
+        for child in self.listbox.get_children():
+            self.listbox.remove(child)
+        for app in self.apps:
+            if q and q not in app["name"].lower() and q not in app["comment"].lower() \
+                    and q not in app.get("name_en", "").lower():
+                continue
+            row = Gtk.ListBoxRow()
+            row.app = app
+            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            box.get_style_context().add_class("app-row")
+            box.pack_start(icon_image(app["icon"], 24), False, False, 0)
+            lbl = Gtk.Label(label=app["name"], xalign=0)
+            lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            box.pack_start(lbl, True, True, 0)
+            row.add(box)
+            self.listbox.add(row)
+        self.listbox.invalidate_headers()
+        self.listbox.show_all()
+
+    def on_row(self, _lb, row):
+        if not hasattr(row, "app"):
+            return
+        launch(row.app)
+        self.close()
+
+    def on_activate_first(self, _entry):
+        rows = [r for r in self.listbox.get_children() if hasattr(r, "app")]
+        if rows:
+            self.on_row(self.listbox, rows[0])
+
+
+# ───────────────────────────────────────────────────────────────
+# 패널
+# ───────────────────────────────────────────────────────────────
+class Panel(Gtk.Window):
+    def __init__(self, hypr):
+        super().__init__(type=Gtk.WindowType.TOPLEVEL)
+        self.hypr = hypr
+        self.menu = StartMenu(hypr)
+        self.get_style_context().add_class("panel")
+        make_translucent(self)
+
+        GtkLayerShell.init_for_window(self)
+        GtkLayerShell.set_namespace(self, "sekai-panel")     # 뒤를 흐리게 (hyprland layerrule)
+        GtkLayerShell.set_layer(self, GtkLayerShell.Layer.TOP)
+        for edge in (GtkLayerShell.Edge.BOTTOM, GtkLayerShell.Edge.LEFT, GtkLayerShell.Edge.RIGHT):
+            GtkLayerShell.set_anchor(self, edge, True)
+        GtkLayerShell.auto_exclusive_zone_enable(self)
+        self.set_size_request(-1, int(sekai_conf("panel", "height", PANEL_HEIGHT)))
+
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        bar.get_style_context().add_class("bar")
+        self.add(bar)
+
+        # ── 시작 버튼 ──
+        self.start_btn = Gtk.Button()
+        self.start_btn.get_style_context().add_class("start-btn")
+        logo = Gtk.DrawingArea()
+        logo.set_size_request(24, 24)
+        logo.set_valign(Gtk.Align.CENTER)      # 바 높이 안에서 세로 중앙
+        logo.set_halign(Gtk.Align.CENTER)
+        logo.connect("draw", self.draw_logo)
+        self.start_btn.add(logo)
+        self.start_btn.set_valign(Gtk.Align.CENTER)
+        self.start_btn.connect("clicked", self.toggle_menu)
+        bar.pack_start(self.start_btn, False, False, 0)
+
+        # ── 작업 표시줄 ──
+        self.tasks = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self.tasks.get_style_context().add_class("tasks")
+        bar.pack_start(self.tasks, True, True, 0)
+
+        # ── 시스템 영역 ──
+        sys_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+        sys_box.get_style_context().add_class("sysbox")
+
+        # ── 트레이 (StatusNotifierItem) ──
+        #   Watcher 와 Host 를 우리가 직접 구현한다. 없으면 앱들이
+        #   트레이 아이콘을 아예 만들지 않는다.
+        self.tray = TrayBox(icon_size=18)
+        sys_box.pack_start(self.tray, False, False, 0)
+
+        # ── 알림 ──
+        self.noti_btn = Gtk.Button()
+        nb = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        self.noti_icon = icon_image("notifications-symbolic", 16)
+        nb.pack_start(self.noti_icon, False, False, 0)
+        self.noti_badge = Gtk.Label(label="")
+        self.noti_badge.get_style_context().add_class("noti-badge")
+        self.noti_badge.set_valign(Gtk.Align.CENTER)
+        self.noti_badge.set_no_show_all(True)
+        nb.pack_start(self.noti_badge, False, False, 0)
+        self.noti_btn.add(nb)
+        self.noti_btn.get_style_context().add_class("sys-item")
+        self.noti_btn.get_style_context().add_class("noti-btn")
+        self.noti_btn.set_valign(Gtk.Align.CENTER)
+        self.noti_btn.set_tooltip_text("알림")
+        sys_box.pack_start(self.noti_btn, False, False, 0)
+
+        self.notifications = NotificationService(
+            on_count_changed=self._on_noti_count)
+        if self.notifications.center is not None:
+            self.noti_btn.connect(
+                "clicked", lambda *_: self.notifications.center.toggle())
+        self._on_noti_count(self.notifications.unread,
+                            len(self.notifications.history),
+                            self.notifications.dnd)
+
+        self.vol_popup = self._build_vol_popup()
+        self.vol = Gtk.Button()
+        self.vol_icon = icon_image("audio-volume-high-symbolic", 16)
+        self.vol.add(self.vol_icon)
+        self.vol.get_style_context().add_class("sys-item")
+        self.vol.set_valign(Gtk.Align.CENTER)
+        self.vol.connect("clicked", lambda *_: self.vol_popup.toggle())
+        self.vol.add_events(Gdk.EventMask.SCROLL_MASK | Gdk.EventMask.SMOOTH_SCROLL_MASK)
+        self.vol.connect("scroll-event", self._on_vol_scroll)
+        sys_box.pack_start(self.vol, False, False, 0)
+
+        # 네트워크 표시는 트레이의 nm-applet 아이콘이 맡는다
+        #   (연결 상태·연결 메뉴·Wi-Fi 암호 입력까지). 전에는 여기에
+        #   인터페이스 이름(ens33 등)을 글자로 찍었는데 사용자에겐 의미가 없었다.
+
+        self.cal_popup = self._build_cal_popup()
+        self.clock_btn = Gtk.Button()
+        self.clock_btn.get_style_context().add_class("clock")
+        cb = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        cb.set_valign(Gtk.Align.CENTER)
+        self.clock = Gtk.Label(label="--:--", xalign=1)
+        self.clock.get_style_context().add_class("clock-time")
+        self.clock_date = Gtk.Label(label="", xalign=1)
+        self.clock_date.get_style_context().add_class("clock-date")
+        cb.pack_start(self.clock, False, False, 0)
+        cb.pack_start(self.clock_date, False, False, 0)
+        self.clock_btn.add(cb)
+        self.clock_btn.set_valign(Gtk.Align.CENTER)
+        self.clock_btn.connect("clicked", lambda *_: self.cal_popup.toggle())
+        sys_box.pack_start(self.clock_btn, False, False, 0)
+
+        bar.pack_end(sys_box, False, False, 0)
+
+        # ── 갱신 ──
+        self.rebuild_tasks()
+        self.update_sys()
+        GLib.timeout_add_seconds(1, self.tick_clock)
+        GLib.timeout_add_seconds(5, self.update_sys)
+        self.event_hooks = []
+        hypr.subscribe(self.on_hypr_event)
+        self.tick_clock()
+
+    # ── 알림 버튼 표시 ──────────────────────────────────
+    def _on_noti_count(self, unread, total, dnd):
+        ctx = self.noti_btn.get_style_context()
+        (ctx.add_class if dnd else ctx.remove_class)("dnd")
+        (ctx.add_class if unread else ctx.remove_class)("unread")
+        self.noti_icon.set_from_icon_name(
+            "notifications-disabled-symbolic" if dnd else "notifications-symbolic",
+            Gtk.IconSize.MENU)
+        if unread and not dnd:
+            self.noti_badge.set_text(str(min(unread, 99)))
+            self.noti_badge.show()
+        else:
+            self.noti_badge.hide()
+        self.noti_btn.set_tooltip_text(
+            "방해 금지" if dnd else
+            (f"읽지 않은 알림 {unread}개" if unread else f"알림 {total}개"))
+
+    # ── 볼륨 팝업 ───────────────────────────────────────
+    def _build_vol_popup(self):
+        pop = PanelPopup(GtkLayerShell.Edge.RIGHT, margin=10)
+        box = pop.root
+        box.set_spacing(12)
+        box.set_size_request(300, -1)
+
+        head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        t = Gtk.Label(label="음량", xalign=0)
+        t.get_style_context().add_class("pop-title")
+        head.pack_start(t, True, True, 0)
+        self.vol_value = Gtk.Label(label="", xalign=1)
+        self.vol_value.get_style_context().add_class("pop-value")
+        head.pack_end(self.vol_value, False, False, 0)
+        box.pack_start(head, False, False, 0)
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.mute_btn = Gtk.ToggleButton()
+        self.mute_btn.get_style_context().add_class("icon-btn")
+        self.mute_icon = icon_image("audio-volume-high-symbolic", 16)
+        self.mute_btn.add(self.mute_icon)
+        self.mute_btn.set_tooltip_text("음소거")
+        self.mute_btn.set_valign(Gtk.Align.CENTER)
+        self.mute_btn.connect("toggled", self._on_mute)
+        row.pack_start(self.mute_btn, False, False, 0)
+
+        self.vol_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+        self.vol_scale.set_draw_value(False)
+        self.vol_scale.connect("value-changed", self._on_vol_scale)
+        row.pack_start(self.vol_scale, True, True, 0)
+        box.pack_start(row, False, False, 0)
+
+        mix = Gtk.Button(label="소리 설정")
+        mix.get_style_context().add_class("pop-btn")
+        mix.set_halign(Gtk.Align.END)
+        mix.connect("clicked", lambda *_: (pop.close(),
+                    subprocess.Popen(["sekai-settings", "--page=sound"], start_new_session=True,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)))
+        box.pack_start(mix, False, False, 0)
+
+        pop.on_open = self._sync_vol_popup
+        return pop
+
+    def _sync_vol_popup(self):
+        try:
+            out = subprocess.run(["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"],
+                                 capture_output=True, text=True, timeout=1).stdout
+            v = float(out.split()[1]) if len(out.split()) > 1 else 0.0
+            self._vol_guard = True
+            self.vol_scale.set_value(round(v * 100))
+            muted = "MUTED" in out
+            self.mute_btn.set_active(muted)
+            self.mute_icon.set_from_icon_name(
+                "audio-volume-muted-symbolic" if muted else "audio-volume-high-symbolic",
+                Gtk.IconSize.MENU)
+            self.vol_value.set_text("음소거" if muted else f"{round(v * 100)}%")
+            self._vol_guard = False
+        except Exception:
+            pass
+
+    def _on_vol_scale(self, sc):
+        if getattr(self, "_vol_guard", False):
+            return
+        subprocess.Popen(["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@",
+                          f"{int(sc.get_value())}%"])
+        self.vol_value.set_text(f"{int(sc.get_value())}%")
+        GLib.timeout_add(150, self.update_sys)
+
+    def _on_vol_scroll(self, _w, ev):
+        step = 0
+        if ev.direction == Gdk.ScrollDirection.UP:
+            step = 5
+        elif ev.direction == Gdk.ScrollDirection.DOWN:
+            step = -5
+        elif ev.direction == Gdk.ScrollDirection.SMOOTH:
+            ok, _dx, dy = ev.get_scroll_deltas()
+            step = -5 if dy > 0 else (5 if dy < 0 else 0)
+        if step:
+            subprocess.Popen(["wpctl", "set-volume", "-l", "1.0", "@DEFAULT_AUDIO_SINK@",
+                              f"{abs(step)}%{'+' if step > 0 else '-'}"])
+            GLib.timeout_add(120, self.update_sys)
+        return True
+
+    def _on_mute(self, btn):
+        if getattr(self, "_vol_guard", False):
+            return
+        subprocess.Popen(["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@",
+                          "1" if btn.get_active() else "0"])
+        GLib.timeout_add(150, self.update_sys)
+        GLib.timeout_add(200, lambda: (self._sync_vol_popup(), False)[1])
+
+    # ── 달력 팝업 ───────────────────────────────────────
+    def _build_cal_popup(self):
+        pop = PanelPopup(GtkLayerShell.Edge.RIGHT, margin=10)
+        box = pop.root
+        box.set_spacing(10)
+        box.set_size_request(300, -1)
+
+        self.cal_date = Gtk.Label(xalign=0)
+        self.cal_date.get_style_context().add_class("pop-title")
+        box.pack_start(self.cal_date, False, False, 0)
+        self.cal_year = Gtk.Label(xalign=0)
+        self.cal_year.get_style_context().add_class("pop-subtitle")
+        box.pack_start(self.cal_year, False, False, 0)
+
+        self.calendar = Gtk.Calendar()
+        self.calendar.get_style_context().add_class("calendar")
+        box.pack_start(self.calendar, False, False, 0)
+
+        today = Gtk.Button(label="오늘")
+        today.get_style_context().add_class("pop-btn")
+        today.set_halign(Gtk.Align.END)
+        today.connect("clicked", lambda *_: self._cal_today())
+        box.pack_start(today, False, False, 0)
+
+        pop.on_open = self._cal_today
+        return pop
+
+    def _cal_today(self):
+        t = time.localtime()
+        self.calendar.select_month(t.tm_mon - 1, t.tm_year)
+        self.calendar.select_day(t.tm_mday)
+        self.cal_date.set_text(korean_date(t, weekday_long=True))
+        self.cal_year.set_text(f"{t.tm_year}년")
+
+    # ── 워크스페이스 ────────────────────────────────────
+    def rebuild_workspaces(self):
+        # 작업 표시줄에서는 제거됨. 별도 워크스페이스 UI 에서 재사용 예정.
+        if not hasattr(self, "wsbox"):
+            return False
+        for c in self.wsbox.get_children():
+            self.wsbox.remove(c)
+        wss = self.hypr.query("workspaces") or []
+        active = (self.hypr.query("activeworkspace") or {}).get("id")
+        used = {w["id"] for w in wss if w.get("windows", 0) > 0 and w.get("id", 0) > 0}
+        for i in range(1, 6):
+            b = Gtk.Button(label=str(i))
+            ctx = b.get_style_context()
+            ctx.add_class("ws-btn")
+            if i == active:
+                ctx.add_class("active")
+            elif i in used:
+                ctx.add_class("used")
+            b.connect("clicked", lambda _w, n=i: self.hypr.dispatch(f"workspace {n}"))
+            self.wsbox.pack_start(b, False, False, 0)
+        self.wsbox.show_all()
+        return False
+
+    def draw_logo(self, widget, cr):
+        a = widget.get_allocation()
+        size = min(a.width, a.height)
+        cr.translate((a.width - size) / 2, (a.height - size) / 2)
+        draw_logo(cr, size)
+        return False
+
+    def toggle_menu(self, *_):
+        if self.menu.get_visible():
+            self.menu.close()
+        else:
+            self.menu.present_menu()
+
+    # ── Hyprland 이벤트 ──
+    def on_hypr_event(self, name, _arg):
+        for fn in self.event_hooks:
+            try:
+                fn(name, _arg)
+            except Exception as e:
+                dbg("이벤트 훅 오류", name, e)
+        # 폴백: 사용자가 다른 창을 클릭하면 포커스 이벤트가 온다 → 메뉴 닫기
+        if name in ("activewindow", "activewindowv2", "openwindow") and self.menu.get_visible():
+            GLib.idle_add(self.menu.close)
+        if name in ("openwindow", "closewindow", "activewindow", "activewindowv2",
+                    "movewindow", "movewindowv2", "windowtitle", "windowtitlev2",
+                    "workspace", "activespecial", "fullscreen", "changefloatingmode"):
+            GLib.idle_add(self.rebuild_tasks)
+
+    def rebuild_tasks(self):
+        for c in self.tasks.get_children():
+            self.tasks.remove(c)
+        clients = self.hypr.query("clients") or []
+        active = self.hypr.query("activewindow") or {}
+        active_addr = active.get("address") if isinstance(active, dict) else None
+
+        for c in clients:
+            ws = c.get("workspace", {}) or {}
+            # 워크스페이스 id 가 음수 = 특수 워크스페이스 = 우리 기준 "최소화"
+            minimized = ws.get("id", 0) < 0
+            cls = c.get("class") or ""
+            title = (c.get("title") or "").strip()
+            # 제목이 비었거나 클래스와 같으면 클래스를 보기 좋게
+            label = title if title and title.lower() != cls.lower() else (cls[:1].upper() + cls[1:])
+            addr = c.get("address")
+
+            btn = Gtk.Button()
+            btn.get_style_context().add_class("task-btn")
+            btn.set_valign(Gtk.Align.CENTER)
+            if minimized:
+                btn.get_style_context().add_class("minimized")
+            elif addr == active_addr:
+                btn.get_style_context().add_class("active")
+            btn.set_tooltip_text(f"{cls}\n{title}" if title else cls)
+
+            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            box.pack_start(app_icon(cls, 20), False, False, 0)
+            lbl = Gtk.Label(label=label or "?", xalign=0)
+            lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            lbl.set_max_width_chars(20)
+            box.pack_start(lbl, True, True, 0)
+            btn.add(box)
+
+            btn.connect("clicked", self.on_task_activate, addr, minimized,
+                        addr == active_addr)
+            # 우클릭 / 가운데클릭 = 창 닫기
+            btn.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+            btn.connect("button-press-event", self.on_task_click, addr)
+            self.tasks.pack_start(btn, False, False, 0)
+        self.tasks.show_all()
+        return False
+
+    def on_task_activate(self, _w, addr, minimized, is_active):
+        """윈도우 작업 표시줄과 같은 동작:
+             최소화됨   → 복원 + 포커스
+             활성 창     → 최소화
+             그 외       → 포커스
+        """
+        if minimized:
+            self.restore_window(addr)
+        elif is_active:
+            self.hypr.dispatch(f"movetoworkspacesilent special:min,address:{addr}")
+        else:
+            self.hypr.dispatch(f"focuswindow address:{addr}")
+        GLib.timeout_add(120, self.rebuild_tasks)
+
+    def restore_window(self, addr):
+        """최소화(special:min)된 창을 지금 워크스페이스로 되돌리고 초점"""
+        cur = self.hypr.query("activeworkspace") or {}
+        wid = cur.get("id", 1)
+        self.hypr.dispatch(f"movetoworkspace {wid},address:{addr}")
+        self.hypr.dispatch(f"focuswindow address:{addr}")
+        GLib.timeout_add(120, self.rebuild_tasks)
+
+    def on_task_click(self, _w, ev, addr):
+        if ev.button in (2, 3):                      # 가운데 / 오른쪽
+            self.hypr.dispatch(f"closewindow address:{addr}")
+            return True
+        return False
+
+    # ── 시스템 정보 ──
+    def tick_clock(self):
+        t = time.localtime()
+        self.clock.set_text(time.strftime(
+            sekai_conf("panel", "clock_format", "%H:%M") or "%H:%M", t))
+        self.clock_date.set_text(korean_date(t))
+        self.clock_btn.set_tooltip_text(time.strftime("%Y년 ", t) + korean_date(t, True))
+        return True
+
+    def update_sys(self):
+        # 볼륨
+        try:
+            out = subprocess.run(["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"],
+                                 capture_output=True, text=True, timeout=1).stdout
+            muted = "MUTED" in out
+            v = float(out.split()[1]) if len(out.split()) > 1 else 0.0
+            pct = int(round(v * 100))
+            if muted or pct == 0:
+                name = "audio-volume-muted-symbolic"
+            elif pct < 34:
+                name = "audio-volume-low-symbolic"
+            elif pct < 67:
+                name = "audio-volume-medium-symbolic"
+            else:
+                name = "audio-volume-high-symbolic"
+            self.vol_icon.set_from_icon_name(name, Gtk.IconSize.MENU)
+            self.vol.set_tooltip_text("음소거" if muted else f"음량 {pct}%")
+            ctx = self.vol.get_style_context()
+            (ctx.add_class if muted else ctx.remove_class)("muted")
+        except Exception:
+            self.vol.set_tooltip_text("음량")
+        return True
+
+
+# ───────────────────────────────────────────────────────────────
+def main():
+    import signal
+
+    # style.css 는 @accent / @bg / @surface / @fg 를 쓴다.
+    # 그 정의는 설정 파일에서 읽어 앞에 붙인다.
+    css_paths = (os.path.join(HERE, "style.css"),
+                 "/usr/share/sekai-shell/style.css")
+    css_holder = {"prov": None}
+
+    def load_css():
+        refresh_logo_colors()
+        body = ""
+        for path in css_paths:
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as f:
+                    body = f.read()
+                break
+        # 사용자가 직접 덧붙이고 싶을 때
+        user = os.path.expanduser("~/.config/sekai/panel.css")
+        if os.path.exists(user):
+            with open(user, encoding="utf-8") as f:
+                body += "\n" + f.read()
+        prov = Gtk.CssProvider()
+        try:
+            prov.load_from_data((css_prelude() + body).encode())
+        except Exception as e:
+            dbg("CSS 오류:", e)
+            return
+        if css_holder["prov"] is not None:
+            Gtk.StyleContext.remove_provider_for_screen(
+                Gdk.Screen.get_default(), css_holder["prov"])
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_USER)
+        css_holder["prov"] = prov
+
+    load_css()
+
+    # 아이콘 테마 — 다크 배경에 맞는 것을 우선
+    st = Gtk.Settings.get_default()
+    for cand in ("Papirus-Dark", "Papirus", "Adwaita"):
+        if os.path.isdir(f"/usr/share/icons/{cand}"):
+            st.set_property("gtk-icon-theme-name", cand)
+            dbg(f"icon theme: {cand}")
+            break
+
+    hypr = Hypr()
+    panel = Panel(hypr)
+    panel.show_all()
+
+    # ── 창 전환기 · OSD · 클립보드 · 창 배치 — org.sekai.Shell 로 부른다 (sekai-ctl) ──
+    switcher = Switcher(hypr, on_restore=panel.restore_window)
+    osd = Osd(bottom_margin=int(sekai_conf("panel", "height", PANEL_HEIGHT)) + 24)
+    clip = ClipboardPopup(hypr)
+    clip.set_panel_height(int(sekai_conf("panel", "height", PANEL_HEIGHT)))
+    wm = WindowManager(hypr)
+    panel.event_hooks.append(wm.on_event)
+
+    def volume(action):
+        osd.volume(action)
+        panel.update_sys()
+
+    panel.updates = UpdateNotifier()
+
+    panel.shell = ShellService({
+        "Switch": switcher.step,
+        "SwitchCommit": switcher.commit,
+        "Volume": volume,
+        "Brightness": osd.brightness,
+        "Snap": wm.snap,
+        "Clipboard": clip.toggle,
+        "StartMenu": panel.toggle_menu,
+        "NotificationCenter": lambda: (getattr(panel.notifications, "center", None)
+                                       or panel.cal_popup).toggle(),
+        "Osd": osd.show_text,
+    })
+
+    # SIGUSR1 = 시작 메뉴 토글
+    #   Hyprland 키바인딩에서:  bind = SUPER, Super_L, exec, pkill -USR1 -f sekai-panel
+    def on_usr1(*_):
+        GLib.idle_add(panel.toggle_menu)
+        return True
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1, on_usr1)
+
+    # SIGUSR2 = 알림 센터 토글  (pkill -USR2 -f sekai-panel)
+    #   달력은 시계를 누르면 열리므로 단축키는 알림 센터에 준다.
+    def on_usr2(*_):
+        c = getattr(panel.notifications, "center", None)
+        GLib.idle_add(c.toggle if c is not None else panel.cal_popup.toggle)
+        return True
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR2, on_usr2)
+
+    # SIGHUP = 설정이 바뀌었다 (sekai-settings 가 보낸다) → CSS 다시 적용
+    def on_hup(*_):
+        def reload_():
+            # 패널은 D-Bus 이름(알림 데몬, 트레이 워처)을 쥐고 있으므로
+            # 재시작하지 않고 제자리에서 크기를 바꾼다.
+            new_h = int(sekai_conf("panel", "height", PANEL_HEIGHT))
+            osd.set_bottom(new_h + 24)
+            clip.set_panel_height(new_h)
+            if new_h != panel.get_size_request()[1]:
+                dbg("패널 높이 변경", new_h)
+                panel.set_size_request(-1, new_h)
+                GtkLayerShell.auto_exclusive_zone_enable(panel)
+            load_css()
+            # 방해 금지는 설정 앱에서도 바꿀 수 있다 — 상태를 다시 읽는다
+            try:
+                from sekaishell import config as _c
+                svc = panel.notifications
+                dnd = bool(_c.state("dnd", False))
+                if dnd != svc.dnd:
+                    svc.set_dnd(dnd)
+            except Exception as e:
+                dbg("방해 금지 상태 갱신 실패:", e)
+            panel.queue_draw()
+            return False
+        GLib.idle_add(reload_)
+        return True
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGHUP, on_hup)
+
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    main()

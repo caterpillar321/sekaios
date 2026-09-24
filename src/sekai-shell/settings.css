@@ -1,0 +1,270 @@
+/* ═══════════════════════════════════════════════════════════════
+   SekaiOS 설정 — 스타일
+   @accent / @bg / @surface / @fg 는 프로그램이 settings.json 에서 읽어
+   앞에 붙여 준다. 나머지는 셸(style.css)과 같은 규칙으로 파생한다.
+   ═══════════════════════════════════════════════════════════════ */
+
+@define-color winbg     mix(@surface, @fg, 0.02);   /* 창 바탕           */
+@define-color sidebar   @surface;                   /* 왼쪽 목록         */
+@define-color card      mix(@surface, @fg, 0.07);   /* 항목 카드         */
+@define-color hover     mix(@surface, @fg, 0.12);
+@define-color pressed   mix(@surface, @fg, 0.16);
+@define-color line      alpha(@fg, 0.07);
+@define-color text2     mix(@fg, @surface, 0.28);
+@define-color text3     mix(@fg, @surface, 0.48);
+@define-color on_accent mix(@accent, #000000, 0.82);
+
+* {
+    font-family: "Pretendard", "Pretendard Variable", "NanumGothic", sans-serif;
+    font-size: 14px;
+    -gtk-icon-shadow: none;
+    text-shadow: none;
+}
+
+.settings-window { background: @winbg; color: @fg; }
+
+/* ── 왼쪽 목록 ─────────────────────────────────────────────── */
+.sidebar {
+    background: @sidebar;
+    border-right: 1px solid @line;
+}
+.side-head  { padding: 20px 20px 14px 20px; }
+.side-title { font-size: 18px; font-weight: 700; color: @fg; }
+
+.side-search {
+    margin: 0 14px 12px 14px;
+    background: @card;
+    border: 1px solid @line;
+    border-bottom: 2px solid @line;
+    border-radius: 8px;
+    color: @fg;
+    caret-color: @accent;
+    padding: 6px 10px;
+    box-shadow: none;
+}
+.side-search:focus { border-bottom-color: @accent; }
+.side-search image { color: @text3; }
+
+.side-list, .side-list row { background: transparent; }
+.side-row {
+    padding: 9px 12px;
+    margin: 1px 10px;
+    border-radius: 8px;
+}
+.side-row label { color: @text2; }
+.side-row:hover { background: @hover; }
+.side-row:hover label { color: @fg; }
+.side-row:selected, .side-list row:selected {
+    background-color: @card;
+    background-image: linear-gradient(@accent, @accent);
+    background-size: 3px 16px;
+    background-position: 0% 50%;
+    background-repeat: no-repeat;
+}
+.side-row:selected label { color: @fg; font-weight: 600; }
+
+.side-foot {
+    padding: 12px 20px;
+    font-size: 11px;
+    color: @text3;
+}
+
+/* ── 오른쪽 내용 ───────────────────────────────────────────── */
+.content { background: @winbg; }
+.page    { padding: 28px 36px 48px 36px; }
+
+.page-title { font-size: 28px; font-weight: 700; color: @fg; margin-bottom: 4px; }
+.page-sub   { font-size: 14px; color: @text2; margin-bottom: 20px; }
+
+.section-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: @fg;
+    margin: 22px 2px 8px 2px;
+}
+
+.section {
+    background: transparent;
+    border: none;
+}
+/* 행마다 카드 — 윈도우 11 설정처럼 행 사이에 2px 틈 */
+.section row {
+    background: @card;
+    border: 1px solid @line;
+    border-radius: 8px;
+    margin-bottom: 3px;
+    padding: 14px 18px;
+    min-height: 40px;
+}
+.section row:hover { background: mix(@card, @fg, 0.03); }
+
+.row-title { font-size: 14px; color: @fg; }
+.row-sub   { font-size: 12px; color: @text2; }
+.row-value {
+    font-size: 13px;
+    color: @text2;
+    font-feature-settings: "tnum";
+}
+
+.notice {
+    background: alpha(@accent, 0.10);
+    border: 1px solid alpha(@accent, 0.28);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 12px 0;
+    color: @fg;
+    font-size: 13px;
+}
+.notice label { color: @fg; }
+
+/* ── 컨트롤 ────────────────────────────────────────────────── */
+button {
+    background: @hover;
+    background-image: none;
+    border: 1px solid @line;
+    border-radius: 6px;
+    color: @fg;
+    padding: 6px 16px;
+    box-shadow: none;
+}
+button:hover  { background: @pressed; }
+button:active { background: alpha(@accent, 0.25); }
+button:disabled { color: @text3; }
+
+entry {
+    background: @winbg;
+    border: 1px solid @line;
+    border-bottom: 2px solid alpha(@fg, 0.18);
+    border-radius: 6px;
+    color: @fg;
+    caret-color: @accent;
+    padding: 6px 10px;
+    box-shadow: none;
+}
+entry:focus { border-bottom-color: @accent; }
+
+/* 스위치 — 윈도우 11 모양 (꺼짐: 테두리만, 켜짐: 강조색 채움) */
+switch {
+    background: transparent;
+    border: 1px solid alpha(@fg, 0.55);
+    border-radius: 999px;
+    min-width: 40px;
+    min-height: 20px;
+    padding: 0;
+}
+switch slider {
+    background: alpha(@fg, 0.75);
+    border: none;
+    border-radius: 999px;
+    min-width: 12px;
+    min-height: 12px;
+    margin: 4px;
+    box-shadow: none;
+}
+switch:checked { background: @accent; border-color: @accent; }
+switch:checked slider { background: @on_accent; }
+switch image { color: transparent; }
+
+scale trough {
+    background: alpha(@fg, 0.16);
+    border: none;
+    border-radius: 999px;
+    min-height: 4px;
+}
+scale highlight { background: @accent; border: none; border-radius: 999px; }
+scale slider {
+    background: @fg;
+    border: 4px solid @accent;
+    border-radius: 999px;
+    min-width: 12px;
+    min-height: 12px;
+    margin: -8px;
+    box-shadow: 0 1px 3px alpha(#000000, 0.4);
+}
+scale value { color: @text2; font-size: 12px; font-feature-settings: "tnum"; }
+
+spinbutton {
+    background: @winbg;
+    border: 1px solid @line;
+    border-radius: 6px;
+    color: @fg;
+}
+spinbutton button { border: none; background: transparent; border-radius: 0; padding: 4px 10px; }
+spinbutton button:hover { background: @hover; }
+
+combobox button {
+    background: @hover;
+    border: 1px solid @line;
+    border-radius: 6px;
+    padding: 6px 12px;
+}
+combobox window.popup, menu, .menu {
+    background: @card;
+    border: 1px solid @line;
+    color: @fg;
+}
+menuitem { padding: 6px 12px; }
+menuitem:hover { background: @hover; }
+
+colorbutton button { padding: 4px; }
+
+/* 주요 동작 버튼 (지금 설치 등) */
+button.accent-btn {
+    background: @accent;
+    border-color: @accent;
+    color: @on_accent;
+    font-weight: 600;
+}
+button.accent-btn:hover { background: mix(@accent, #ffffff, 0.12); }
+button.accent-btn label { color: @on_accent; }
+
+progressbar.update-progress { margin: 4px 2px 2px 2px; }
+progressbar.update-progress trough {
+    background: alpha(@fg, 0.12);
+    border: none;
+    border-radius: 999px;
+    min-height: 4px;
+}
+progressbar.update-progress progress {
+    background: @accent;
+    border: none;
+    border-radius: 999px;
+    min-height: 4px;
+}
+
+/* ── 배경화면 격자 ─────────────────────────────────────────── */
+.wall-grid { margin-top: 10px; }
+.wall-tile {
+    padding: 3px;
+    margin: 5px;
+    border: 2px solid transparent;
+    border-radius: 10px;
+    background: @card;
+}
+.wall-tile:hover   { border-color: alpha(@accent, 0.5); }
+.wall-tile.selected { border-color: @accent; }
+
+.swatch {
+    border: 2px solid alpha(#000000, 0.25);
+    border-radius: 999px;
+    padding: 0;
+    min-width: 26px;
+    min-height: 26px;
+}
+.swatch:hover { border-color: @fg; }
+
+/* ── 대화상자 · 기타 ───────────────────────────────────────── */
+dialog, messagedialog { background: @winbg; color: @fg; }
+dialog label { color: @fg; }
+
+scrollbar { background: transparent; border: none; }
+scrollbar slider {
+    background: alpha(@fg, 0.22);
+    border: none;
+    border-radius: 999px;
+    min-width: 4px;
+    min-height: 24px;
+}
+scrollbar slider:hover { background: alpha(@fg, 0.38); min-width: 6px; }
+
+tooltip { background: @card; color: @fg; border: 1px solid @line; border-radius: 6px; }

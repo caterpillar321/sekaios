@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 자리 비움 관리 — swayidle 을 설정대로 띄워 둔다
+#
+#  설정 (~/.config/sekai/settings.json 의 "power", 초 단위, 0 = 안 함)
+#    screen_off   화면 끄기
+#    lock         화면 잠그기
+#    suspend      절전
+#  그리고 언제나: 절전 직전 잠그기, loginctl lock-session 이 오면 잠그기
+#
+#  SIGHUP 을 받으면 설정을 다시 읽어 swayidle 을 새로 띄운다
+#  (설정 앱이 "전원 및 잠금"을 바꾸면 보낸다).
+# ═══════════════════════════════════════════════════════════════
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+CFG = os.path.expanduser("~/.config/sekai/settings.json")
+DEFAULTS = {"screen_off": 600, "lock": 900, "suspend": 0}
+LOCK = "sekai-lock"
+DPMS_OFF = "hyprctl dispatch dpms off"
+DPMS_ON = "hyprctl dispatch dpms on"
+
+child = None
+reload_wanted = False
+
+
+def power():
+    try:
+        with open(CFG, encoding="utf-8") as f:
+            p = json.load(f).get("power", {}) or {}
+    except Exception:
+        p = {}
+    out = {}
+    for k, d in DEFAULTS.items():
+        try:
+            out[k] = max(0, int(p.get(k, d)))
+        except (TypeError, ValueError):
+            out[k] = d
+    return out
+
+
+def command(p):
+    cmd = ["swayidle", "-w"]
+    if p["lock"]:
+        cmd += ["timeout", str(p["lock"]), LOCK]
+    if p["screen_off"]:
+        cmd += ["timeout", str(p["screen_off"]), DPMS_OFF, "resume", DPMS_ON]
+        # 잠긴 뒤에는 화면을 더 빨리 끈다 (윈도우: 잠금 화면 1분)
+        if p["lock"] and p["screen_off"] > p["lock"] + 60:
+            cmd += ["timeout", str(p["lock"] + 60),
+                    # 잠금 화면이 떠 있을 때만 (sekai-lock 이 잡고 있는 잠금 파일로 확인)
+                    f'flock -n "$XDG_RUNTIME_DIR/sekai-lock.pid" true || {DPMS_OFF}',
+                    "resume", DPMS_ON]
+    if p["suspend"]:
+        cmd += ["timeout", str(p["suspend"]), "systemctl suspend"]
+    cmd += ["before-sleep", LOCK,
+            "after-resume", DPMS_ON,
+            "lock", LOCK]
+    return cmd
+
+
+def start():
+    global child
+    cmd = command(power())
+    print("[idle]", " ".join(cmd), file=sys.stderr, flush=True)
+    child = subprocess.Popen(cmd)
+
+
+def stop():
+    global child
+    if child and child.poll() is None:
+        child.terminate()
+        try:
+            child.wait(3)
+        except subprocess.TimeoutExpired:
+            child.kill()
+    child = None
+
+
+def on_hup(*_):
+    global reload_wanted
+    reload_wanted = True
+
+
+def on_term(*_):
+    stop()
+    sys.exit(0)
+
+
+def main():
+    global reload_wanted
+    if not shutil.which("swayidle"):
+        print("swayidle 이 없습니다.", file=sys.stderr)
+        return 1
+    signal.signal(signal.SIGHUP, on_hup)
+    signal.signal(signal.SIGTERM, on_term)
+    signal.signal(signal.SIGINT, on_term)
+    start()
+    fails = 0
+    while True:
+        time.sleep(0.5)
+        if reload_wanted:
+            reload_wanted = False
+            stop()
+            start()
+            continue
+        if child.poll() is not None:
+            # swayidle 이 죽었다 — 너무 자주 죽으면 천천히 다시
+            fails += 1
+            time.sleep(min(30, fails * 2))
+            start()
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)

@@ -1,0 +1,63 @@
+#!/bin/sh
+# ═══════════════════════════════════════════════════════════
+#  SekaiOS 그래픽 세션 시작
+#
+#  tty1 에 로그인하면 ~/.bash_profile 이 이걸 exec 한다.
+#  세션 환경은 전부 여기서 정한다 — 패키지가 관리하므로 업데이트가
+#  기존 사용자에게도 그대로 전달된다. (.bash_profile 은 설치 때 한 번
+#  복사되고 끝이라 거기 넣으면 갱신이 안 된다.)
+# ═══════════════════════════════════════════════════════════
+
+export XDG_CURRENT_DESKTOP=Hyprland
+export XDG_SESSION_TYPE=wayland
+export XDG_SESSION_DESKTOP=Hyprland
+
+# ── 언어 ────────────────────────────────────────────────
+# 시스템 기본(/etc/default/locale)은 영어로 둔다. 텍스트 콘솔은 글자를 512개까지만
+# 그릴 수 있어 한글이 깨지기 때문. 그래픽 세션에서만 사용자가 고른 언어를 쓴다.
+#   설정: ~/.config/sekai/settings.json 의 locale.lang (기본 ko_KR.UTF-8)
+SEKAI_LANG=$(python3 - 2>/dev/null <<'PY'
+import json, os
+try:
+    d = json.load(open(os.path.expanduser("~/.config/sekai/settings.json")))
+    print(d.get("locale", {}).get("lang", ""))
+except Exception:
+    pass
+PY
+)
+[ -n "$SEKAI_LANG" ] || SEKAI_LANG=ko_KR.UTF-8
+# 생성되지 않은 로캘이면 쓰지 않는다 (앱마다 경고를 쏟아낸다)
+if locale -a 2>/dev/null | grep -qix "$(echo "$SEKAI_LANG" | sed 's/UTF-8/utf8/I')"; then
+    export LANG="$SEKAI_LANG"
+    case "$SEKAI_LANG" in
+        ko_*) export LANGUAGE="ko:en" ;;
+        ja_*) export LANGUAGE="ja:en" ;;
+        *)    export LANGUAGE="${SEKAI_LANG%%_*}:en" ;;
+    esac
+fi
+
+# ── 한글 입력기 (ibus) ──────────────────────────────────
+#   네이티브 Wayland 앱은 입력기 프로토콜(input-method-v2)로 ibus 에 직접 붙는다.
+#   GTK_IM_MODULE 은 일부러 비워 둔다 — 설정하면 GTK 앱이 Wayland 경로 대신
+#   D-Bus 모듈로 붙어서 두 경로가 겹친다.
+export XMODIFIERS=@im=ibus          # XWayland(X11) 앱
+# Qt 6 앱: Wayland 입력 프로토콜을 먼저, 안 되면 ibus 모듈.
+#   QT_IM_MODULE=ibus 는 넣지 않는다 — Wayland 모드 ibus 가 "환경 변수를 해제하라"는
+#   경고 알림을 띄우고, Wayland 경로와 겹친다.
+export QT_IM_MODULES="wayland;ibus"
+
+# ── 로그인 화면이 같은 해상도로 뜨게 모니터 설정을 알려 둔다 ─────
+#   로그인 화면(_greetd)은 내 홈을 못 읽으므로 공용 폴더에 monitor 줄만 적는다.
+#   (sekai-greeter-session 이 형식을 엄격히 검사한 뒤에만 쓴다)
+if [ -d /var/lib/sekai/displays ] && [ -f "$HOME/.config/hypr/sekai.conf" ]; then
+    ( umask 022; grep '^monitor = ' "$HOME/.config/hypr/sekai.conf" \
+        > "/var/lib/sekai/displays/$(id -un).conf" 2>/dev/null ) || true
+fi
+
+# ── 하드웨어 보정 (VMware 등) ─────────────────────────────
+. /usr/lib/sekai/hw-env.sh
+
+# 출력은 파일로 — 안 그러면 로그인 직후 Hyprland 시작 로그가 화면에 잠깐 찍힌다
+LOGDIR="${XDG_STATE_HOME:-$HOME/.local/state}/sekai"
+mkdir -p "$LOGDIR"
+exec Hyprland >"$LOGDIR/session.log" 2>&1

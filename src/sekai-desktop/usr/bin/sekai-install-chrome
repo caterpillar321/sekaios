@@ -1,0 +1,53 @@
+#!/bin/bash
+# SekaiOS — Google Chrome 설치 도우미
+#
+#   Chrome 은 독점 소프트웨어라 SekaiOS 에 기본 포함할 수 없다 (EULA 상 재배포 금지).
+#   대신 사용자가 직접 설치할 수 있도록 구글 공식 저장소를 등록해 준다.
+set -euo pipefail
+
+C_B=$'\033[1;36m'; C_Y=$'\033[1;33m'; C_0=$'\033[0m'
+say(){ printf '%s==>%s %s\n' "$C_B" "$C_0" "$*"; }
+
+[ "$(id -u)" -eq 0 ] || { echo "sudo sekai-install-chrome 로 실행하세요"; exit 1; }
+
+cat <<EOF
+
+  Google Chrome 은 구글이 배포하는 독점 소프트웨어입니다.
+  설치하면 구글의 이용약관이 적용되고, 구글 저장소에서
+  자동 업데이트를 받게 됩니다.
+
+  오픈소스 대안인 Chromium 은 'sudo apt install chromium' 으로
+  설치할 수 있습니다 (단, 구글 계정 동기화는 지원되지 않습니다).
+
+EOF
+read -rp "  계속하시겠습니까? [y/N] " a
+[ "${a,,}" = "y" ] || { echo "취소됨"; exit 0; }
+
+say "구글 서명 키 등록"
+install -d -m 0755 /usr/share/keyrings
+curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
+  | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
+chmod 0644 /usr/share/keyrings/google-chrome.gpg
+
+say "저장소 등록"
+cat > /etc/apt/sources.list.d/google-chrome.sources <<EOS
+Types: deb
+URIs: https://dl.google.com/linux/chrome/deb/
+Suites: stable
+Components: main
+Architectures: amd64
+Signed-By: /usr/share/keyrings/google-chrome.gpg
+EOS
+
+say "설치"
+apt-get update
+apt-get install -y google-chrome-stable
+
+say "Wayland 네이티브 실행 설정"
+install -d -m 0755 /etc/chromium.d
+cat > /etc/profile.d/sekai-chrome-wayland.sh <<'EOS'
+# SekaiOS: Chrome 을 Wayland 네이티브로
+export CHROME_EXTRA_FLAGS="--ozone-platform-hint=auto"
+EOS
+
+say "완료 — 시작 메뉴에서 Google Chrome 을 실행하세요"

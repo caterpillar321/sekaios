@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""배경화면을 적용한다.
+
+  sekai-wallpaper --apply   설정이 바뀌었을 때
+
+배경화면은 sekai-desk(바탕화면)가 그린다 → 떠 있으면 SIGHUP 으로 다시 읽게 한다.
+sekai-desk 가 없을 때만 예전처럼 swaybg 를 띄운다.
+설정은 ~/.config/sekai/settings.json 에서 읽는다.
+"""
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+
+CFG = os.path.expanduser("~/.config/sekai/settings.json")
+FALLBACK = "/usr/share/backgrounds/sekai/hatsune.jpg"
+MODES = {"fill", "fit", "stretch", "center", "tile", "solid_color"}
+
+
+def conf():
+    try:
+        with open(CFG, encoding="utf-8") as f:
+            return json.load(f).get("wallpaper", {}) or {}
+    except Exception:
+        return {}
+
+
+def desk_pids():
+    out = subprocess.run(["pgrep", "-f", r"^\S*python3\S* \S*sekai-desk( |$)"],
+                         capture_output=True, text=True).stdout
+    return [int(x) for x in out.split() if x.isdigit()]
+
+
+def main():
+    replace = "--apply" in sys.argv
+    pids = desk_pids()
+    if pids:
+        for pid in pids:
+            try:
+                os.kill(pid, 1)            # SIGHUP
+            except OSError:
+                pass
+        return 0
+    if not shutil.which("swaybg"):
+        print("swaybg 가 설치돼 있지 않습니다.", file=sys.stderr)
+        return 1
+
+    w = conf()
+    path = w.get("path") or FALLBACK
+    if not os.path.exists(path):
+        path = FALLBACK
+    mode = w.get("mode") if w.get("mode") in MODES else "fill"
+    color = (w.get("color") or "#151517").lstrip("#")
+
+    cmd = ["swaybg", "-m", mode, "-c", color]
+    if os.path.exists(path):
+        cmd += ["-i", path]
+
+    # 갈아끼울 때는 "지금 떠 있는" 것들의 PID 를 먼저 잡아둔다.
+    # pkill 로 뭉뚱그려 죽이면 방금 띄운 새 것까지 같이 죽는다.
+    old = []
+    if replace:
+        out = subprocess.run(["pgrep", "-x", "swaybg"],
+                             capture_output=True, text=True).stdout
+        old = [int(x) for x in out.split() if x.isdigit()]
+
+    subprocess.Popen(cmd, start_new_session=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    if old:
+        # 새 배경이 그려진 뒤에 옛 것을 지워야 깜빡이지 않는다
+        time.sleep(0.5)
+        for pid in old:
+            try:
+                os.kill(pid, 15)
+            except OSError:
+                pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

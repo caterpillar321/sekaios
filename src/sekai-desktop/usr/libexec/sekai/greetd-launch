@@ -1,0 +1,13 @@
+#!/bin/sh
+# greetd 실행기 — 라이브 USB 로 켰으면 로그인 화면 없이 바로 바탕화면으로
+CONF=/etc/sekai/greetd.toml
+if [ -d /run/live/medium ]; then
+    LIVE_USER=$(getent passwd 1000 | cut -d: -f1)
+    if [ -n "$LIVE_USER" ]; then
+        cp "$CONF" /run/sekai-greetd-live.toml
+        printf '\n[initial_session]\ncommand = "/usr/bin/sekai-session"\nuser = "%s"\n' "$LIVE_USER" \
+            >> /run/sekai-greetd-live.toml
+        CONF=/run/sekai-greetd-live.toml
+    fi
+fi
+exec /usr/sbin/greetd --config "$CONF"

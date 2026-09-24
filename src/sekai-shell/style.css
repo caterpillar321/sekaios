@@ -1,0 +1,474 @@
+/* ═══════════════════════════════════════════════════════════════
+   SekaiOS Shell — 작업 표시줄 · 시작 메뉴 · 팝업 · 알림 · 트레이
+
+   디자인 토큰
+     기본 4색(@accent @bg @surface @fg)은 프로그램이 설정 파일에서 읽어
+     @define-color 로 앞에 붙여 준다. 나머지는 모두 여기서 파생한다.
+     → 설정 앱에서 강조색을 바꾸면 셸 전체가 따라간다.
+
+   글꼴      Pretendard (한글·영문 혼용 UI 용). 숫자는 고정폭(tnum).
+   크기      13px 기본 / 12px 보조 / 11px 캡션 / 15px 팝업 제목
+   모서리    6 작은 버튼 · 8 버튼·행·타일 · 12 팝업·메뉴
+   간격      4 · 8 · 12 · 16 · 20
+   대비      글자 1차 ≈ 15:1, 2차 ≈ 9:1, 3차 ≈ 5:1  (면 색 기준, 모두 4.5:1 이상)
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── 파생 색 ──────────────────────────────────────────────────── */
+@define-color raised    mix(@surface, @fg, 0.06);   /* 행·타일·카드        */
+@define-color hover     mix(@surface, @fg, 0.11);   /* 마우스 올림          */
+@define-color pressed   mix(@surface, @fg, 0.15);   /* 누름                 */
+@define-color line      alpha(@fg, 0.08);           /* 테두리·구분선        */
+@define-color text2     mix(@fg, @surface, 0.28);   /* 보조 글자            */
+@define-color text3     mix(@fg, @surface, 0.48);   /* 설명·비활성          */
+@define-color accent_hi mix(@accent, #ffffff, 0.22);
+@define-color on_accent mix(@accent, #000000, 0.82);/* 강조색 위 글자       */
+@define-color danger    #ff6b81;
+@define-color glass     alpha(@surface, 0.86);      /* 반투명 면 (뒤는 흐림) */
+
+/* ── 기본 ─────────────────────────────────────────────────────── */
+* {
+    font-family: "Pretendard", "Pretendard Variable", "NanumGothic", sans-serif;
+    font-size: 13px;
+    font-feature-settings: "tnum";   /* 시계·숫자 폭 고정 → 깜빡이며 흔들리지 않게 */
+    -gtk-icon-shadow: none;
+    text-shadow: none;
+    outline: none;
+}
+
+window.panel,
+window.start-menu,
+window.panel-popup,
+window.toast-stack {
+    background: transparent;
+    color: @fg;
+}
+
+/* 공용 버튼 초기화 — Adwaita 의 입체 테두리/그림자를 지운다 */
+.start-btn, .task-btn, .sys-item, .clock, .tray-item, .rail-btn,
+.tile, .power-btn, .pop-btn, .menu-item, .noti-close, .noti-action,
+.icon-btn {
+    background: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    color: @fg;
+    min-height: 0;
+    transition: background 120ms ease, color 120ms ease;
+}
+
+/* ═══ 작업 표시줄 ═════════════════════════════════════════════════ */
+.bar {
+    background: @glass;
+    border-top: 1px solid @line;
+    padding: 0 6px;
+}
+
+.start-btn {
+    border-radius: 8px;
+    padding: 0;
+    margin: 0 4px 0 0;
+    min-width: 42px;
+    min-height: 36px;
+}
+.start-btn:hover  { background: @hover; }
+.start-btn:active { background: @pressed; }
+
+.tasks { padding: 0 2px; }
+
+/* 작업 버튼: 아이콘 + 제목. 활성 창은 아래 가운데 짧은 강조 막대 (윈도우 11 식) */
+.task-btn {
+    border-radius: 8px;
+    padding: 0 12px;
+    margin: 0 2px;
+    min-height: 36px;
+    min-width: 150px;
+    color: @text2;
+    background-image: none;
+}
+.task-btn label { color: @text2; }
+.task-btn:hover { background-color: @hover; }
+.task-btn:hover label { color: @fg; }
+.task-btn.active {
+    background-color: @raised;
+    background-image: linear-gradient(@accent, @accent);
+    background-size: 18px 3px;
+    background-position: 50% 94%;
+    background-repeat: no-repeat;
+}
+.task-btn.active label { color: @fg; font-weight: 600; }
+.task-btn.minimized label { color: @text3; }
+.task-btn.minimized {
+    background-image: linear-gradient(@text3, @text3);
+    background-size: 6px 3px;
+    background-position: 50% 94%;
+    background-repeat: no-repeat;
+}
+
+/* 시스템 영역 */
+.sysbox { padding: 0 2px; }
+
+.sys-item, .tray-item {
+    border-radius: 6px;
+    padding: 0 8px;
+    min-height: 36px;
+    min-width: 34px;
+    color: @text2;
+}
+.sys-item:hover, .tray-item:hover { background: @hover; color: @fg; }
+.sys-item image, .tray-item image { color: @text2; }
+.sys-item:hover image { color: @fg; }
+.sys-item.muted image { color: @text3; }
+
+.tray { padding: 0 2px; }
+.tray-item.attention { background: alpha(@accent, 0.18); }
+
+/* 알림 버튼의 읽지 않음 개수 */
+.noti-badge {
+    background: @accent;
+    color: @on_accent;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 0 5px;
+    min-width: 8px;
+    margin-left: 4px;
+}
+.noti-btn.dnd image { color: @text3; }
+
+/* 시계: 두 줄 (시각 / 날짜) */
+.clock {
+    border-radius: 6px;
+    padding: 0 10px;
+    min-height: 40px;
+}
+.clock:hover { background: @hover; }
+.clock-time { font-size: 13px; font-weight: 600; color: @fg; }
+.clock-date { font-size: 11px; color: @text2; }
+
+/* ═══ 시작 메뉴 ═══════════════════════════════════════════════════ */
+.menu-root {
+    background: @glass;
+    border: 1px solid @line;
+    border-radius: 12px;
+}
+
+.rail {
+    padding: 12px 6px;
+    border-right: 1px solid @line;
+}
+.rail-btn {
+    border-radius: 8px;
+    min-width: 40px;
+    min-height: 40px;
+    padding: 0;
+    color: @text2;
+}
+.rail-btn image { color: @text2; }
+.rail-btn:hover { background: @hover; }
+.rail-btn:hover image { color: @fg; }
+.rail-btn.rail-power:hover image { color: @danger; }
+
+.applist-col { padding: 16px 8px 12px 16px; }
+.tiles-col   { padding: 16px 16px 12px 12px; }
+
+.menu-search {
+    background: @raised;
+    border: 1px solid @line;
+    border-bottom: 2px solid @line;
+    border-radius: 8px;
+    color: @fg;
+    caret-color: @accent;
+    padding: 8px 12px;
+    margin: 0 8px 14px 0;
+    min-height: 22px;
+    font-size: 14px;
+    box-shadow: none;
+}
+.menu-search:focus { border-bottom-color: @accent; }
+.menu-search image { color: @text3; }
+
+.section-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: @text2;
+    margin: 2px 4px 8px 4px;
+}
+
+.letter-header {
+    font-size: 12px;
+    font-weight: 700;
+    color: @accent;
+    padding: 12px 10px 4px 10px;
+}
+
+.app-list, .app-list row { background: transparent; }
+.app-list row {
+    border-radius: 8px;
+    margin: 1px 8px 1px 0;
+    padding: 0;
+}
+.app-list row:hover    { background: @hover; }
+.app-list row:selected { background: @raised; }
+.app-row { padding: 7px 10px; }
+.app-row label { font-size: 13px; color: @fg; }
+
+/* 고정 타일 */
+.tiles flowboxchild { padding: 0; }
+.tile {
+    border-radius: 8px;
+    padding: 14px 6px 10px 6px;
+    margin: 3px;
+    min-width: 88px;
+    background: transparent;
+}
+.tile label { font-size: 12px; color: @text2; }
+.tile:hover { background: @hover; }
+.tile:hover label { color: @fg; }
+.tile:active { background: @pressed; }
+
+/* 전원 메뉴 */
+.power-panel {
+    background: @raised;
+    border: 1px solid @line;
+    border-radius: 10px;
+    padding: 6px;
+    margin-top: 12px;
+}
+.power-btn {
+    border-radius: 6px;
+    padding: 8px 12px;
+}
+.power-btn label { font-size: 13px; }
+.power-btn image { color: @text2; }
+.power-btn:hover { background: @hover; }
+.power-btn.pw-off:hover image,
+.power-btn.pw-off:hover label { color: @danger; }
+
+/* ═══ 팝업 (달력·음량·알림 센터·트레이 메뉴) ════════════════════════ */
+.popup-root {
+    background: @glass;
+    border: 1px solid @line;
+    border-radius: 12px;
+    padding: 16px;
+}
+
+.pop-title    { font-size: 15px; font-weight: 700; color: @fg; }
+.pop-subtitle { font-size: 12px; color: @text2; }
+.pop-value    { font-size: 13px; font-weight: 600; color: @text2; }
+
+.pop-btn {
+    background: @raised;
+    border: 1px solid @line;
+    border-radius: 8px;
+    padding: 7px 14px;
+    color: @fg;
+}
+.pop-btn:hover   { background: @hover; }
+.pop-btn:active  { background: @pressed; }
+.pop-btn:checked { background: @accent; color: @on_accent; border-color: transparent; }
+.pop-btn:checked label, .pop-btn:checked image { color: @on_accent; }
+
+.icon-btn {
+    border-radius: 8px;
+    padding: 6px;
+    min-width: 32px;
+    min-height: 32px;
+    background: @raised;
+    border: 1px solid @line;
+}
+.icon-btn:hover { background: @hover; }
+.icon-btn:checked { background: @accent; border-color: transparent; }
+.icon-btn:checked image { color: @on_accent; }
+
+/* 슬라이더 */
+scale { padding: 6px 0; }
+scale trough {
+    background: alpha(@fg, 0.14);
+    border: none;
+    border-radius: 999px;
+    min-height: 4px;
+}
+scale highlight {
+    background: @accent;
+    border: none;
+    border-radius: 999px;
+}
+scale slider {
+    background: @fg;
+    border: 4px solid @accent;
+    border-radius: 999px;
+    min-width: 12px;
+    min-height: 12px;
+    margin: -8px;
+    box-shadow: 0 1px 3px alpha(#000000, 0.4);
+}
+scale slider:hover { background: #ffffff; }
+scale value { color: @text2; font-weight: 600; }
+
+/* 달력 */
+calendar {
+    background: transparent;
+    border: none;
+    color: @fg;
+    padding: 4px 0;
+}
+calendar.header  { color: @fg; font-weight: 600; border: none; }
+calendar.button  { color: @text2; background: transparent; border: none; box-shadow: none; }
+calendar.button:hover { color: @fg; }
+calendar.highlight { color: @text3; font-size: 11px; font-weight: 600; }
+calendar:indeterminate { color: alpha(@fg, 0.25); }
+calendar:selected {
+    background: @accent;
+    color: @on_accent;
+    border-radius: 999px;
+    font-weight: 700;
+}
+
+/* 트레이 메뉴 */
+.tray-menu .popup-root { padding: 6px; }
+.menu-head {
+    color: @text3;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 6px 10px 6px 10px;
+}
+.menu-item {
+    border-radius: 6px;
+    padding: 7px 10px;
+}
+.menu-item label { color: @fg; }
+.menu-item:hover { background: @hover; }
+.menu-item:disabled label { color: @text3; }
+.menu-check { color: @accent; font-weight: 700; }
+.menu-sep {
+    background: @line;
+    min-height: 1px;
+    margin: 4px 8px;
+}
+
+/* ═══ 알림 ════════════════════════════════════════════════════════ */
+.toast-stack, .toast-box { background: transparent; }
+
+.noti-card {
+    background: @glass;
+    border: 1px solid @line;
+    border-radius: 12px;
+    padding: 14px 14px 14px 16px;
+    min-width: 360px;
+}
+/* 알림 센터 안에서는 한 단계 올린 면 */
+.noti-list .noti-card { background: @raised; min-width: 0; }
+.noti-card.critical { border-color: alpha(@danger, 0.55); }
+.noti-card.critical .noti-app { color: @danger; }
+
+.noti-app     { color: @text2; font-size: 11px; font-weight: 600; }
+.noti-time    { color: @text3; font-size: 11px; }
+.noti-summary { color: @fg; font-size: 14px; font-weight: 600; }
+.noti-body    { color: @text2; font-size: 13px; }
+
+.noti-close {
+    border-radius: 6px;
+    padding: 0;
+    min-width: 24px;
+    min-height: 24px;
+    color: @text3;
+}
+.noti-close:hover { background: @hover; color: @fg; }
+
+.noti-action {
+    background: @raised;
+    border: 1px solid @line;
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-size: 12px;
+}
+.noti-list .noti-action { background: @hover; }
+.noti-action:hover { background: @pressed; }
+
+.noti-center .popup-root { padding: 16px; }
+.noti-list  { padding: 2px 0; }
+.noti-empty { color: @text3; padding: 32px 0; }
+
+/* ═══ Alt+Tab 창 전환기 ════════════════════════════════════════════ */
+window.switcher-window, window.osd-window { background: transparent; color: @fg; }
+.switcher {
+    background: @glass;
+    border: 1px solid @line;
+    border-radius: 14px;
+    padding: 14px 14px 12px 14px;
+}
+.switch-card {
+    padding: 12px 8px 10px 8px;
+    border-radius: 10px;
+    border: 2px solid transparent;
+    min-width: 116px;
+}
+.switch-card label { font-size: 12px; color: @text2; }
+.switch-card.minimized image { opacity: 0.55; }
+.switch-card.selected {
+    background: alpha(@fg, 0.08);
+    border-color: @accent;
+}
+.switch-card.selected label { color: @fg; }
+.switcher-title { font-size: 13px; font-weight: 600; color: @fg; padding: 2px 8px 0 8px; }
+
+/* ═══ 음량·밝기 표시 (OSD) ══════════════════════════════════════════ */
+.osd {
+    background: @glass;
+    border: 1px solid @line;
+    border-radius: 999px;
+    padding: 12px 20px;
+    min-width: 220px;
+}
+.osd image { color: @fg; }
+.osd levelbar trough, .osd levelbar block {
+    border: none;
+    border-radius: 999px;
+    min-height: 4px;
+}
+.osd levelbar trough { background: alpha(@fg, 0.16); padding: 0; }
+.osd levelbar block.filled { background: @accent; }
+.osd levelbar block.empty  { background: transparent; }
+.osd levelbar.muted block.filled { background: @text3; }
+.osd-value { font-size: 13px; font-weight: 600; color: @fg; }
+.osd-text  { font-size: 13px; color: @fg; }
+
+/* ═══ 클립보드 기록 ════════════════════════════════════════════════ */
+.clip-list, .clip-list row { background: transparent; }
+.clip-row {
+    background: @raised;
+    border: 1px solid @line;
+    border-radius: 8px;
+    margin: 0 0 6px 0;
+    padding: 10px 8px 10px 12px;
+}
+.clip-row:hover { background: @hover; }
+.clip-row:selected, .clip-row:focus {
+    background: @hover;
+    border-color: alpha(@accent, 0.7);
+}
+.clip-text { color: @fg; font-size: 13px; }
+
+/* ═══ 클릭 캐처 (팝업 바깥을 살짝 어둡게) ═══════════════════════════ */
+window.click-catcher { background: transparent; }
+.catcher-area        { background: alpha(#000000, 0.28); }
+.catcher-area.no-dim { background: transparent; }
+
+/* ═══ 스크롤바 ════════════════════════════════════════════════════ */
+scrollbar { background: transparent; border: none; }
+scrollbar slider {
+    background: alpha(@fg, 0.20);
+    border: none;
+    border-radius: 999px;
+    min-width: 4px;
+    min-height: 24px;
+}
+scrollbar slider:hover { background: alpha(@fg, 0.35); min-width: 6px; }
+
+tooltip {
+    background: @surface;
+    border: 1px solid @line;
+    border-radius: 6px;
+    color: @fg;
+}
+tooltip label { font-size: 12px; }

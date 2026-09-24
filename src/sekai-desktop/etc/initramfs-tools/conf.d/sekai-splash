@@ -1,0 +1,2 @@
+# SekaiOS — initramfs 에 화면 드라이버를 넣어 부팅 초기부터 로고(Plymouth)를 그린다
+FRAMEBUFFER=y

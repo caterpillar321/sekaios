@@ -1,0 +1,828 @@
+#!/usr/bin/env python3
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 바탕화면 — 배경화면 + 바탕화면 아이콘
+#
+#  layer-shell 의 BACKGROUND 층에 화면 전체 크기로 뜬다.
+#  배경화면(전에는 swaybg)과 아이콘을 한 표면에 직접 그린다 →
+#  배경을 바꿀 때 부드럽게 넘어가고, 아이콘 글씨는 어떤 배경에서도 읽히게.
+#
+#  아이콘: 내 PC · 홈 폴더 · 휴지통 + 바탕화면 폴더(xdg-user-dir DESKTOP)의 내용
+#  조작:   클릭 선택 · 더블클릭 열기 · 끌어서 여러 개 선택 · 오른쪽 클릭 메뉴
+#          Delete 휴지통 · F2 이름 바꾸기 · Enter 열기 · Ctrl+A 전체 선택
+#          다른 곳에서 파일을 끌어다 놓으면 바탕화면으로 옮긴다
+#  신호:   SIGHUP = 설정 다시 읽기 (배경화면·강조색)
+# ═══════════════════════════════════════════════════════════════
+import json
+import math
+import os
+import signal
+import subprocess
+import sys
+import time
+from urllib.parse import unquote, urlparse
+
+import gi
+gi.require_version("Gtk", "3.0")
+gi.require_version("GtkLayerShell", "0.1")
+gi.require_version("Pango", "1.0")
+gi.require_version("PangoCairo", "1.0")
+from gi.repository import (Gtk, Gdk, GdkPixbuf, Gio, GLib, GtkLayerShell,  # noqa: E402
+                           Pango, PangoCairo)
+import cairo  # noqa: E402
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+if os.path.isdir(os.path.join(HERE, "sekaishell")):
+    sys.path.insert(0, HERE)
+from sekaishell.popup import PanelPopup, make_translucent  # noqa: E402,F401
+
+CFG = os.path.expanduser("~/.config/sekai/settings.json")
+FALLBACK_WALL = "/usr/share/backgrounds/sekai/hatsune.jpg"
+DEBUG = os.environ.get("SEKAI_DEBUG") == "1"
+
+ICON = 48                 # 아이콘 크기
+CELL_W, CELL_H = 96, 100  # 한 칸
+MARGIN = 14
+
+
+def dbg(*a):
+    if DEBUG:
+        print("[desk]", *a, file=sys.stderr, flush=True)
+
+
+def settings():
+    try:
+        with open(CFG, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def hex_rgb(h, fb=(0.224, 0.773, 0.733)):
+    try:
+        h = h.lstrip("#")
+        return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    except Exception:
+        return fb
+
+
+def desktop_dir():
+    try:
+        p = subprocess.run(["xdg-user-dir", "DESKTOP"], capture_output=True,
+                           text=True, timeout=2).stdout.strip()
+    except Exception:
+        p = ""
+    if not p or p == os.path.expanduser("~"):
+        p = os.path.expanduser("~/Desktop")
+    os.makedirs(p, exist_ok=True)
+    return p
+
+
+def run(cmd, cwd=None):
+    try:
+        subprocess.Popen(cmd if isinstance(cmd, list) else ["sh", "-c", cmd],
+                         start_new_session=True, cwd=cwd,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e:
+        dbg("실행 실패", cmd, e)
+
+
+def file_manager():
+    return settings().get("apps", {}).get("files") or "thunar"
+
+
+# ───────────────────────────────────────────────────────────────
+class Item:
+    """바탕화면 아이콘 하나."""
+    __slots__ = ("key", "name", "uri", "path", "gicon", "special", "is_dir",
+                 "is_desktop_entry", "pixbuf", "x", "y", "app")
+
+    def __init__(self, key, name, uri=None, path=None, gicon=None, special=False,
+                 is_dir=False):
+        self.key = key
+        self.name = name
+        self.uri = uri
+        self.path = path
+        self.gicon = gicon
+        self.special = special
+        self.is_dir = is_dir
+        self.is_desktop_entry = bool(path and path.endswith(".desktop"))
+        self.pixbuf = None
+        self.x = self.y = 0
+        self.app = None
+
+
+def load_icon(gicon, names=None, size=ICON):
+    theme = Gtk.IconTheme.get_default()
+    try:
+        if gicon is not None:
+            info = theme.lookup_by_gicon(gicon, size, Gtk.IconLookupFlags.FORCE_SIZE)
+            if info:
+                return info.load_icon()
+    except Exception:
+        pass
+    for n in (names or []) + ["text-x-generic", "application-x-executable"]:
+        try:
+            if theme.has_icon(n):
+                return theme.load_icon(n, size, Gtk.IconLookupFlags.FORCE_SIZE)
+        except Exception:
+            continue
+    return None
+
+
+IMAGE_TYPES = ("image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp")
+
+
+def thumbnail(path, ctype):
+    """그림 파일은 내용을 작게 보여 준다 (윈도우처럼)."""
+    if ctype not in IMAGE_TYPES:
+        return None
+    try:
+        if os.path.getsize(path) > 25 * 1024 * 1024:
+            return None
+        return GdkPixbuf.Pixbuf.new_from_file_at_scale(path, ICON, ICON, True)
+    except Exception:
+        return None
+
+
+# ───────────────────────────────────────────────────────────────
+class DeskMenu(PanelPopup):
+    """오른쪽 클릭 메뉴 — 누른 자리에 뜨는 레이어 창.
+
+    GtkMenu 는 레이어셸 표면에서 z-순서가 꼬이므로 우리 팝업을 쓴다.
+    """
+
+    def __init__(self):
+        super().__init__(dim=False)
+        self.get_style_context().add_class("tray-menu")
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.BOTTOM, False)
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.RIGHT, False)
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.TOP, True)
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.LEFT, True)
+        self.list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.list.set_size_request(220, -1)
+        self.root.pack_start(self.list, True, True, 0)
+
+    def show_at(self, x, y, entries, screen_w, screen_h):
+        for c in self.list.get_children():
+            self.list.remove(c)
+        for e in entries:
+            if e is None:
+                sep = Gtk.Separator()
+                sep.get_style_context().add_class("menu-sep")
+                self.list.pack_start(sep, False, False, 0)
+                continue
+            label, icon, cb = e
+            b = Gtk.Button()
+            b.get_style_context().add_class("menu-item")
+            h = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            if icon:
+                img = Gtk.Image.new_from_icon_name(icon, Gtk.IconSize.MENU)
+                img.set_pixel_size(16)
+                h.pack_start(img, False, False, 0)
+            h.pack_start(Gtk.Label(label=label, xalign=0), True, True, 0)
+            b.add(h)
+            b.connect("clicked", lambda _b, f=cb: (self.close(), f()))
+            self.list.pack_start(b, False, False, 0)
+        self.list.show_all()
+        # 화면 밖으로 나가지 않게 대략 맞춘다
+        w, h = 240, 20 + 36 * len([e for e in entries if e]) + 10 * entries.count(None)
+        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.LEFT, int(min(x, screen_w - w - 8)))
+        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.TOP, int(min(y, screen_h - h - 60)))
+        self.open()
+
+
+class RenamePopup(PanelPopup):
+    def __init__(self):
+        super().__init__(dim=False)
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.BOTTOM, False)
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.RIGHT, False)
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.TOP, True)
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.LEFT, True)
+        GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.EXCLUSIVE)
+        t = Gtk.Label(label="이름 바꾸기", xalign=0)
+        t.get_style_context().add_class("pop-title")
+        self.root.pack_start(t, False, False, 0)
+        self.entry = Gtk.Entry()
+        self.entry.set_width_chars(28)
+        self.entry.connect("activate", lambda *_: self._ok())
+        self.root.pack_start(self.entry, False, False, 0)
+        self.err = Gtk.Label(xalign=0)
+        self.err.get_style_context().add_class("pop-subtitle")
+        self.root.pack_start(self.err, False, False, 0)
+        self.cb = None
+
+    def ask(self, x, y, current, cb, screen_h=1080):
+        self.cb = cb
+        self.entry.set_text(current)
+        self.err.set_text("Enter 로 바꾸기 · Esc 로 취소")
+        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.LEFT, max(8, int(x) - 40))
+        # 아이콘 칸 바로 아래 — 이름 글자를 가리지 않게
+        top = int(y) + CELL_H + 2
+        if top + 140 > screen_h - 56:                  # 화면 아래쪽이면 아이콘 위로
+            top = int(y) - 130
+        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.TOP, max(8, top))
+        self.open()
+        # 확장자 앞까지만 선택 (윈도우처럼)
+        dot = current.rfind(".")
+        self.entry.grab_focus()
+        self.entry.select_region(0, dot if dot > 0 else -1)
+
+    def _ok(self):
+        name = self.entry.get_text().strip()
+        if not name or "/" in name:
+            self.err.set_text("사용할 수 없는 이름입니다.")
+            return
+        err = self.cb(name) if self.cb else None
+        if err:
+            self.err.set_text(err)
+            return
+        self.close()
+
+
+# ───────────────────────────────────────────────────────────────
+class Desk(Gtk.Window):
+    def __init__(self, monitor, primary):
+        super().__init__()
+        self.monitor = monitor
+        self.primary = primary
+        self.items = []
+        self.selected = set()
+        self.hover = None
+        self.band = None                   # 끌어서 선택하는 사각형 (x0,y0,x1,y1)
+        self.press = None
+        self.wall_src = None               # 원본 픽스버프
+        self.wall_path = None
+        self.wall_cache = {}               # (w,h,mode) → cairo 표면
+        self.fade_from = None              # 전환 효과용 이전 표면
+        self.fade_t = 1.0
+        self.accent = (0.224, 0.773, 0.733)
+        self.menu = DeskMenu()
+        self.rename = RenamePopup()
+
+        make_translucent(self)
+        GtkLayerShell.init_for_window(self)
+        GtkLayerShell.set_namespace(self, "sekai-desk")
+        GtkLayerShell.set_layer(self, GtkLayerShell.Layer.BACKGROUND)
+        GtkLayerShell.set_monitor(self, monitor)
+        for e in (GtkLayerShell.Edge.TOP, GtkLayerShell.Edge.BOTTOM,
+                  GtkLayerShell.Edge.LEFT, GtkLayerShell.Edge.RIGHT):
+            GtkLayerShell.set_anchor(self, e, True)
+        GtkLayerShell.set_exclusive_zone(self, -1)       # 작업 표시줄 밑까지 배경을 깐다
+        GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.ON_DEMAND)
+
+        self.area = Gtk.DrawingArea()
+        self.area.set_can_focus(True)
+        self.area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK |
+                             Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK |
+                             Gdk.EventMask.KEY_PRESS_MASK)
+        self.area.connect("draw", self.on_draw)
+        self.area.connect("button-press-event", self.on_press)
+        self.area.connect("button-release-event", self.on_release)
+        self.area.connect("motion-notify-event", self.on_motion)
+        self.area.connect("leave-notify-event", lambda *_: self._set_hover(None))
+        self.area.connect("key-press-event", self.on_key)
+        self.area.connect("size-allocate", lambda *_: self.layout())
+        # 다른 창에서 끌어다 놓기
+        self.area.drag_dest_set(Gtk.DestDefaults.ALL, [], Gdk.DragAction.MOVE | Gdk.DragAction.COPY)
+        self.area.drag_dest_add_uri_targets()
+        self.area.connect("drag-data-received", self.on_drop)
+        self.add(self.area)
+
+        self.reload_settings()
+        if self.primary:
+            self.ddir = desktop_dir()
+            self.monitor_file = Gio.File.new_for_path(self.ddir).monitor_directory(
+                Gio.FileMonitorFlags.WATCH_MOVES, None)
+            self.monitor_file.connect("changed", lambda *_: GLib.timeout_add(150, self._refresh_once))
+            self._pending = False
+            # 휴지통 상태(비었나/찼나)에 따라 아이콘을 바꾼다
+            self.trash_mon = Gio.File.new_for_uri("trash:///").monitor_directory(
+                Gio.FileMonitorFlags.NONE, None)
+            self.trash_mon.connect("changed", lambda *_: GLib.timeout_add(300, self._refresh_once))
+            self.refresh()
+
+    # ── 설정 ──────────────────────────────────────────────
+    def reload_settings(self):
+        s = settings()
+        a = s.get("appearance", {})
+        self.accent = hex_rgb(a.get("accent", "#39c5bb"))
+        self.panel_h = int(s.get("panel", {}).get("height", 48))
+        w = s.get("wallpaper", {})
+        path = w.get("path") or FALLBACK_WALL
+        if not os.path.exists(path):
+            path = FALLBACK_WALL
+        self.mode = w.get("mode") if w.get("mode") in ("fill", "fit", "stretch", "center", "tile",
+                                                       "solid_color") else "fill"
+        self.bgcolor = hex_rgb(w.get("color", "#151517"), (0.08, 0.08, 0.09))
+        if path != self.wall_path:
+            old = self._current_surface()
+            try:
+                self.wall_src = GdkPixbuf.Pixbuf.new_from_file(path)
+                self.wall_path = path
+            except Exception as e:
+                dbg("배경 읽기 실패", path, e)
+                self.wall_src = None
+            self.wall_cache.clear()
+            if old is not None:                        # 이전 배경에서 새 배경으로 스르륵
+                self.fade_from = old
+                self.fade_t = 0.0
+                GLib.timeout_add(16, self._fade_step)
+        else:
+            self.wall_cache.clear()
+        self.area.queue_draw()
+        if self.primary:
+            self.layout()
+
+    def _fade_step(self):
+        self.fade_t = min(1.0, self.fade_t + 16 / 450)
+        self.area.queue_draw()
+        if self.fade_t >= 1.0:
+            self.fade_from = None
+            return False
+        return True
+
+    # ── 아이콘 목록 ───────────────────────────────────────
+    def _refresh_once(self):
+        self.refresh()
+        return False
+
+    def refresh(self):
+        items = []
+        home = os.path.expanduser("~")
+        items.append(Item("::computer", "내 PC", uri="computer:///", special=True, is_dir=True,
+                          gicon=Gio.ThemedIcon.new("computer")))
+        items.append(Item("::home", os.path.basename(home) or "홈", path=home,
+                          uri=Gio.File.new_for_path(home).get_uri(), special=True, is_dir=True,
+                          gicon=Gio.ThemedIcon.new("user-home")))
+        full = self._trash_count() > 0
+        items.append(Item("::trash", "휴지통", uri="trash:///", special=True, is_dir=True,
+                          gicon=Gio.ThemedIcon.new("user-trash-full" if full else "user-trash")))
+
+        entries = []
+        try:
+            d = Gio.File.new_for_path(self.ddir)
+            en = d.enumerate_children("standard::*", Gio.FileQueryInfoFlags.NONE, None)
+            for info in en:
+                if info.get_is_hidden() or info.get_is_backup():
+                    continue
+                entries.append(info)
+        except Exception as e:
+            dbg("바탕화면 폴더 읽기 실패", e)
+        entries.sort(key=lambda i: (i.get_file_type() != Gio.FileType.DIRECTORY,
+                                    i.get_display_name().lower()))
+        for info in entries:
+            p = os.path.join(self.ddir, info.get_name())
+            it = Item(p, info.get_display_name(), path=p,
+                      uri=Gio.File.new_for_path(p).get_uri(), gicon=info.get_icon(),
+                      is_dir=info.get_file_type() == Gio.FileType.DIRECTORY)
+            if it.is_desktop_entry:
+                try:
+                    app = Gio.DesktopAppInfo.new_from_filename(p)
+                    if app:
+                        it.app = app
+                        it.name = app.get_display_name() or it.name
+                        it.gicon = app.get_icon() or it.gicon
+                except Exception:
+                    pass
+            else:
+                it.pixbuf = thumbnail(p, info.get_content_type())
+            items.append(it)
+
+        for it in items:
+            if it.pixbuf is None:
+                it.pixbuf = load_icon(it.gicon)
+        keep = {k for k in self.selected if any(i.key == k for i in items)}
+        self.items = items
+        self.selected = keep
+        self.layout()
+
+    def _trash_count(self):
+        try:
+            info = Gio.File.new_for_uri("trash:///").query_info("trash::item-count",
+                                                               Gio.FileQueryInfoFlags.NONE, None)
+            return info.get_attribute_uint32("trash::item-count")
+        except Exception:
+            return 0
+
+    def layout(self):
+        """왼쪽 위부터 세로로 채우고, 넘치면 다음 줄 (윈도우 기본 배치)"""
+        if not self.primary:
+            return
+        h = self.area.get_allocated_height() or 1080
+        usable = max(CELL_H, h - self.panel_h - 2 * MARGIN)
+        rows = max(1, int(usable // CELL_H))
+        for i, it in enumerate(self.items):
+            col, row = divmod(i, rows)
+            it.x = MARGIN + col * CELL_W
+            it.y = MARGIN + row * CELL_H
+        self.area.queue_draw()
+
+    # ── 그리기 ────────────────────────────────────────────
+    def _current_surface(self):
+        a = self.area.get_allocation() if self.get_realized() else None
+        if not a or a.width <= 1:
+            return None
+        return self._wall_surface(a.width, a.height)
+
+    def _wall_surface(self, W, H):
+        key = (W, H, self.mode)
+        if key in self.wall_cache:
+            return self.wall_cache[key]
+        surf = cairo.ImageSurface(cairo.FORMAT_RGB24, W, H)
+        cr = cairo.Context(surf)
+        cr.set_source_rgb(*self.bgcolor)
+        cr.paint()
+        pb = self.wall_src if self.mode != "solid_color" else None
+        if pb is not None:
+            bw, bh = pb.get_width(), pb.get_height()
+            if self.mode == "tile":
+                Gdk.cairo_set_source_pixbuf(cr, pb, 0, 0)
+                cr.get_source().set_extend(cairo.EXTEND_REPEAT)
+                cr.paint()
+            else:
+                if self.mode == "fill":
+                    sx = sy = max(W / bw, H / bh)
+                elif self.mode == "fit":
+                    sx = sy = min(W / bw, H / bh)
+                elif self.mode == "stretch":
+                    sx, sy = W / bw, H / bh
+                else:                                   # center
+                    sx = sy = 1.0
+                # 한 번만 고품질로 줄여 둔다 (매 프레임 큰 그림을 스케일하면 느리다)
+                nw, nh = max(1, int(bw * sx)), max(1, int(bh * sy))
+                scaled = pb.scale_simple(nw, nh, GdkPixbuf.InterpType.HYPER) if (nw, nh) != (bw, bh) else pb
+                Gdk.cairo_set_source_pixbuf(cr, scaled, (W - nw) / 2, (H - nh) / 2)
+                cr.paint()
+        self.wall_cache = {key: surf}
+        return surf
+
+    def on_draw(self, w, cr):
+        W, H = w.get_allocated_width(), w.get_allocated_height()
+        cur = self._wall_surface(W, H)
+        if self.fade_from is not None and self.fade_t < 1.0:
+            cr.set_source_surface(self.fade_from, 0, 0)
+            cr.paint()
+            cr.set_source_surface(cur, 0, 0)
+            cr.paint_with_alpha(self.fade_t * self.fade_t * (3 - 2 * self.fade_t))
+        else:
+            cr.set_source_surface(cur, 0, 0)
+            cr.paint()
+        if self.primary:
+            for it in self.items:
+                self._draw_item(cr, it)
+            if self.band:
+                x0, y0, x1, y1 = self.band
+                cr.rectangle(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
+                cr.set_source_rgba(*self.accent, 0.18)
+                cr.fill_preserve()
+                cr.set_source_rgba(*self.accent, 0.7)
+                cr.set_line_width(1)
+                cr.stroke()
+        return False
+
+    def _round(self, cr, x, y, w, h, r):
+        cr.new_sub_path()
+        cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+        cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+        cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+        cr.arc(x + r, y + r, r, math.pi, 1.5 * math.pi)
+        cr.close_path()
+
+    def _draw_item(self, cr, it):
+        x, y = it.x, it.y
+        sel = it.key in self.selected
+        if sel or self.hover == it.key:
+            self._round(cr, x + 2, y + 2, CELL_W - 4, CELL_H - 4, 6)
+            if sel:
+                cr.set_source_rgba(*self.accent, 0.30)
+                cr.fill_preserve()
+                cr.set_source_rgba(*self.accent, 0.65)
+                cr.set_line_width(1)
+                cr.stroke()
+            else:
+                cr.set_source_rgba(1, 1, 1, 0.10)
+                cr.fill()
+        if it.pixbuf is not None:
+            pw, ph = it.pixbuf.get_width(), it.pixbuf.get_height()
+            ix, iy = x + (CELL_W - pw) / 2, y + 8 + (ICON - ph) / 2
+            Gdk.cairo_set_source_pixbuf(cr, it.pixbuf, ix, iy)
+            cr.paint()
+            if it.is_desktop_entry:                    # 바로 가기 표시 (작은 화살표)
+                ax, ay = x + (CELL_W - ICON) / 2, y + 8 + ICON - 14
+                self._round(cr, ax, ay, 14, 14, 3)
+                cr.set_source_rgb(1, 1, 1)
+                cr.fill()
+                cr.set_source_rgb(0.1, 0.1, 0.12)
+                cr.set_line_width(1.6)
+                cr.move_to(ax + 4, ay + 10)
+                cr.line_to(ax + 10, ay + 4)
+                cr.move_to(ax + 6, ay + 4)
+                cr.line_to(ax + 10, ay + 4)
+                cr.line_to(ax + 10, ay + 8)
+                cr.stroke()
+        # 이름 — 두 줄까지, 그림자로 어떤 배경에서도 읽히게
+        layout = PangoCairo.create_layout(cr)
+        layout.set_font_description(Pango.FontDescription("Pretendard 10"))
+        layout.set_width((CELL_W - 8) * Pango.SCALE)
+        layout.set_alignment(Pango.Alignment.CENTER)
+        layout.set_wrap(Pango.WrapMode.WORD_CHAR)
+        layout.set_ellipsize(Pango.EllipsizeMode.END)
+        layout.set_height(-1 if sel else -2)          # 선택되면 전체 이름
+        layout.set_text(it.name, -1)
+        tx, ty = x + 4, y + 8 + ICON + 6
+        for dx, dy, a in ((0, 1, 0.75), (1, 1, 0.35), (-1, 1, 0.35), (0, 2, 0.25)):
+            cr.move_to(tx + dx, ty + dy)
+            cr.set_source_rgba(0, 0, 0, a)
+            PangoCairo.show_layout(cr, layout)
+        cr.move_to(tx, ty)
+        cr.set_source_rgb(1, 1, 1)
+        PangoCairo.show_layout(cr, layout)
+
+    # ── 입력 ──────────────────────────────────────────────
+    def item_at(self, x, y):
+        for it in self.items:
+            if it.x <= x < it.x + CELL_W and it.y <= y < it.y + CELL_H:
+                return it
+        return None
+
+    def _set_hover(self, key):
+        if key != self.hover:
+            self.hover = key
+            self.area.queue_draw()
+
+    def on_motion(self, _w, ev):
+        if not self.primary:
+            return False
+        if self.press and self.press.get("item") is None:
+            x0, y0 = self.press["x"], self.press["y"]
+            self.band = (x0, y0, ev.x, ev.y)
+            bx0, bx1 = sorted((x0, ev.x))
+            by0, by1 = sorted((y0, ev.y))
+            base = self.press["base"]
+            hit = {it.key for it in self.items
+                   if it.x < bx1 and it.x + CELL_W > bx0 and it.y < by1 and it.y + CELL_H > by0}
+            self.selected = base | hit
+            self.area.queue_draw()
+            return True
+        if self.press and self.press.get("item") and not self.press.get("dragging"):
+            if abs(ev.x - self.press["x"]) + abs(ev.y - self.press["y"]) > 8:
+                self._start_drag(ev)
+        it = self.item_at(ev.x, ev.y)
+        self._set_hover(it.key if it else None)
+        return False
+
+    def on_press(self, _w, ev):
+        self.area.grab_focus()
+        if not self.primary:
+            if ev.button == 3:
+                self._menu_empty(ev)
+            return True
+        it = self.item_at(ev.x, ev.y)
+        ctrl = bool(ev.state & Gdk.ModifierType.CONTROL_MASK)
+        if ev.type == Gdk.EventType._2BUTTON_PRESS and ev.button == 1 and it:
+            self.open_items([it])
+            return True
+        if ev.button == 1:
+            if it:
+                if ctrl:
+                    self.selected ^= {it.key}
+                elif it.key not in self.selected:
+                    self.selected = {it.key}
+                self.press = {"x": ev.x, "y": ev.y, "item": it}
+            else:
+                if not ctrl:
+                    self.selected = set()
+                self.press = {"x": ev.x, "y": ev.y, "item": None, "base": set(self.selected)}
+            self.area.queue_draw()
+        elif ev.button == 3:
+            if it:
+                if it.key not in self.selected:
+                    self.selected = {it.key}
+                self.area.queue_draw()
+                self._menu_item(ev)
+            else:
+                self.selected = set()
+                self.area.queue_draw()
+                self._menu_empty(ev)
+        return True
+
+    def on_release(self, _w, ev):
+        self.press = None
+        if self.band:
+            self.band = None
+            self.area.queue_draw()
+        return True
+
+    def on_key(self, _w, ev):
+        if not self.primary:
+            return False
+        k = ev.keyval
+        ctrl = bool(ev.state & Gdk.ModifierType.CONTROL_MASK)
+        sel = [it for it in self.items if it.key in self.selected]
+        if k in (Gdk.KEY_Return, Gdk.KEY_KP_Enter) and sel:
+            self.open_items(sel)
+        elif k == Gdk.KEY_Delete and sel:
+            self.trash_items(sel)
+        elif k == Gdk.KEY_F2 and len(sel) == 1:
+            self.rename_item(sel[0])
+        elif k == Gdk.KEY_F5:
+            self.refresh()
+        elif ctrl and k in (Gdk.KEY_a, Gdk.KEY_A):
+            self.selected = {it.key for it in self.items}
+            self.area.queue_draw()
+        elif k == Gdk.KEY_Escape:
+            self.selected = set()
+            self.area.queue_draw()
+        else:
+            return False
+        return True
+
+    # ── 끌어다 놓기 ───────────────────────────────────────
+    def _start_drag(self, ev):
+        self.press["dragging"] = True
+        uris = [it.uri for it in self.items if it.key in self.selected and not it.special and it.uri]
+        if not uris:
+            return
+        self._drag_uris = uris
+        tl = Gtk.TargetList.new([])
+        tl.add_uri_targets(0)
+        ctx = self.area.drag_begin_with_coordinates(tl, Gdk.DragAction.MOVE | Gdk.DragAction.COPY,
+                                                    1, ev, int(ev.x), int(ev.y))
+        it = self.press["item"]
+        if it and it.pixbuf:
+            Gtk.drag_set_icon_pixbuf(ctx, it.pixbuf, ICON // 2, ICON // 2)
+        if not getattr(self, "_drag_hooked", False):
+            self.area.connect("drag-data-get",
+                              lambda _w, _c, data, _i, _t: data.set_uris(self._drag_uris))
+            self._drag_hooked = True
+
+    def on_drop(self, _w, ctx, x, y, data, _info, time_):
+        uris = data.get_uris() or []
+        moved = 0
+        for u in uris:
+            src = Gio.File.new_for_uri(u)
+            if src.get_path() and os.path.dirname(src.get_path()) == self.ddir:
+                continue                                   # 이미 바탕화면에 있는 것
+            dst = Gio.File.new_for_path(os.path.join(self.ddir, src.get_basename()))
+            try:
+                if ctx.get_selected_action() == Gdk.DragAction.COPY:
+                    src.copy(dst, Gio.FileCopyFlags.NONE, None, None, None)
+                else:
+                    src.move(dst, Gio.FileCopyFlags.NONE, None, None, None)
+                moved += 1
+            except Exception as e:
+                dbg("끌어다 놓기 실패", u, e)
+        Gtk.drag_finish(ctx, moved > 0, False, time_)
+        self.refresh()
+
+    # ── 동작 ──────────────────────────────────────────────
+    def open_items(self, items):
+        for it in items:
+            if it.app is not None:
+                try:
+                    it.app.launch([], None)
+                    continue
+                except Exception as e:
+                    dbg("앱 실행 실패", e)
+            if it.is_dir or it.special:
+                run([file_manager(), it.uri or it.path])
+            else:
+                try:
+                    Gio.AppInfo.launch_default_for_uri(it.uri, None)
+                except Exception:
+                    run(["xdg-open", it.path or it.uri])
+
+    def trash_items(self, items):
+        for it in items:
+            if it.special or not it.path:
+                continue
+            try:
+                Gio.File.new_for_path(it.path).trash(None)
+            except Exception as e:
+                dbg("휴지통 실패", e)
+        self.selected = set()
+        GLib.timeout_add(200, self._refresh_once)
+
+    def rename_item(self, it):
+        if it.special or not it.path:
+            return
+
+        def do(name):
+            dst = os.path.join(os.path.dirname(it.path), name)
+            if os.path.exists(dst):
+                return "같은 이름이 이미 있습니다."
+            try:
+                os.rename(it.path, dst)
+            except OSError as e:
+                return f"바꾸지 못했습니다: {e.strerror}"
+            self.selected = {dst}
+            return None
+        self.rename.ask(it.x, it.y, os.path.basename(it.path), do, self._screen()[1])
+
+    def new_folder(self):
+        base = "새 폴더"
+        n, name = 1, base
+        while os.path.exists(os.path.join(self.ddir, name)):
+            n += 1
+            name = f"{base} ({n})"
+        os.makedirs(os.path.join(self.ddir, name))
+        GLib.timeout_add(250, lambda: (self._rename_new(name), False)[1])
+
+    def new_text(self):
+        base = "새 텍스트 문서"
+        n, name = 1, base + ".txt"
+        while os.path.exists(os.path.join(self.ddir, name)):
+            n += 1
+            name = f"{base} ({n}).txt"
+        open(os.path.join(self.ddir, name), "w").close()
+        GLib.timeout_add(250, lambda: (self._rename_new(name), False)[1])
+
+    def _rename_new(self, name):
+        self.refresh()
+        it = next((i for i in self.items if i.path and os.path.basename(i.path) == name), None)
+        if it:
+            self.selected = {it.key}
+            self.area.queue_draw()
+            self.rename_item(it)
+
+    def _screen(self):
+        return self.area.get_allocated_width(), self.area.get_allocated_height()
+
+    def _menu_empty(self, ev):
+        W, H = self._screen()
+        entries = []
+        if self.primary:
+            entries += [("새 폴더", "folder-new-symbolic", self.new_folder),
+                        ("새 텍스트 문서", "document-new-symbolic", self.new_text),
+                        None,
+                        ("새로 고침", "view-refresh-symbolic", self.refresh),
+                        ("여기서 터미널 열기", "utilities-terminal-symbolic",
+                         lambda: run([settings().get("apps", {}).get("terminal") or "foot"], cwd=self.ddir)),
+                        ("파일 관리자에서 열기", "folder-open-symbolic",
+                         lambda: run([file_manager(), self.ddir])),
+                        None]
+        entries += [("배경 바꾸기", "preferences-desktop-wallpaper-symbolic",
+                     lambda: run(["sekai-settings", "--page=wallpaper"])),
+                    ("디스플레이 설정", "video-display-symbolic",
+                     lambda: run(["sekai-settings", "--page=display"])),
+                    ("개인 설정", "preferences-desktop-theme-symbolic",
+                     lambda: run(["sekai-settings", "--page=appearance"]))]
+        self.menu.show_at(ev.x, ev.y, entries, W, H)
+
+    def _menu_item(self, ev):
+        W, H = self._screen()
+        sel = [it for it in self.items if it.key in self.selected]
+        entries = [("열기", "document-open-symbolic", lambda: self.open_items(sel))]
+        real = [it for it in sel if not it.special]
+        if any(it.key == "::trash" for it in sel):
+            entries.append(("휴지통 비우기", "user-trash-full-symbolic", self.empty_trash))
+        if len(real) == 1:
+            entries.append(("이름 바꾸기", "document-edit-symbolic", lambda: self.rename_item(real[0])))
+            entries.append(("경로 복사", "edit-copy-symbolic",
+                            lambda: run(["wl-copy", real[0].path])))
+        if real:
+            entries += [None, ("휴지통으로 이동", "user-trash-symbolic", lambda: self.trash_items(real))]
+        self.menu.show_at(ev.x, ev.y, entries, W, H)
+
+    def empty_trash(self):
+        # 되돌릴 수 없는 일이라 바로 지우지 않고 파일 관리자의 휴지통을 연다
+        # (Thunar 의 "휴지통 비우기"가 확인을 묻는다)
+        run([file_manager(), "trash:///"])
+
+
+# ───────────────────────────────────────────────────────────────
+def main():
+    prov = Gtk.CssProvider()
+    for p in (os.path.join(HERE, "style.css"), "/usr/share/sekai-shell/style.css"):
+        if os.path.exists(p):
+            a = settings().get("appearance", {})
+            pre = ("@define-color accent %s;\n@define-color bg %s;\n@define-color surface %s;\n"
+                   "@define-color fg %s;\n") % (a.get("accent", "#39c5bb"), a.get("bg", "#151517"),
+                                                a.get("surface", "#1e1e22"), a.get("fg", "#f1f1f3"))
+            with open(p, encoding="utf-8") as f:
+                prov.load_from_data((pre + f.read()).encode())
+            break
+    Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov,
+                                             Gtk.STYLE_PROVIDER_PRIORITY_USER)
+    st = Gtk.Settings.get_default()
+    if st and os.path.isdir("/usr/share/icons/Papirus-Dark"):
+        st.set_property("gtk-icon-theme-name", "Papirus-Dark")
+
+    disp = Gdk.Display.get_default()
+    desks = []
+    for i in range(disp.get_n_monitors()):
+        m = disp.get_monitor(i)
+        d = Desk(m, primary=(i == 0))
+        d.show_all()
+        desks.append(d)
+
+    def on_hup(*_):
+        for d in desks:
+            GLib.idle_add(lambda d=d: (d.reload_settings(), False)[1])
+        return True
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGHUP, on_hup)
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    main()

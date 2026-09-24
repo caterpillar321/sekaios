@@ -1,0 +1,23 @@
+#!/bin/sh
+# SekaiOS — 새 커널을 ESP 복사본에 반영
+# rEFInd 가 FAT(ESP) 에서 직접 읽으므로 여기를 갱신해야 새 커널로 부팅됨
+set -e
+version="$1"
+[ -n "$version" ] || exit 0
+
+ESP=/boot/efi
+DIR="$ESP/sekai"
+
+mountpoint -q "$ESP"      || exit 0   # ESP 안 붙어있으면 조용히 통과
+[ -d "$ESP/EFI/sekai" ]   || exit 0   # SekaiOS 설치 구조가 아니면 통과
+
+mkdir -p "$DIR"
+if [ -f "/boot/vmlinuz-$version" ]; then
+    cp -f "/boot/vmlinuz-$version" "$DIR/.vmlinuz.new" && mv -f "$DIR/.vmlinuz.new" "$DIR/vmlinuz"
+fi
+if [ -f "/boot/initrd.img-$version" ]; then
+    cp -f "/boot/initrd.img-$version" "$DIR/.initrd.new" && mv -f "$DIR/.initrd.new" "$DIR/initrd.img"
+fi
+sync
+echo "zz-sekai-esp: ESP 커널 복사본 갱신 ($version)"
+exit 0
