@@ -125,8 +125,12 @@ else:
                 win.set_type_hint(Gdk.WindowTypeHint.DOCK)
                 win.set_keep_above(True)
             elif st.layer == L.OVERLAY or st.layer == L.TOP:
-                # 알림(토스트)·OSD 처럼 입력을 안 받는 것은 알림 창, 나머지는 도구 창
-                hint = (Gdk.WindowTypeHint.NOTIFICATION if st.kbd == cls.KeyboardMode.NONE
+                # 알림(토스트)·OSD 처럼 입력을 안 받는 OVERLAY 는 알림 창 — xfwm4 는 알림 창을 늘 맨 위에 둔다.
+                # TOP 층(메뉴 바깥 클릭을 받는 전체 화면 창 등)은 알림 창으로 두면 안 된다:
+                #   그 위로 메뉴가 못 올라와서 메뉴를 누르면 전부 "바깥 클릭"이 되어 닫힌다.
+                #   → 도구 창(항상 위)으로. 같은 층끼리는 나중에 뜬 것이 위라서 메뉴가 그 위에 온다.
+                hint = (Gdk.WindowTypeHint.NOTIFICATION
+                        if st.kbd == cls.KeyboardMode.NONE and st.layer == L.OVERLAY
                         else Gdk.WindowTypeHint.UTILITY)
                 win.set_type_hint(hint)
                 win.set_keep_above(True)

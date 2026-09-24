@@ -149,6 +149,13 @@ if [ "$1" = "configure" ]; then
     # 로그인 화면 해상도 공유 폴더 (usr/lib/tmpfiles.d/sekai.conf)
     systemd-tmpfiles --create /usr/lib/tmpfiles.d/sekai.conf >/dev/null 2>&1 \
         || install -d -m 1777 /var/lib/sekai/displays
+    # SSH 호스트 키가 없는 설치본(이미지에서 지운 키를 첫 부팅이 못 만든 경우) — 여기서 만든다.
+    #   라이브·이미지 만드는 중(chroot)엔 하지 않는다: 키가 이미지에 박히면 모든 설치본이 같은 키를 쓴다
+    if [ -x /usr/sbin/sshd ] && [ ! -d /run/live/medium ] && [ -d /run/systemd/system ] \
+       && ! ls /etc/ssh/ssh_host_*_key >/dev/null 2>&1; then
+        ssh-keygen -A >/dev/null 2>&1 || true
+        systemctl restart ssh.socket >/dev/null 2>&1 || true
+    fi
     # 옛 설치본이 이미지에 직접 넣었던 커널 훅 → 이제 패키지의 zz-sekai-boot 가 한다
     for f in /etc/kernel/postinst.d/zz-sekai-esp /etc/initramfs/post-update.d/zz-sekai-esp; do
         [ -e "$f" ] && ! dpkg -S "$f" >/dev/null 2>&1 && rm -f "$f"
