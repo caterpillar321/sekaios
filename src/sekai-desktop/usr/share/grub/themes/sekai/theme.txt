@@ -1,0 +1,55 @@
+# SekaiOS 부팅 메뉴 — scripts/gen-grub-theme.py 가 만든다
+title-text: ""
+desktop-image: "background.png"
+desktop-image-scale-method: "stretch"
+desktop-color: "#0f1113"
+terminal-font: "SekaiText Regular 18"
+terminal-box: "select_*.png"
+
++ image {
+    left = 50%-40
+    top = 16%
+    width = 80
+    height = 80
+    file = "logo.png"
+}
+
++ boot_menu {
+    left = 50%-320
+    top = 32%
+    width = 640
+    height = 46%
+    item_font = "SekaiText Regular 22"
+    selected_item_font = "SekaiBold Regular 22"
+    item_color = "#c8c8d0"
+    selected_item_color = "#ffffff"
+    icon_width = 32
+    icon_height = 32
+    item_icon_space = 16
+    item_height = 52
+    item_padding = 14
+    item_spacing = 6
+    selected_item_pixmap_style = "select_*.png"
+    scrollbar = false
+}
+
++ label {
+    id = "__timeout__"
+    left = 0
+    top = 84%
+    width = 100%
+    align = "center"
+    color = "#8a8a94"
+    font = "SekaiText Regular 18"
+    text = "%d초 후 자동으로 시작합니다"
+}
+
++ label {
+    left = 0
+    top = 89%
+    width = 100%
+    align = "center"
+    color = "#5c5c66"
+    font = "SekaiText Regular 18"
+    text = "↑↓ 선택 · Enter 시작 · e 편집"
+}

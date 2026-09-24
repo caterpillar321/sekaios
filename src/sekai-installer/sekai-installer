@@ -325,8 +325,8 @@ class Installer(Gtk.Window):
             b.set_size_request(max(110, int(760 * mb / total)), -1)
             self.plan.pack_start(b, cls == "root", True, 0)
         self.plan.show_all()
-        legend = (f"ESP 는 FAT32, SekaiOS 는 ext4 로 만듭니다. 부트로더(rEFInd)는 이 디스크의 ESP 에만 설치되고, "
-                  f"다른 디스크의 운영체제는 부팅 메뉴에서 자동으로 찾아 보여 줍니다.")
+        legend = ("ESP 는 FAT32, SekaiOS 는 ext4 로 만듭니다. 부트로더(GRUB, 보안 부팅 지원)는 이 디스크의 ESP 에만 "
+                  "설치되고, 다른 디스크의 Windows 는 부팅 메뉴에서 자동으로 찾아 보여 줍니다.")
         self.plan_legend.set_text(legend)
 
     # ── 3. 확인 ──
@@ -364,7 +364,7 @@ class Installer(Gtk.Window):
                 ("부팅 파티션 (ESP)", f"{self.esp_mb} MB · FAT32 · 새로 만듦"),
                 ("스왑", f"{self.swap_mb // 1024} GB" if self.swap_mb else "없음"),
                 ("SekaiOS", "나머지 전부 · ext4"),
-                ("부트로더", "rEFInd — 이 디스크의 ESP 에만"),
+                ("부트로더", "GRUB (보안 부팅 지원) — 이 디스크의 ESP 에만"),
                 ("계정 · 지역 · 네트워크", "설치 후 처음 켤 때 설정합니다")]
         for k, v in rows:
             self.sum_list.add(self._sum_row(k, v))

@@ -1,95 +1,93 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════
-#  SekaiOS 부트로더 관리 (rEFInd) — 패키지가 관리하므로 업데이트로 고쳐진다
+#  SekaiOS 부트로더 관리 — shim + GRUB (보안 부팅 지원)
 #
 #    sekai-bootloader install --disk /dev/sdX --part N
-#        처음 설치: rEFInd 복사 + 설정 + 커널 + UEFI 부팅 항목 등록 (설치 프로그램이 부른다)
+#        처음 설치 (설치 프로그램이 부른다)
 #    sekai-bootloader update
-#        rEFInd·테마·설정을 지금 패키지 기준으로 다시 쓰고 커널을 복사 (패키지 업데이트 때 자동)
+#        패키지 업데이트 때: shim·GRUB 을 새것으로, 메뉴 다시 만들기.
+#        예전 rEFInd 설치본이면 GRUB 으로 옮긴다.
 #    sekai-bootloader kernel [버전]
-#        ESP 의 커널·initramfs 복사본만 갱신 (커널 훅이 부른다)
+#        (예전 커널 훅 자리 — GRUB 은 update-grub 이 따로 돈다)
 #
-#  구조 (SekaiOS 가 설치된 디스크의 자기 ESP 에):
-#    /boot/efi/EFI/sekai/     rEFInd + 설정 + 아이콘 + 테마
-#    /boot/efi/EFI/BOOT/      폴백 (NVRAM 부팅 항목이 지워져도 켜지게)
-#    /boot/efi/sekai/         커널·initramfs 복사본 (펌웨어가 FAT 에서 바로 읽는다)
-#
-#  커널 옵션을 바꾸려면 /etc/default/sekai-boot 의 SEKAI_KERNEL_OPTS
+#  보안 부팅 체인:  shimx64.efi (Microsoft 서명)
+#                → grubx64.efi (데비안 서명)
+#                → 커널 (데비안 서명)
+#  ESP 구조 (SekaiOS 가 설치된 디스크의 자기 ESP):
+#    /EFI/sekai/    shimx64.efi grubx64.efi mmx64.efi grub.cfg BOOTX64.CSV
+#    /EFI/debian/   grub.cfg  ← 데비안 서명 GRUB 이 설정을 여기서 찾는다
+#    /EFI/BOOT/     BOOTX64.EFI(=shim) grubx64.efi mmx64.efi fbx64.efi
+#                   (NVRAM 부팅 항목이 지워져도 켜지고, fbx64 가 항목을 되살린다)
+#  메뉴 모양: /etc/default/grub.d/sekai.cfg, 항목: /etc/grub.d/09_sekaios
 # ═══════════════════════════════════════════════════════════════
 set -euo pipefail
 
 ESP=/boot/efi
 ID=sekai
 EFIDIR="$ESP/EFI/$ID"
-KDIR="$ESP/$ID"
-RS=/usr/share/refind
-THEME=/usr/share/sekai/refind
+LABEL="SekaiOS"
 
-SEKAI_KERNEL_OPTS="quiet splash loglevel=3 rd.udev.log_level=3 systemd.show_status=auto vt.global_cursor_default=0"
-[ -f /etc/default/sekai-boot ] && . /etc/default/sekai-boot
+say() { echo "sekai-bootloader: $*"; }
+die() { echo "sekai-bootloader: 오류: $*" >&2; exit 1; }
 
-say()  { echo "sekai-bootloader: $*"; }
-die()  { echo "sekai-bootloader: 오류: $*" >&2; exit 1; }
+[ "$(id -u)" -eq 0 ] || die "관리자 권한이 필요합니다"
 
-installed() { mountpoint -q "$ESP" && [ -d "$EFIDIR" ]; }
-
-# 새 파일로 쓰고 바꿔치기 — 도중에 전원이 나가도 반쯤 쓴 파일이 남지 않게
-put() { cp -f "$1" "$2.new" && mv -f "$2.new" "$2"; }
-
-copy_kernel() {
-    local ver="${1:-}"
-    [ -n "$ver" ] || ver=$(ls /boot/vmlinuz-* 2>/dev/null | sed 's|.*/vmlinuz-||' | sort -V | tail -1)
-    [ -n "$ver" ] || die "/boot 에 커널이 없습니다"
-    mkdir -p "$KDIR"
-    [ -f "/boot/vmlinuz-$ver" ]    && put "/boot/vmlinuz-$ver"    "$KDIR/vmlinuz"
-    [ -f "/boot/initrd.img-$ver" ] && put "/boot/initrd.img-$ver" "$KDIR/initrd.img"
-    sync
-    say "커널 $ver → ESP"
-}
-
-copy_refind() {
-    [ -d "$RS" ] || die "refind 패키지가 없습니다"
-    mkdir -p "$EFIDIR"/{drivers_x64,icons,fonts,themes/sekai}
-    put "$RS/refind/refind_x64.efi" "$EFIDIR/refind_x64.efi"
-    cp -f "$RS"/refind/drivers_x64/ext4_x64.efi "$EFIDIR/drivers_x64/" 2>/dev/null || true
-    cp -f "$RS"/refind/icons/*.png "$EFIDIR/icons/"
-    cp -f "$RS"/fonts/*.png        "$EFIDIR/fonts/"
-    [ -f "$THEME/os_sekai.png" ] && cp -f "$THEME/os_sekai.png" "$EFIDIR/icons/os_sekai.png"
-    for f in background selection_big selection_small; do
-        [ -f "$THEME/$f.png" ] && cp -f "$THEME/$f.png" "$EFIDIR/themes/sekai/$f.png"
-    done
-}
-
-write_conf() {
-    local uuid opts
-    uuid=$(findmnt -no UUID /) || true
-    [ -n "$uuid" ] || die "루트 파일 시스템의 UUID 를 모릅니다"
-    opts="root=UUID=$uuid ro"
-    # 템플릿 — 패키지와 함께 업데이트된다
-    sed -e "s|@ID@|$ID|g" -e "s|@ROOT@|$opts|g" -e "s|@OPTS@|$SEKAI_KERNEL_OPTS|g" \
-        "$THEME/refind.conf.in" > "$EFIDIR/refind.conf.new"
-    mv -f "$EFIDIR/refind.conf.new" "$EFIDIR/refind.conf"
+grub_install() {
+    # --no-nvram: 부팅 항목은 아래에서 우리 이름(SekaiOS)으로 직접 만든다
+    grub-install --target=x86_64-efi --efi-directory="$ESP" --bootloader-id="$ID" \
+        --uefi-secure-boot --no-nvram >/dev/null 2>&1 || die "grub-install 실패"
+    [ -f "$EFIDIR/shimx64.efi" ] || die "shim 이 설치되지 않았습니다 (shim-signed 패키지)"
+    # 데비안 서명 GRUB 은 설정을 /EFI/debian/grub.cfg 에서 찾는다
+    mkdir -p "$ESP/EFI/debian"
+    cp -f "$EFIDIR/grub.cfg" "$ESP/EFI/debian/grub.cfg"
+    # fbx64 가 NVRAM 항목을 되살릴 때 쓰는 목록 (UTF-16LE)
+    printf 'shimx64.efi,%s,,%s\n' "$LABEL" "SekaiOS 부팅" | iconv -f UTF-8 -t UTF-16LE > "$EFIDIR/BOOTX64.CSV"
 }
 
 fallback() {
     # 폴백 경로 — SekaiOS 전용 ESP 일 때만 (다른 OS 의 ESP 면 그쪽 폴백을 덮지 않는다)
-    local fb="$ESP/EFI/BOOT/BOOTX64.EFI"
-    if [ -f "$fb" ] && ! cmp -s "$fb" "$EFIDIR/refind_x64.efi" && [ ! -f "$ESP/EFI/BOOT/refind.conf" ]; then
-        say "EFI/BOOT 에 다른 부트로더가 있어 폴백은 건드리지 않습니다"
+    local B="$ESP/EFI/BOOT"
+    if [ -f "$B/BOOTX64.EFI" ] && [ -d "$ESP/EFI/Microsoft" ]; then
+        say "이 ESP 에 Windows 가 있어 폴백 경로는 건드리지 않습니다"
         return
     fi
-    mkdir -p "$ESP/EFI/BOOT"
-    put "$EFIDIR/refind_x64.efi" "$fb"
-    cp -f "$EFIDIR/refind.conf" "$ESP/EFI/BOOT/refind.conf"
-    # 폴백으로 켜질 때도 테마·아이콘을 찾게 (경로가 rEFInd 폴더 기준이라)
-    for d in icons fonts themes drivers_x64; do
-        mkdir -p "$ESP/EFI/BOOT/$d"; cp -rf "$EFIDIR/$d/." "$ESP/EFI/BOOT/$d/"
+    mkdir -p "$B"
+    rm -f "$B/refind.conf"; rm -rf "$B/icons" "$B/fonts" "$B/themes" "$B/drivers_x64"
+    cp -f "$EFIDIR/shimx64.efi" "$B/BOOTX64.EFI"
+    cp -f "$EFIDIR/grubx64.efi" "$B/grubx64.efi"
+    cp -f "$EFIDIR/mmx64.efi"   "$B/mmx64.efi"   2>/dev/null || true
+    cp -f /usr/lib/shim/fbx64.efi.signed "$B/fbx64.efi" 2>/dev/null || true
+}
+
+nvram() {  # 디스크 파티션번호
+    local disk="$1" part="$2"
+    # 같은 이름의 옛 항목(예전 rEFInd 포함)을 지우고 새로
+    for n in $(efibootmgr 2>/dev/null | grep -P "^Boot[0-9A-Fa-f]{4}\\* \\Q$LABEL\\E(\\t|$)" | cut -c5-8); do
+        efibootmgr -b "$n" -B >/dev/null 2>&1 || true
     done
+    if efibootmgr --create --disk "$disk" --part "$part" \
+            --loader "\\EFI\\$ID\\shimx64.efi" --label "$LABEL" >/dev/null 2>&1; then
+        say "UEFI 부팅 항목 등록 ($LABEL)"
+    else
+        say "UEFI 부팅 항목을 등록하지 못했습니다 — 폴백 경로로 켜집니다"
+    fi
+}
+
+esp_disk_part() {
+    local src pk
+    src=$(findmnt -no SOURCE "$ESP")
+    pk=$(lsblk -no PKNAME "$src" | head -1)
+    echo "/dev/$pk $(cat /sys/class/block/$(basename "$src")/partition)"
+}
+
+cleanup_refind() {
+    # 예전(rEFInd) 설치본의 흔적 — 더는 쓰지 않는다
+    rm -f  "$EFIDIR/refind_x64.efi" "$EFIDIR/refind.conf"
+    rm -rf "$EFIDIR/icons" "$EFIDIR/fonts" "$EFIDIR/themes" "$EFIDIR/drivers_x64" "$EFIDIR/banners"
+    rm -rf "$ESP/$ID"          # ESP 에 복사해 두던 커널
 }
 
 cmd="${1:-}"; shift || true
-[ "$(id -u)" -eq 0 ] || die "관리자 권한이 필요합니다"
-
 case "$cmd" in
     install)
         disk=""; part=""
@@ -102,26 +100,27 @@ case "$cmd" in
         done
         [ -n "$disk" ] && [ -n "$part" ] || die "사용법: install --disk /dev/sdX --part N"
         mountpoint -q "$ESP" || die "$ESP 가 마운트돼 있지 않습니다"
-        mkdir -p "$EFIDIR"
-        copy_refind; write_conf; copy_kernel; fallback
-        efibootmgr -B -L "SekaiOS" >/dev/null 2>&1 || true
-        if efibootmgr --create --disk "$disk" --part "$part" \
-                --loader "\\EFI\\$ID\\refind_x64.efi" --label "SekaiOS" >/dev/null 2>&1; then
-            say "UEFI 부팅 항목 등록"
-        else
-            say "UEFI 부팅 항목을 등록하지 못했습니다 — 폴백 경로로 켜집니다"
-        fi
+        grub_install; fallback
+        update-grub >/dev/null 2>&1 || die "update-grub 실패"
+        nvram "$disk" "$part"
         ;;
     update)
-        installed || { say "SekaiOS ESP 구조가 없어 건너뜁니다"; exit 0; }
-        copy_refind; write_conf; copy_kernel; fallback
+        mountpoint -q "$ESP" && [ -d "$ESP/EFI/$ID" ] || { say "SekaiOS ESP 구조가 없어 건너뜁니다"; exit 0; }
+        migrate=0
+        [ -f "$EFIDIR/refind_x64.efi" ] && [ ! -f "$EFIDIR/shimx64.efi" ] && migrate=1
+        grub_install; fallback
+        update-grub >/dev/null 2>&1 || die "update-grub 실패"
+        if [ $migrate = 1 ]; then
+            read -r disk part <<<"$(esp_disk_part)"
+            nvram "$disk" "$part"
+            cleanup_refind
+            say "rEFInd 에서 GRUB 으로 옮겼습니다 (보안 부팅 지원)"
+        fi
         say "부팅 메뉴 갱신"
         ;;
     kernel)
-        installed || exit 0
-        copy_kernel "${1:-}"
-        ;;
+        exit 0 ;;
     *)
-        sed -n '3,13p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//'
         exit 2 ;;
 esac

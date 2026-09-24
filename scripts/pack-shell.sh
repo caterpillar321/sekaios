@@ -116,7 +116,7 @@ DSRC="$P/src/sekai-desktop"
 ( cd "$DSRC" && find . -type f ) | while read -r f; do
     f="${f#./}"
     mode=644
-    case "$f" in usr/bin/*|usr/sbin/*|usr/libexec/*|etc/kernel/postinst.d/*|etc/initramfs/post-update.d/*) mode=755 ;; esac
+    case "$f" in usr/bin/*|usr/sbin/*|usr/libexec/*|etc/kernel/postinst.d/*|etc/initramfs/post-update.d/*|etc/grub.d/*) mode=755 ;; esac
     install -Dm$mode "$DSRC/$f" "$STAGE_D/$f"
 done
 
@@ -146,14 +146,24 @@ if [ "$1" = "configure" ]; then
     for f in /etc/kernel/postinst.d/zz-sekai-esp /etc/initramfs/post-update.d/zz-sekai-esp; do
         [ -e "$f" ] && ! dpkg -S "$f" >/dev/null 2>&1 && rm -f "$f"
     done
-    # refind 패키지가 업데이트 때 스스로 /EFI/refind 에 기본 설정으로 설치하고 부팅 순서를
-    #   바꾸지 않게 한다 — SekaiOS 의 rEFInd 는 sekai-bootloader 가 관리한다
+    # 예전 설치본에 남은 refind 패키지가 업데이트 때 스스로 ESP 에 설치하지 않게
     if command -v debconf-set-selections >/dev/null; then
         echo "refind refind/install_to_esp boolean false" | debconf-set-selections || true
     fi
-    # 부팅 메뉴(rEFInd)를 이 패키지 기준으로 다시 쓴다 — 설치된 디스크일 때만
-    #   (이미지를 만드는 중이거나 라이브 세션이면 sekai-bootloader 가 알아서 건너뛴다)
+    # 데비안의 10_linux 대신 09_sekaios 가 부팅 항목을 만든다 (항목이 두 벌이 되지 않게)
+    mkdir -p /usr/share/sekai/grub
+    dpkg-divert --package sekai-desktop --rename --quiet \
+        --divert /usr/share/sekai/grub/10_linux.debian --add /etc/grub.d/10_linux
+    dpkg-divert --package sekai-desktop --rename --quiet \
+        --divert /usr/share/sekai/grub/30_uefi-firmware.debian --add /etc/grub.d/30_uefi-firmware
+fi
+if [ "$1" = "configure" ] || [ "$1" = "triggered" ]; then
+    # 부팅 메뉴(shim + GRUB)를 이 패키지 기준으로 다시 쓴다 — 설치된 디스크일 때만.
+    #   shim·GRUB 패키지가 업데이트돼도 트리거로 여기가 불려 ESP 의 파일이 새것이 된다.
+    #   예전 rEFInd 설치본은 이때 GRUB 으로 옮겨진다. (이미지 만드는 중·라이브면 건너뜀)
     /usr/sbin/sekai-bootloader update || true
+fi
+if [ "$1" = "configure" ]; then
     # 부팅 화면(Plymouth) — 테마가 바뀔 때만 initramfs 를 다시 만든다 (느리므로)
     if command -v plymouth-set-default-theme >/dev/null \
        && [ "$(plymouth-set-default-theme 2>/dev/null)" != sekai ]; then
@@ -169,7 +179,20 @@ if [ "$1" = "remove" ] && command -v pam-auth-update >/dev/null; then
     pam-auth-update --package --remove sekai-gnome-keyring
 fi
 PR
-chmod 755 "$STAGE_D/DEBIAN/postinst" "$STAGE_D/DEBIAN/prerm"
+cat > "$STAGE_D/DEBIAN/postrm" <<'PO'
+#!/bin/sh
+set -e
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+    dpkg-divert --package sekai-desktop --rename --quiet --remove /etc/grub.d/10_linux || true
+    dpkg-divert --package sekai-desktop --rename --quiet --remove /etc/grub.d/30_uefi-firmware || true
+fi
+PO
+# shim·GRUB 이 업데이트되면 ESP 의 복사본도 새것으로 (postinst "triggered")
+cat > "$STAGE_D/DEBIAN/triggers" <<'TR'
+interest-noawait /usr/lib/shim
+interest-noawait /usr/lib/grub/x86_64-efi-signed
+TR
+chmod 755 "$STAGE_D/DEBIAN/postinst" "$STAGE_D/DEBIAN/prerm" "$STAGE_D/DEBIAN/postrm"
 
 copyright "$STAGE_D" sekai-desktop
 
@@ -184,7 +207,10 @@ Depends: sekai-shell (= ${FULL}),
  hyprland, hyprbars (>= 0.50.0-sekai4), hyprexpo, xwayland, binutils,
  xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr,
  foot, fuzzel, swaybg, swayidle, swaylock, grim, slurp,
- brightnessctl, playerctl, wtype, pkexec, refind, efibootmgr, open-vm-tools,
+ brightnessctl, playerctl, wtype, pkexec, efibootmgr, open-vm-tools,
+ shim-signed, grub-efi-amd64-signed, grub-efi-amd64-bin, grub2-common, os-prober,
+ firmware-amd-graphics, firmware-intel-graphics, firmware-nvidia-graphics, firmware-misc-nonfree,
+ firmware-iwlwifi, firmware-realtek, firmware-atheros, firmware-mediatek, firmware-sof-signed,
  wl-clipboard, cliphist, lxpolkit, libnotify-bin, wayland-utils,
  pipewire, pipewire-audio, pipewire-pulse, wireplumber, pavucontrol,
  network-manager, network-manager-gnome, systemd-resolved,

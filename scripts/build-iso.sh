@@ -10,7 +10,6 @@ P="$(dirname "$SELF")"
 ISO_NAME="sekaios-1.0-amd64.iso"
 VOLID="SEKAIOS"
 SQUASH="$P/build/filesystem.zstd.squashfs"
-REFIND="$P/build/refind/usr/share/refind"
 # ISO 를 복사할 Windows 폴더 (--win) — 이 컴퓨터 전용 설정 local/env 의 SEKAI_WINDIR
 [ -f "$P/local/env" ] && . "$P/local/env"
 WINDIR="${SEKAI_WINDIR:-}"
@@ -33,41 +32,45 @@ for m in ldlinux libcom32 libutil menu vesamenu; do
     cp -u "/usr/lib/syslinux/modules/bios/$m.c32" "$P/iso/isolinux/"
 done
 
-# ── 2. efiboot.img 재생성 ────────────────────────────
-say "efiboot.img 생성 (FAT, 72MB — 커널/initrd 포함)"
+# ── 2. UEFI 부팅: shim → GRUB (보안 부팅 가능) ──────
+#   shimx64.efi (Microsoft 서명) → grubx64.efi (데비안 서명) → 커널 (데비안 서명)
+#   데비안 서명 GRUB 은 설정을 /EFI/debian/grub.cfg 에서 찾는다 → 거기서 ISO 의
+#   /boot/grub/grub.cfg (config/grub-live.cfg) 를 불러온다. ISO 는 /.disk/sekaios 로 찾는다.
+say "UEFI 부팅 파일 (shim + GRUB)"
+SHIM="$P/rootfs/usr/lib/shim"
+GRUBEFI="$P/rootfs/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed"
+[ -f "$SHIM/shimx64.efi.signed" ] && [ -f "$GRUBEFI" ] || { echo "E: rootfs 에 shim-signed / grub-efi-amd64-signed 가 없습니다"; exit 1; }
+STUB="$P/build/grub-stub.cfg"
+cat > "$STUB" <<'STUBEOF'
+search --no-floppy --set=root --file /.disk/sekaios
+set prefix=($root)/boot/grub
+configfile $prefix/grub.cfg
+STUBEOF
+
+rm -rf "$P/iso/EFI" "$P/iso/boot/grub"
+mkdir -p "$P/iso/EFI/BOOT" "$P/iso/EFI/debian" "$P/iso/boot/grub/themes" "$P/iso/.disk"
+echo "SekaiOS 1.0 (Hatsune)" > "$P/iso/.disk/sekaios"
+cp "$SHIM/shimx64.efi.signed" "$P/iso/EFI/BOOT/BOOTX64.EFI"
+cp "$GRUBEFI"                 "$P/iso/EFI/BOOT/grubx64.efi"
+cp "$SHIM/mmx64.efi.signed"   "$P/iso/EFI/BOOT/mmx64.efi"
+cp "$STUB" "$P/iso/EFI/debian/grub.cfg"
+cp "$STUB" "$P/iso/EFI/BOOT/grub.cfg"
+cp "$P/config/grub-live.cfg" "$P/iso/boot/grub/grub.cfg"
+cp -r "$P/src/sekai-desktop/usr/share/grub/themes/sekai" "$P/iso/boot/grub/themes/"
+mkdir -p "$P/iso/boot/grub/fonts"
+cp "$P/rootfs/usr/share/grub/unicode.pf2" "$P/iso/boot/grub/fonts/unicode.pf2"
+
+# El Torito 용 FAT 이미지 — 부트로더만 (커널은 GRUB 이 ISO 에서 직접 읽는다)
 IMG="$P/build/efiboot.img"
 rm -f "$IMG"
-mkfs.vfat -C -n SEKAIEFI "$IMG" 73728 > /dev/null
-mmd -i "$IMG" ::/EFI ::/EFI/BOOT ::/EFI/BOOT/drivers_x64 \
-              ::/EFI/BOOT/icons ::/EFI/BOOT/fonts ::/EFI/BOOT/banners ::/live
-mcopy -i "$IMG"    "$REFIND/refind/refind_x64.efi"              ::/EFI/BOOT/BOOTX64.EFI
-mcopy -i "$IMG"    "$REFIND/refind/drivers_x64/iso9660_x64.efi" ::/EFI/BOOT/drivers_x64/
-mcopy -i "$IMG" -s "$REFIND"/refind/icons/*.png                 ::/EFI/BOOT/icons/
-mcopy -i "$IMG"    "$P/src/sekai-desktop/usr/share/sekai/refind/os_sekai.png" ::/EFI/BOOT/icons/os_sekai.png
-mmd   -i "$IMG" ::/EFI/BOOT/themes ::/EFI/BOOT/themes/sekai
-for f in background selection_big selection_small; do
-    mcopy -i "$IMG" "$P/src/sekai-desktop/usr/share/sekai/refind/$f.png" ::/EFI/BOOT/themes/sekai/$f.png
-done
-mcopy -i "$IMG" -s "$REFIND"/fonts/*.png                        ::/EFI/BOOT/fonts/
-mcopy -i "$IMG"    "$REFIND"/banners/refind_banner.png          ::/EFI/BOOT/banners/
-mcopy -i "$IMG"    "$P/config/refind-live.conf"                       ::/EFI/BOOT/refind.conf
-# ★ 커널과 initramfs 를 FAT 안에 — 펌웨어가 드라이버 없이 읽을 수 있게
-mcopy -i "$IMG"    "$P/iso/live/vmlinuz"                        ::/live/vmlinuz
-mcopy -i "$IMG"    "$P/iso/live/initrd.img"                     ::/live/initrd.img
-
-# ── 3. ISO 트리의 EFI 쪽도 갱신 ──────────────────────
-say "ISO 트리 EFI 갱신"
-mkdir -p "$P"/iso/EFI/BOOT/{drivers_x64,icons,fonts,banners} "$P/iso/boot/grub"
-cp "$REFIND/refind/refind_x64.efi"              "$P/iso/EFI/BOOT/BOOTX64.EFI"
-cp "$REFIND/refind/drivers_x64/iso9660_x64.efi" "$P/iso/EFI/BOOT/drivers_x64/"
-cp -u "$REFIND"/refind/icons/*.png              "$P/iso/EFI/BOOT/icons/"
-cp "$P/src/sekai-desktop/usr/share/sekai/refind/os_sekai.png" "$P/iso/EFI/BOOT/icons/os_sekai.png"
-mkdir -p "$P/iso/EFI/BOOT/themes/sekai"
-cp "$P"/src/sekai-desktop/usr/share/sekai/refind/{background,selection_big,selection_small}.png "$P/iso/EFI/BOOT/themes/sekai/"
-cp -u "$REFIND"/fonts/*.png                     "$P/iso/EFI/BOOT/fonts/"
-cp -u "$REFIND"/banners/refind_banner.png       "$P/iso/EFI/BOOT/banners/"
-cp "$P/config/refind-live.conf"                       "$P/iso/EFI/BOOT/refind.conf"
-cp "$IMG"                                       "$P/iso/boot/grub/efiboot.img"
+mkfs.vfat -C -n SEKAIEFI "$IMG" 8192 > /dev/null
+mmd   -i "$IMG" ::/EFI ::/EFI/BOOT ::/EFI/debian
+mcopy -i "$IMG" "$P/iso/EFI/BOOT/BOOTX64.EFI" ::/EFI/BOOT/BOOTX64.EFI
+mcopy -i "$IMG" "$P/iso/EFI/BOOT/grubx64.efi" ::/EFI/BOOT/grubx64.efi
+mcopy -i "$IMG" "$P/iso/EFI/BOOT/mmx64.efi"   ::/EFI/BOOT/mmx64.efi
+mcopy -i "$IMG" "$STUB" ::/EFI/debian/grub.cfg
+mcopy -i "$IMG" "$STUB" ::/EFI/BOOT/grub.cfg
+cp "$IMG" "$P/iso/boot/grub/efiboot.img"
 
 # ── 4. ISO 굽기 ──────────────────────────────────────
 say "xorriso 실행"

@@ -1,0 +1,52 @@
+#!/bin/sh
+# SekaiOS 부팅 메뉴 항목 — grub-mkconfig(update-grub)가 부른다
+#   SekaiOS / SekaiOS — 복구 모드 / SekaiOS (이전 커널 …)
+#   데비안의 10_linux 는 sekai-desktop 이 치워 둔다 (항목이 두 벌이 되지 않게)
+set -e
+. /usr/share/grub/grub-mkconfig_lib
+
+SEKAI_KERNEL_OPTS="quiet splash"
+[ -f /etc/default/sekai-boot ] && . /etc/default/sekai-boot
+
+UUID="${GRUB_DEVICE_UUID}"
+[ -n "$UUID" ] || { echo "09_sekaios: 루트 UUID 를 모릅니다" >&2; exit 0; }
+
+KERNELS=$(for k in /boot/vmlinuz-*; do [ -f "$k" ] && echo "$k"; done | version_sort -r)
+[ -n "$KERNELS" ] || exit 0
+
+entry() {  # 제목 클래스 id 커널 옵션
+    title="$1"; class="$2"; id="$3"; k="$4"; args="$5"
+    v="${k#/boot/vmlinuz-}"
+    rel_k=$(make_system_path_relative_to_its_root "$k")
+    rel_i=$(make_system_path_relative_to_its_root "/boot/initrd.img-$v")
+    echo "menuentry '$title' --class $class --class os \$menuentry_id_option 'sekaios-$id' {"
+    echo "	load_video"
+    echo "	set gfxpayload=keep"
+    echo "	insmod gzio"
+    echo "	insmod part_gpt"
+    echo "	insmod ext2"
+    prepare_grub_to_access_device "${GRUB_DEVICE_BOOT}" | sed -e 's/^/	/'
+    echo "	linux	$rel_k root=UUID=$UUID ro $args"
+    [ -f "/boot/initrd.img-$v" ] && echo "	initrd	$rel_i"
+    echo "}"
+}
+
+latest=$(echo "$KERNELS" | head -1)
+entry "SekaiOS" sekaios default "$latest" "$SEKAI_KERNEL_OPTS"
+entry "SekaiOS — 복구 모드" recovery recovery "$latest" "single"
+prev=$(echo "$KERNELS" | sed -n 2p)
+if [ -n "$prev" ]; then
+    entry "SekaiOS (이전 커널 ${prev#/boot/vmlinuz-})" sekaios previous "$prev" "$SEKAI_KERNEL_OPTS"
+fi
+# 펌웨어(BIOS·UEFI) 설정으로 재시작 — 데비안의 30_uefi-firmware 대신 (아이콘을 붙이려고)
+cat <<'FW'
+if [ "$grub_platform" = "efi" ]; then
+	fwsetup --is-supported
+	if [ "$?" = 0 ]; then
+		menuentry '펌웨어 설정 (UEFI)' --class efi $menuentry_id_option 'sekaios-firmware' {
+			fwsetup
+		}
+	fi
+fi
+FW
+echo "09_sekaios: 커널 ${latest#/boot/vmlinuz-}" >&2

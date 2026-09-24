@@ -189,8 +189,6 @@ rm -f /etc/sudoers.d/live* 2>/dev/null || true
 # 관리자는 sudo 로 — root 로 직접 로그인하지 않는다
 passwd -l root >/dev/null 2>&1 || true
 
-# refind 패키지가 업데이트 때 스스로 ESP 에 설치하지 않게 (sekai-bootloader 가 관리)
-echo "refind refind/install_to_esp boolean false" | debconf-set-selections
 
 # 첫 부팅 설정(OOBE) — 계정·지역·네트워크·컴퓨터 이름
 mkdir -p /var/lib/sekai
@@ -216,7 +214,8 @@ prog 91
 step 5 "부팅 준비"
 chroot "$TARGET" /usr/sbin/sekai-bootloader install --disk "$DISK" --part 1 >>"$LOG" 2>&1 \
     || die "부트로더를 설치하지 못했습니다 (기록: $LOG)"
-[ -f "$TARGET/boot/efi/EFI/sekai/refind.conf" ] || die "부팅 메뉴를 만들지 못했습니다"
+[ -f "$TARGET/boot/efi/EFI/sekai/shimx64.efi" ] && [ -s "$TARGET/boot/grub/grub.cfg" ] \
+    || die "부팅 메뉴를 만들지 못했습니다"
 prog 97
 
 # ── 6. 마무리 ────────────────────────────────────────────
