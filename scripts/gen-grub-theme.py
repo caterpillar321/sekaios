@@ -55,6 +55,20 @@ def mkfont(src, size, out, name):
     ranges = []
     for c in sorted(ord(x) for x in chars):
         ranges.append(f"0x{c:x}-0x{c:x}")
+    # 이미지(rootfs)에 든 GRUB 과 같은 판의 grub-mkfont 로 만든다.
+    #   옛 판(2.06)으로 만든 글꼴은 2.12 가 보안 검사에서 거절해 기본 글꼴로 떨어진다.
+    rootfs = os.path.join(P, "rootfs")
+    if os.path.exists(os.path.join(rootfs, "usr", "bin", "grub-mkfont")):
+        with tempfile.TemporaryDirectory(dir=os.path.join(rootfs, "tmp")) as td:
+            inner = "/tmp/" + os.path.basename(td)
+            subprocess.run(["sudo", "cp", src, os.path.join(td, "in.otf")], check=True)
+            subprocess.run(["sudo", "chroot", rootfs, "grub-mkfont", "-n", name, "-s", str(size),
+                            "-o", inner + "/out.pf2", "-r", ",".join(ranges), inner + "/in.otf"],
+                           check=True, stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "cp", os.path.join(td, "out.pf2"), out], check=True)
+            subprocess.run(["sudo", "chown", f"{os.getuid()}:{os.getgid()}", out], check=True)
+            subprocess.run(["sudo", "rm", "-rf", td], check=True)
+        return
     subprocess.run(["grub-mkfont", "-n", name, "-s", str(size), "-o", out, "-r", ",".join(ranges), src],
                    check=True)
 
@@ -89,8 +103,10 @@ def logo_png(path, size):
 
 
 def select_pieces():
-    """고른 항목 상자 — 9조각 (모서리 반지름 12, 강조색 테두리)"""
-    R = 12
+    """고른 항목 상자 — 9조각 (모서리 반지름 8, 강조색 테두리)
+    GRUB 은 테두리 조각을 항목 영역 "바깥"에 그린다 → 조각이 크면 위아래 항목을 덮는다.
+    그래서 모서리를 작게 하고 theme.txt 의 item_spacing 을 그만큼 벌린다."""
+    R = 8
     size = R * 2 + 4
     big = cairo.ImageSurface(cairo.FORMAT_ARGB32, size, size)
     cr = cairo.Context(big)
@@ -177,7 +193,14 @@ desktop-image: "background.png"
 desktop-image-scale-method: "stretch"
 desktop-color: "#0f1113"
 terminal-font: "SekaiText Regular 18"
-terminal-box: "select_*.png"
+# 시간이 다 돼 자동으로 켤 때 GRUB 이 "Booting …" 한 줄을 찍으려고 터미널을 연다.
+#   작은 상자로 두면 가운데에 검은 네모가 번쩍인다 → 화면 전체로 두어 부팅 로고 전에
+#   잠깐 어두워지는 것처럼 보이게 한다.
+terminal-left: "0"
+terminal-top: "0"
+terminal-width: "100%"
+terminal-height: "100%"
+terminal-border: "0"
 
 + image {
     left = 50%-40
@@ -199,9 +222,9 @@ terminal-box: "select_*.png"
     icon_width = 32
     icon_height = 32
     item_icon_space = 16
-    item_height = 52
-    item_padding = 14
-    item_spacing = 6
+    item_height = 44
+    item_padding = 10
+    item_spacing = 22
     selected_item_pixmap_style = "select_*.png"
     scrollbar = false
 }

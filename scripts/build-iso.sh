@@ -59,6 +59,7 @@ cp "$P/config/grub-live.cfg" "$P/iso/boot/grub/grub.cfg"
 cp -r "$P/src/sekai-desktop/usr/share/grub/themes/sekai" "$P/iso/boot/grub/themes/"
 mkdir -p "$P/iso/boot/grub/fonts"
 cp "$P/rootfs/usr/share/grub/unicode.pf2" "$P/iso/boot/grub/fonts/unicode.pf2"
+cp "$P"/src/sekai-desktop/usr/share/grub/themes/sekai/*.pf2 "$P/iso/boot/grub/fonts/"
 
 # El Torito 용 FAT 이미지 — 부트로더만 (커널은 GRUB 이 ISO 에서 직접 읽는다)
 IMG="$P/build/efiboot.img"
