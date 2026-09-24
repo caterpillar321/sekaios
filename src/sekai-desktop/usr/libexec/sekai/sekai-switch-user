@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 사용자 전환 — 관리자 권한으로 실행된다 (pkexec, 인증 없이 허용)
+#
+#  지금 세션은 그대로 둔 채(부른 쪽이 먼저 잠근다) 다른 가상 터미널에
+#  로그인 화면을 띄우고 그리로 넘어간다.
+#    · 이미 사람이 없는 로그인 화면이 떠 있는 가상 터미널이 있으면 그리로
+#    · 없으면 비어 있는 가상 터미널(8~12)에 sekai-greetd@N 을 새로 띄운다
+#  인자는 받지 않는다 — 누가 불러도 하는 일은 "로그인 화면 보여 주기" 뿐이다.
+# ═══════════════════════════════════════════════════════════════
+import json
+import os
+import subprocess
+import sys
+import time
+
+VTS = range(8, 13)
+ENV = dict(os.environ, LC_ALL="C.UTF-8", PATH="/usr/sbin:/usr/bin:/sbin:/bin")
+
+
+def sessions():
+    try:
+        out = subprocess.run(["loginctl", "list-sessions", "--json=short"],
+                             capture_output=True, text=True, env=ENV, timeout=5).stdout
+        return [s for s in json.loads(out or "[]") if s.get("seat") == "seat0" and s.get("tty")]
+    except Exception:
+        return []
+
+
+def vt_of(s):
+    t = s.get("tty") or ""
+    return int(t[3:]) if t.startswith("tty") and t[3:].isdigit() else None
+
+
+def main():
+    if os.geteuid() != 0:
+        print("관리자 권한이 필요합니다")
+        return 1
+    ss = sessions()
+    users = {vt_of(s) for s in ss if s.get("class") == "user"}
+    greeters = {vt_of(s) for s in ss if s.get("class") == "greeter"}
+    idle = sorted(v for v in greeters - users if v)
+    # 1. 사람 없이 로그인 화면만 떠 있는 가상 터미널 (7번 기본 화면 포함) — 하나만 쓰고
+    #    나머지 여분(전에 전환하느라 띄운 8~12번)은 정리한다
+    if idle:
+        target = idle[0]
+        subprocess.run(["chvt", str(target)], env=ENV)
+        for vt in idle[1:]:
+            if vt in VTS:
+                subprocess.run(["systemctl", "stop", f"sekai-greetd@{vt}.service"], env=ENV)
+        return 0
+    # 2. 빈 가상 터미널에 새로
+    busy = users | greeters | {7}
+    for vt in VTS:
+        if vt in busy:
+            continue
+        subprocess.run(["systemctl", "start", f"sekai-greetd@{vt}.service"], env=ENV)
+        # greetd 는 뜨면서 제 가상 터미널로 넘어간다. 늦으면 직접 넘긴다
+        for _ in range(40):
+            if any(vt_of(s) == vt for s in sessions()):
+                break
+            time.sleep(0.25)
+        subprocess.run(["chvt", str(vt)], env=ENV)
+        return 0
+    print("비어 있는 가상 터미널이 없습니다 — 다른 사람을 로그아웃시켜 주세요")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,17 @@
+# SekaiOS — 사용자 전환용 로그인 화면 (가상 터미널 %i)
+#   "사용자 전환"을 누르면 sekai-switch-user 가 빈 가상 터미널에 이것을 띄운다.
+#   지금 사람의 세션은 잠긴 채로 원래 가상 터미널에 그대로 남는다.
+[Unit]
+Description=SekaiOS 로그인 화면 (가상 터미널 %i)
+After=systemd-user-sessions.service getty@tty%i.service autovt@tty%i.service
+Conflicts=getty@tty%i.service autovt@tty%i.service
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/sekai/greetd-launch %i
+IgnoreSIGPIPE=no
+SendSIGHUP=yes
+TimeoutStopSec=30s
+KeyringMode=shared
+Restart=always
+RestartSec=1

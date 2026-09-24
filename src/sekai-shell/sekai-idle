@@ -93,7 +93,19 @@ def on_term(*_):
 
 
 def compositor_pid():
-    """나를 띄운 Hyprland 의 PID — 세션이 끝나면 나도 끝나려고"""
+    """나를 띄운 Hyprland 의 PID — 세션이 끝나면 나도 끝나려고.
+
+    Hyprland 는 exec-once 를 두 번 fork 해서 띄우므로 부모를 따라가도 안 나온다.
+    인스턴스 폴더의 hyprland.lock 첫 줄이 Hyprland 의 PID 다.
+    """
+    sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
+    rt = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    if sig:
+        try:
+            with open(os.path.join(rt, "hypr", sig, "hyprland.lock")) as f:
+                return int(f.readline().strip())
+        except (OSError, ValueError):
+            pass
     pid = os.getppid()
     while pid > 1:
         try:
@@ -140,6 +152,8 @@ def main():
         return 1
     take_over()
     comp = compositor_pid()
+    wd = os.environ.get("WAYLAND_DISPLAY")
+    wl = os.path.join(os.environ.get("XDG_RUNTIME_DIR", ""), wd) if wd and not wd.startswith("/") else wd
     signal.signal(signal.SIGHUP, on_hup)
     signal.signal(signal.SIGTERM, on_term)
     signal.signal(signal.SIGINT, on_term)
@@ -147,8 +161,10 @@ def main():
     fails = 0
     while True:
         time.sleep(0.5)
-        if comp and not alive(comp):
-            # 세션이 끝났다 — swayidle 과 함께 끝낸다
+        if comp is None:
+            comp = compositor_pid()             # 막 떴을 땐 Hyprland 의 잠금 파일이 아직 없을 수 있다
+        if (comp and not alive(comp)) or (wl and not os.path.exists(wl)):
+            # 세션이 끝났다 — swayidle 과 함께 끝낸다 (안 그러면 세션이 'closing' 으로 남는다)
             stop()
             return 0
         if reload_wanted:

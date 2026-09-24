@@ -19,6 +19,7 @@ import fcntl
 import json
 import os
 import pwd
+import subprocess
 import sys
 import threading
 import time
@@ -161,6 +162,13 @@ button.go:hover { background: alpha(@accent, 0.35); }
 button.go image { color: @fg; }
 
 .msg      { font-size: 14px; color: #ffd0d8; }
+
+button.switch-user {
+    background: alpha(#000000, 0.25); border: 1px solid alpha(@fg, 0.14); border-radius: 8px;
+    padding: 8px 14px; color: @fg; box-shadow: none;
+}
+button.switch-user:hover { background: alpha(@fg, 0.14); }
+button.switch-user label, button.switch-user image { color: @fg; }
 .msg.info { color: @text2; }
 """
 
@@ -224,6 +232,23 @@ class LockView(Gtk.Overlay):
             self.login = self._build_login()
             self.add_overlay(self.login)
             self.login.set_no_show_all(True)
+
+        if primary:
+            # 윈도우의 잠금 화면처럼 — 이 세션은 그대로 두고 다른 사람이 로그인
+            sw = Gtk.Button()
+            sw.get_style_context().add_class("switch-user")
+            h = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            img = Gtk.Image.new_from_icon_name("system-switch-user-symbolic", Gtk.IconSize.BUTTON)
+            img.set_pixel_size(18)
+            h.pack_start(img, False, False, 0)
+            h.pack_start(Gtk.Label(label="다른 사용자"), False, False, 0)
+            sw.add(h)
+            sw.set_halign(Gtk.Align.START)
+            sw.set_valign(Gtk.Align.END)
+            sw.set_margin_start(36)
+            sw.set_margin_bottom(36)
+            sw.connect("clicked", lambda *_: self.app.switch_user())
+            self.add_overlay(sw)
 
         mark = Gtk.DrawingArea()
         mark.set_size_request(28, 28)
@@ -529,6 +554,15 @@ class Locker:
         self.main.pw.grab_focus()
         self.poke()
         return False
+
+    def switch_user(self):
+        # 이 세션은 잠긴 채로 두고 다른 가상 터미널의 로그인 화면으로 (묻지 않고 허용되는 작업)
+        try:
+            subprocess.Popen(["pkexec", "/usr/libexec/sekai/sekai-switch-user"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            pass
+        self.animate(0.0)
 
     def unlock(self):
         if self.lock is not None:

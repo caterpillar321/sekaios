@@ -9,6 +9,7 @@
 #
 #  개발용: SEKAI_GREETER_DEMO=1 이면 greetd 없이 화면만 띄운다.
 # ═══════════════════════════════════════════════════════════════
+import json
 import os
 import pwd
 import subprocess
@@ -102,6 +103,7 @@ button.corner image { color: @fg; }
 .userlist button.current { background: alpha(@fg, 0.18); }
 .userlist label { font-size: 14px; color: @fg; }
 .mini-avatar { font-size: 14px; font-weight: 700; color: #0f1f1e; }
+.signed-in { font-size: 11px; color: @accent; }
 
 tooltip { background: #1e1e22; color: @fg; border-radius: 6px; }
 """
@@ -115,6 +117,17 @@ def login_users():
             real = (p.pw_gecos or "").split(",")[0].strip()
             out.append((p.pw_name, real or p.pw_name))
     return sorted(out)
+
+
+def signed_in():
+    """이미 로그인해 있는 사람 → 그 세션 번호 (사용자 전환으로 잠시 떠난 사람들)"""
+    try:
+        out = subprocess.run(["loginctl", "list-sessions", "--json=short"],
+                             capture_output=True, text=True, timeout=3).stdout
+        return {s["user"]: s["session"] for s in json.loads(out or "[]")
+                if s.get("class") == "user" and s.get("seat") == "seat0" and s.get("tty")}
+    except Exception:
+        return {}
 
 
 def last_user():
@@ -257,6 +270,7 @@ class Greeter(Gtk.Window):
             ul.set_margin_start(40)
             ul.set_margin_bottom(220)
             self.user_buttons = {}
+            self.state_labels = {}
             for uname, real in self.users:
                 b = Gtk.Button()
                 h = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
@@ -269,7 +283,15 @@ class Greeter(Gtk.Window):
                 il.get_style_context().add_class("mini-avatar")
                 o.add_overlay(il)
                 h.pack_start(o, False, False, 0)
-                h.pack_start(Gtk.Label(label=real or uname, xalign=0), False, False, 0)
+                nv = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+                nv.set_valign(Gtk.Align.CENTER)
+                nv.pack_start(Gtk.Label(label=real or uname, xalign=0), False, False, 0)
+                st = Gtk.Label(label="로그인됨", xalign=0)
+                st.get_style_context().add_class("signed-in")
+                st.set_no_show_all(True)
+                nv.pack_start(st, False, False, 0)
+                h.pack_start(nv, False, False, 0)
+                self.state_labels[uname] = st
                 b.add(h)
                 b.connect("clicked", lambda _b, u=uname: self.pick(u))
                 ul.pack_start(b, False, False, 0)
@@ -298,6 +320,9 @@ class Greeter(Gtk.Window):
         self.pick(self.user)
         self._tick()
         GLib.timeout_add_seconds(1, self._tick)
+        self.sessions = {}
+        self._refresh_sessions()
+        GLib.timeout_add_seconds(2, self._refresh_sessions)
 
     # ── 그리기 ──
     def _draw_bg(self, w, cr):
@@ -325,6 +350,16 @@ class Greeter(Gtk.Window):
         cr.paint()
         return False
 
+    def _refresh_sessions(self):
+        self.sessions = signed_in()
+        for u, lb in getattr(self, "state_labels", {}).items():
+            lb.set_visible(u in self.sessions)
+        # 고른 사람의 상태가 바뀌었으면 (그 사이 로그아웃 등) 화면을 맞춘다
+        mode = self.user in self.sessions
+        if mode != getattr(self, "_switch_mode", None) and not self.busy:
+            self.pick(self.user)
+        return True
+
     def _tick(self):
         t = time.localtime()
         self.clock.set_text(time.strftime("%H:%M", t))
@@ -342,7 +377,15 @@ class Greeter(Gtk.Window):
             (ctx.add_class if u == uname else ctx.remove_class)("current")
         self.pw.set_text("")
         self._set_msg("")
-        self.pw.grab_focus()
+        # 이미 로그인해 있는 사람(사용자 전환으로 잠시 떠난 사람) → 새로 로그인하지 않고 그 화면으로
+        self._switch_mode = uname in getattr(self, "sessions", {})
+        self.pw.set_visible(not self._switch_mode)
+        self.go.set_tooltip_text("이 사람의 화면으로 전환" if self._switch_mode else "로그인")
+        if self._switch_mode:
+            self._set_msg("로그인되어 있습니다 — 전환하면 이 사람의 잠금 화면이 나옵니다", info=True)
+            self.go.grab_focus()
+        else:
+            self.pw.grab_focus()
 
     def _key(self, _w, ev):
         if ev.keyval == Gdk.KEY_Escape:
@@ -364,6 +407,13 @@ class Greeter(Gtk.Window):
 
     def submit(self):
         if self.busy:
+            return
+        sid = getattr(self, "sessions", {}).get(self.user)
+        if sid:
+            # 그 사람의 세션으로 넘어간다. 그 세션은 잠겨 있어 거기서 암호를 묻는다
+            r = subprocess.run(["loginctl", "activate", sid], capture_output=True, text=True)
+            if r.returncode != 0:
+                self._set_msg("전환하지 못했습니다.")
             return
         password = self.pw.get_text()
         if not password:
@@ -415,6 +465,7 @@ def main():
     w = Greeter()
     w.connect("destroy", Gtk.main_quit)
     w.show_all()
+    w.pick(w.user)          # show_all 이 숨겨 둔 입력칸을 다시 보이게 하므로 상태를 한 번 더 맞춘다
     Gtk.main()
 
 

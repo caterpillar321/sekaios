@@ -5,10 +5,10 @@
 build 는 페이지를 처음 열 때 한 번만 불린다 (지연 생성).
 """
 from . import (about, display, personalize, devices, network,  # noqa: F401
-               notifications, locale, apps, update)
+               notifications, locale, apps, users, update)
 
 MODULES = [about, display, personalize, devices, network,
-           notifications, locale, apps, update]
+           notifications, locale, apps, users, update]
 
 
 def all_pages():

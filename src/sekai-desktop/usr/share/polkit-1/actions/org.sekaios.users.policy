@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- SekaiOS 계정 관리 도우미 — 설정 앱의 "가족 및 다른 사용자" 가 pkexec 로 부른다 -->
+<policyconfig>
+  <vendor>SekaiOS</vendor>
+  <action id="org.sekaios.users">
+    <description>Manage user accounts</description>
+    <description xml:lang="ko">사용자 계정 관리</description>
+    <message>Authentication is required to manage user accounts</message>
+    <message xml:lang="ko">사용자 계정을 바꾸려면 인증이 필요합니다</message>
+    <icon_name>system-users</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/sekai/sekai-users</annotate>
+  </action>
+</policyconfig>

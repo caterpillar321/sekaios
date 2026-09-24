@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- SekaiOS 사용자 전환 — 다른 가상 터미널에 로그인 화면을 띄울 뿐이라 화면 앞의 사람에게는 묻지 않는다 -->
+<policyconfig>
+  <vendor>SekaiOS</vendor>
+  <action id="org.sekaios.switch-user">
+    <description>Switch user</description>
+    <description xml:lang="ko">사용자 전환</description>
+    <message>Authentication is required to switch user</message>
+    <message xml:lang="ko">사용자를 전환하려면 인증이 필요합니다</message>
+    <icon_name>system-switch-user</icon_name>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/sekai/sekai-switch-user</annotate>
+  </action>
+</policyconfig>

@@ -1,6 +1,16 @@
 #!/bin/sh
-# greetd 실행기 — 라이브 USB 로 켰으면 로그인 화면 없이 바로 바탕화면으로
+# greetd 실행기
+#   greetd-launch        기본 로그인 화면 (가상 터미널 7) — greetd.service
+#   greetd-launch <번호> 사용자 전환용 로그인 화면 (가상 터미널 8~) — sekai-greetd@<번호>.service
+#   라이브 USB 로 켰으면 기본 화면은 로그인 없이 바로 바탕화면으로
 CONF=/etc/sekai/greetd.toml
+VT="${1:-}"
+if [ -n "$VT" ]; then
+    case "$VT" in *[!0-9]*) echo "잘못된 가상 터미널: $VT" >&2; exit 1 ;; esac
+    RUN=/run/sekai-greetd-vt$VT.toml
+    sed "s/^vt = .*/vt = $VT/" "$CONF" > "$RUN"
+    exec /usr/sbin/greetd --config "$RUN"
+fi
 if [ -d /run/live/medium ]; then
     LIVE_USER=$(getent passwd 1000 | cut -d: -f1)
     if [ -n "$LIVE_USER" ]; then

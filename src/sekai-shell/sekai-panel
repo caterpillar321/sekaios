@@ -472,6 +472,8 @@ class StartMenu(Gtk.Window):
         self.power_box.set_no_show_all(True)
         for label, cls, icon, action in (
             ("잠금",        "pw-lock",   "system-lock-screen-symbolic", lambda: subprocess.Popen(["sekai-lock"])),
+            ("사용자 전환", "pw-switch", "system-switch-user-symbolic",
+             lambda: subprocess.Popen(["sh", "-c", "sekai-lock && pkexec /usr/libexec/sekai/sekai-switch-user"])),
             ("로그아웃",    "pw-exit",   "system-log-out-symbolic",     lambda: self.hypr.dispatch("exit")),
             ("다시 시작",   "pw-reboot", "system-reboot-symbolic",      lambda: subprocess.Popen(["systemctl", "reboot"])),
             ("시스템 종료", "pw-off",    "system-shutdown-symbolic",    lambda: subprocess.Popen(["systemctl", "poweroff"])),
