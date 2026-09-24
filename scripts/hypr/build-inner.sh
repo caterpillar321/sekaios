@@ -5,11 +5,12 @@ set -euo pipefail
 SRC=/build/src
 OUT=/build/deb
 MAINT="SekaiOS <sekai@localhost>"
-REV="sekai1"
+REV="sekai2"
 # 패키지별 리비전 (고친 패키지만 올린다 → apt 가 그 패키지만 업그레이드)
 #   hyprbars sekai2: 창 조작 버튼 벡터 아이콘 패치
 #   hyprbars sekai3: 버튼 마우스 올림 배경 (닫기 빨강)
-rev_for() { case "$1" in hyprbars) echo sekai3 ;; *) echo "$REV" ;; esac; }
+#   전체 sekai2 / hyprbars sekai4: 패키지에 저작권·라이선스 고지(/usr/share/doc/*/copyright) 추가
+rev_for() { case "$1" in hyprbars) echo sekai4 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
@@ -193,8 +194,34 @@ register_shlibs() {
     fi
 }
 
+# ── 저작권·라이선스 고지 ─────────────────────────────
+#   BSD-3 / LGPL 은 바이너리를 배포할 때 저작권 고지와 라이선스 전문을 함께 넣어야 한다.
+add_copyright() {
+    local pkg="$1" stage="$2" src="$3" tag="$4" repo lic
+    repo=$(basename "$src")
+    lic="$src/LICENSE"; [ -f "$lic" ] || lic="$src/COPYING"
+    [ -f "$lic" ] || die "라이선스 파일 없음: $src"
+    local doc="$stage/usr/share/doc/$pkg"
+    mkdir -p "$doc"
+    {
+        echo "패키지:  $pkg (SekaiOS 빌드)"
+        echo "원본:    https://github.com/hyprwm/$repo  (태그 $tag)"
+        case "$pkg" in
+            hyprland) echo "수정:    GCC 14 빌드 호환 패치 (scripts/hypr/build-inner.sh 의 patch_hyprland)" ;;
+            hyprbars) echo "수정:    창 조작 버튼 벡터 아이콘·마우스 올림 배경 (scripts/hypr/patch-hyprbars-*.py)" ;;
+            *)        echo "수정:    없음 (원본 그대로 빌드)" ;;
+        esac
+        echo
+        echo "── 원본 라이선스 ($(basename "$lic")) ──"
+        echo
+        cat "$lic"
+    } > "$doc/copyright"
+    chmod 644 "$doc/copyright"
+}
+
 mkdeb() {
     local pkg="$1" ver="$2" stage="$3" desc="$4"
+    [ -n "${5:-}" ] && add_copyright "$pkg" "$stage" "$5" "$6"
     local deps="" extra sdlog=/build/log/${pkg}.shlibdeps.log
 
     # 실제 ELF 바이너리·라이브러리 수집
@@ -284,7 +311,7 @@ build_cmake() {
     DESTDIR="$stage" cmake --install "$dir/build" > "/build/log/$pkg.install.log" 2>&1 \
       || { tail -20 "/build/log/$pkg.install.log"; die "설치 실패: $pkg"; }
     declare -F "post_$pkg" >/dev/null && "post_$pkg" "$stage"
-    mkdeb "$pkg" "$ver" "$stage" "$desc"
+    mkdeb "$pkg" "$ver" "$stage" "$desc" "$dir" "$tag"
 }
 
 # ── Meson 프로젝트 빌드 ──────────────────────────────
@@ -304,7 +331,7 @@ build_meson() {
       || { show_errors "/build/log/$pkg.build.log"; die "컴파일 실패: $pkg"; }
     DESTDIR="$stage" ninja -C "$dir/build" install > "/build/log/$pkg.install.log" 2>&1 \
       || { tail -20 "/build/log/$pkg.install.log"; die "설치 실패: $pkg"; }
-    mkdeb "$pkg" "$ver" "$stage" "$desc"
+    mkdeb "$pkg" "$ver" "$stage" "$desc" "$dir" "$tag"
 }
 
 # ── Hyprland 플러그인 (저장소 하위 디렉터리를 빌드) ──
@@ -340,7 +367,7 @@ build_plugin() {
     mkdir -p "$stage/usr/lib/x86_64-linux-gnu/hyprland"
     find "$stage/usr/lib" -maxdepth 2 -name "${pkg}.so" -not -path "*/hyprland/*" \
         -exec mv {} "$stage/usr/lib/x86_64-linux-gnu/hyprland/" \; 2>/dev/null || true
-    mkdeb "$pkg" "$ver" "$stage" "$desc"
+    mkdeb "$pkg" "$ver" "$stage" "$desc" "$SRC/$repo" "$tag"
 }
 
 mkdir -p /build/log /build/stage

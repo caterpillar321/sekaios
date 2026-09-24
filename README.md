@@ -23,6 +23,7 @@ sudo scripts/build-hypr.sh        # Hyprland 와 플러그인을 .deb 으로 (pa
 scripts/pack-shell.sh             # sekai-shell, sekai-desktop .deb
 sudo scripts/finalize.sh          # rootfs 에 설치 → squashfs → ISO
 scripts/build-repo.sh             # 서명된 apt 저장소 (repo/)
+scripts/publish-repo.sh           # 저장소 게시 → https://caterpillar321.github.io/sekaios-apt/
 ```
 
 - `rootfs/` 를 처음 만드는 과정(debootstrap)은 아직 스크립트로 정리되지 않았다.

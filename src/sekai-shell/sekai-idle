@@ -92,11 +92,54 @@ def on_term(*_):
     sys.exit(0)
 
 
+def compositor_pid():
+    """나를 띄운 Hyprland 의 PID — 세션이 끝나면 나도 끝나려고"""
+    pid = os.getppid()
+    while pid > 1:
+        try:
+            with open(f"/proc/{pid}/comm") as f:
+                if f.read().strip() == "Hyprland":
+                    return pid
+            with open(f"/proc/{pid}/stat") as f:
+                pid = int(f.read().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            break
+    return None
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def take_over():
+    """이전 세션에서 남은 sekai-idle 이 있으면 끝낸다 (한 사용자에 하나만)"""
+    path = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "sekai-idle.pid")
+    try:
+        with open(path) as f:
+            old = int(f.read().strip())
+        with open(f"/proc/{old}/cmdline", "rb") as f:
+            if b"sekai-idle" in f.read() and old != os.getpid():
+                os.kill(old, signal.SIGTERM)
+    except (OSError, ValueError):
+        pass
+    try:
+        with open(path, "w") as f:
+            f.write(str(os.getpid()))
+    except OSError:
+        pass
+
+
 def main():
     global reload_wanted
     if not shutil.which("swayidle"):
         print("swayidle 이 없습니다.", file=sys.stderr)
         return 1
+    take_over()
+    comp = compositor_pid()
     signal.signal(signal.SIGHUP, on_hup)
     signal.signal(signal.SIGTERM, on_term)
     signal.signal(signal.SIGINT, on_term)
@@ -104,6 +147,10 @@ def main():
     fails = 0
     while True:
         time.sleep(0.5)
+        if comp and not alive(comp):
+            # 세션이 끝났다 — swayidle 과 함께 끝낸다
+            stop()
+            return 0
         if reload_wanted:
             reload_wanted = False
             stop()

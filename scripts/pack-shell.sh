@@ -67,6 +67,17 @@ DESK
 
 # 셸 소스가 /usr/share 의 스타일을 찾도록 경로 확인 (main() 에 이미 폴백 있음)
 mkdir -p "$STAGE/DEBIAN"
+# 저작권·라이선스 고지 (Apache 2.0)
+copyright() {
+    install -d "$1/usr/share/doc/$2"
+    { echo "패키지:  $2 (SekaiOS)"
+      echo "저작권:  SekaiOS 개발자"
+      echo "라이선스: Apache License 2.0 — 아래 전문"
+      echo; cat "$P/LICENSE"; } > "$1/usr/share/doc/$2/copyright"
+    chmod 644 "$1/usr/share/doc/$2/copyright"
+}
+copyright "$STAGE" sekai-shell
+
 cat > "$STAGE/DEBIAN/control" <<EOF
 Package: sekai-shell
 Version: ${VER}-${REV}
@@ -147,6 +158,8 @@ fi
 PR
 chmod 755 "$STAGE_D/DEBIAN/postinst" "$STAGE_D/DEBIAN/prerm"
 
+copyright "$STAGE_D" sekai-desktop
+
 cat > "$STAGE_D/DEBIAN/control" <<CTRL
 Package: sekai-desktop
 Version: ${FULL}
@@ -155,7 +168,7 @@ Maintainer: SekaiOS <sekai@localhost>
 Section: metapackages
 Priority: optional
 Depends: sekai-shell (= ${FULL}),
- hyprland, hyprbars (>= 0.50.0-sekai3), hyprexpo, xwayland, binutils,
+ hyprland, hyprbars (>= 0.50.0-sekai4), hyprexpo, xwayland, binutils,
  xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr,
  foot, fuzzel, swaybg, swayidle, swaylock, grim, slurp,
  brightnessctl, playerctl, wtype, pkexec,

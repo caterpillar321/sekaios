@@ -129,7 +129,7 @@ class UpdatePage:
         on, uri = _sekai_repo()
         row(s, "SekaiOS 업데이트 저장소",
             "SekaiOS 서명 키로 서명된 패키지만 받습니다" if on else
-            "저장소 주소가 아직 정해지지 않아 꺼져 있습니다. 데비안 업데이트는 받습니다.",
+            "꺼져 있습니다. 데비안 업데이트만 받습니다.",
             control=info(uri if on else "꺼짐"))
         row(s, "자동으로 확인", "하루 한 번 목록을 받아 두고, 업데이트가 있으면 알림으로 알려 줍니다",
             control=info("켜짐"))

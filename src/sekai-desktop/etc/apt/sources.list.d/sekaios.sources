@@ -1,10 +1,9 @@
-# SekaiOS 업데이트 저장소
+# SekaiOS 업데이트 저장소 (GitHub Pages)
 #   패키지는 SekaiOS 서명 키로 서명되어 있고, 이 키로 서명된 것만 받는다.
-#   저장소 주소가 정해지면 URIs 를 바꾸고 Enabled 를 yes 로.
-#   (그 전까지는 데비안 업데이트만 받는다)
+#   끄려면 Enabled: no
 Types: deb
-URIs: https://updates.sekaios.invalid/
+URIs: https://caterpillar321.github.io/sekaios-apt/
 Suites: hatsune
 Components: main
 Signed-By: /usr/share/keyrings/sekaios-archive-keyring.gpg
-Enabled: no
+Enabled: yes
