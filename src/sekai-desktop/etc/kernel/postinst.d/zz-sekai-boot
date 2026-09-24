@@ -1,0 +1,5 @@
+#!/bin/sh
+# SekaiOS — 새 커널을 ESP 복사본에 반영 (rEFInd 가 ESP 에서 바로 읽는다)
+[ -x /usr/sbin/sekai-bootloader ] || exit 0
+/usr/sbin/sekai-bootloader kernel "$1" || true
+exit 0

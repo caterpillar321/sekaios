@@ -1,0 +1,127 @@
+#!/bin/bash
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 부트로더 관리 (rEFInd) — 패키지가 관리하므로 업데이트로 고쳐진다
+#
+#    sekai-bootloader install --disk /dev/sdX --part N
+#        처음 설치: rEFInd 복사 + 설정 + 커널 + UEFI 부팅 항목 등록 (설치 프로그램이 부른다)
+#    sekai-bootloader update
+#        rEFInd·테마·설정을 지금 패키지 기준으로 다시 쓰고 커널을 복사 (패키지 업데이트 때 자동)
+#    sekai-bootloader kernel [버전]
+#        ESP 의 커널·initramfs 복사본만 갱신 (커널 훅이 부른다)
+#
+#  구조 (SekaiOS 가 설치된 디스크의 자기 ESP 에):
+#    /boot/efi/EFI/sekai/     rEFInd + 설정 + 아이콘 + 테마
+#    /boot/efi/EFI/BOOT/      폴백 (NVRAM 부팅 항목이 지워져도 켜지게)
+#    /boot/efi/sekai/         커널·initramfs 복사본 (펌웨어가 FAT 에서 바로 읽는다)
+#
+#  커널 옵션을 바꾸려면 /etc/default/sekai-boot 의 SEKAI_KERNEL_OPTS
+# ═══════════════════════════════════════════════════════════════
+set -euo pipefail
+
+ESP=/boot/efi
+ID=sekai
+EFIDIR="$ESP/EFI/$ID"
+KDIR="$ESP/$ID"
+RS=/usr/share/refind
+THEME=/usr/share/sekai/refind
+
+SEKAI_KERNEL_OPTS="quiet splash loglevel=3 rd.udev.log_level=3 systemd.show_status=auto vt.global_cursor_default=0"
+[ -f /etc/default/sekai-boot ] && . /etc/default/sekai-boot
+
+say()  { echo "sekai-bootloader: $*"; }
+die()  { echo "sekai-bootloader: 오류: $*" >&2; exit 1; }
+
+installed() { mountpoint -q "$ESP" && [ -d "$EFIDIR" ]; }
+
+# 새 파일로 쓰고 바꿔치기 — 도중에 전원이 나가도 반쯤 쓴 파일이 남지 않게
+put() { cp -f "$1" "$2.new" && mv -f "$2.new" "$2"; }
+
+copy_kernel() {
+    local ver="${1:-}"
+    [ -n "$ver" ] || ver=$(ls /boot/vmlinuz-* 2>/dev/null | sed 's|.*/vmlinuz-||' | sort -V | tail -1)
+    [ -n "$ver" ] || die "/boot 에 커널이 없습니다"
+    mkdir -p "$KDIR"
+    [ -f "/boot/vmlinuz-$ver" ]    && put "/boot/vmlinuz-$ver"    "$KDIR/vmlinuz"
+    [ -f "/boot/initrd.img-$ver" ] && put "/boot/initrd.img-$ver" "$KDIR/initrd.img"
+    sync
+    say "커널 $ver → ESP"
+}
+
+copy_refind() {
+    [ -d "$RS" ] || die "refind 패키지가 없습니다"
+    mkdir -p "$EFIDIR"/{drivers_x64,icons,fonts,themes/sekai}
+    put "$RS/refind/refind_x64.efi" "$EFIDIR/refind_x64.efi"
+    cp -f "$RS"/refind/drivers_x64/ext4_x64.efi "$EFIDIR/drivers_x64/" 2>/dev/null || true
+    cp -f "$RS"/refind/icons/*.png "$EFIDIR/icons/"
+    cp -f "$RS"/fonts/*.png        "$EFIDIR/fonts/"
+    [ -f "$THEME/os_sekai.png" ] && cp -f "$THEME/os_sekai.png" "$EFIDIR/icons/os_sekai.png"
+    for f in background selection_big selection_small; do
+        [ -f "$THEME/$f.png" ] && cp -f "$THEME/$f.png" "$EFIDIR/themes/sekai/$f.png"
+    done
+}
+
+write_conf() {
+    local uuid opts
+    uuid=$(findmnt -no UUID /) || true
+    [ -n "$uuid" ] || die "루트 파일 시스템의 UUID 를 모릅니다"
+    opts="root=UUID=$uuid ro"
+    # 템플릿 — 패키지와 함께 업데이트된다
+    sed -e "s|@ID@|$ID|g" -e "s|@ROOT@|$opts|g" -e "s|@OPTS@|$SEKAI_KERNEL_OPTS|g" \
+        "$THEME/refind.conf.in" > "$EFIDIR/refind.conf.new"
+    mv -f "$EFIDIR/refind.conf.new" "$EFIDIR/refind.conf"
+}
+
+fallback() {
+    # 폴백 경로 — SekaiOS 전용 ESP 일 때만 (다른 OS 의 ESP 면 그쪽 폴백을 덮지 않는다)
+    local fb="$ESP/EFI/BOOT/BOOTX64.EFI"
+    if [ -f "$fb" ] && ! cmp -s "$fb" "$EFIDIR/refind_x64.efi" && [ ! -f "$ESP/EFI/BOOT/refind.conf" ]; then
+        say "EFI/BOOT 에 다른 부트로더가 있어 폴백은 건드리지 않습니다"
+        return
+    fi
+    mkdir -p "$ESP/EFI/BOOT"
+    put "$EFIDIR/refind_x64.efi" "$fb"
+    cp -f "$EFIDIR/refind.conf" "$ESP/EFI/BOOT/refind.conf"
+    # 폴백으로 켜질 때도 테마·아이콘을 찾게 (경로가 rEFInd 폴더 기준이라)
+    for d in icons fonts themes drivers_x64; do
+        mkdir -p "$ESP/EFI/BOOT/$d"; cp -rf "$EFIDIR/$d/." "$ESP/EFI/BOOT/$d/"
+    done
+}
+
+cmd="${1:-}"; shift || true
+[ "$(id -u)" -eq 0 ] || die "관리자 권한이 필요합니다"
+
+case "$cmd" in
+    install)
+        disk=""; part=""
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --disk) disk="$2"; shift 2 ;;
+                --part) part="$2"; shift 2 ;;
+                *) die "모르는 옵션: $1" ;;
+            esac
+        done
+        [ -n "$disk" ] && [ -n "$part" ] || die "사용법: install --disk /dev/sdX --part N"
+        mountpoint -q "$ESP" || die "$ESP 가 마운트돼 있지 않습니다"
+        mkdir -p "$EFIDIR"
+        copy_refind; write_conf; copy_kernel; fallback
+        efibootmgr -B -L "SekaiOS" >/dev/null 2>&1 || true
+        if efibootmgr --create --disk "$disk" --part "$part" \
+                --loader "\\EFI\\$ID\\refind_x64.efi" --label "SekaiOS" >/dev/null 2>&1; then
+            say "UEFI 부팅 항목 등록"
+        else
+            say "UEFI 부팅 항목을 등록하지 못했습니다 — 폴백 경로로 켜집니다"
+        fi
+        ;;
+    update)
+        installed || { say "SekaiOS ESP 구조가 없어 건너뜁니다"; exit 0; }
+        copy_refind; write_conf; copy_kernel; fallback
+        say "부팅 메뉴 갱신"
+        ;;
+    kernel)
+        installed || exit 0
+        copy_kernel "${1:-}"
+        ;;
+    *)
+        sed -n '3,13p' "$0" | sed 's/^# \{0,1\}//'
+        exit 2 ;;
+esac

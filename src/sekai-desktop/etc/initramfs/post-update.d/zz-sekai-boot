@@ -1,0 +1,5 @@
+#!/bin/sh
+# SekaiOS — initramfs 가 다시 만들어지면 ESP 복사본도 갱신
+[ -x /usr/sbin/sekai-bootloader ] || exit 0
+/usr/sbin/sekai-bootloader kernel "$1" || true
+exit 0

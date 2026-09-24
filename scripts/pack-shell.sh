@@ -115,7 +115,7 @@ DSRC="$P/src/sekai-desktop"
 ( cd "$DSRC" && find . -type f ) | while read -r f; do
     f="${f#./}"
     mode=644
-    case "$f" in usr/bin/*|usr/libexec/*) mode=755 ;; esac
+    case "$f" in usr/bin/*|usr/sbin/*|usr/libexec/*|etc/kernel/postinst.d/*|etc/initramfs/post-update.d/*) mode=755 ;; esac
     install -Dm$mode "$DSRC/$f" "$STAGE_D/$f"
 done
 
@@ -141,6 +141,18 @@ if [ "$1" = "configure" ]; then
     # 로그인 화면 해상도 공유 폴더 (usr/lib/tmpfiles.d/sekai.conf)
     systemd-tmpfiles --create /usr/lib/tmpfiles.d/sekai.conf >/dev/null 2>&1 \
         || install -d -m 1777 /var/lib/sekai/displays
+    # 옛 설치본이 이미지에 직접 넣었던 커널 훅 → 이제 패키지의 zz-sekai-boot 가 한다
+    for f in /etc/kernel/postinst.d/zz-sekai-esp /etc/initramfs/post-update.d/zz-sekai-esp; do
+        [ -e "$f" ] && ! dpkg -S "$f" >/dev/null 2>&1 && rm -f "$f"
+    done
+    # refind 패키지가 업데이트 때 스스로 /EFI/refind 에 기본 설정으로 설치하고 부팅 순서를
+    #   바꾸지 않게 한다 — SekaiOS 의 rEFInd 는 sekai-bootloader 가 관리한다
+    if command -v debconf-set-selections >/dev/null; then
+        echo "refind refind/install_to_esp boolean false" | debconf-set-selections || true
+    fi
+    # 부팅 메뉴(rEFInd)를 이 패키지 기준으로 다시 쓴다 — 설치된 디스크일 때만
+    #   (이미지를 만드는 중이거나 라이브 세션이면 sekai-bootloader 가 알아서 건너뛴다)
+    /usr/sbin/sekai-bootloader update || true
     # 부팅 화면(Plymouth) — 테마가 바뀔 때만 initramfs 를 다시 만든다 (느리므로)
     if command -v plymouth-set-default-theme >/dev/null \
        && [ "$(plymouth-set-default-theme 2>/dev/null)" != sekai ]; then
@@ -171,7 +183,7 @@ Depends: sekai-shell (= ${FULL}),
  hyprland, hyprbars (>= 0.50.0-sekai4), hyprexpo, xwayland, binutils,
  xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr,
  foot, fuzzel, swaybg, swayidle, swaylock, grim, slurp,
- brightnessctl, playerctl, wtype, pkexec,
+ brightnessctl, playerctl, wtype, pkexec, refind, efibootmgr,
  wl-clipboard, cliphist, lxpolkit, libnotify-bin, wayland-utils,
  pipewire, pipewire-audio, pipewire-pulse, wireplumber, pavucontrol,
  network-manager, network-manager-gnome, systemd-resolved,
