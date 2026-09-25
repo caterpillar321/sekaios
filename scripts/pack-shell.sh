@@ -270,7 +270,7 @@ Depends: sekai-shell (= ${FULL}),
  fonts-noto-color-emoji, fonts-symbola,
  papirus-icon-theme, adwaita-icon-theme,
  gnome-keyring, libpam-gnome-keyring, libpam-runtime,
- ibus, ibus-wayland, ibus-hangul, ibus-gtk3, ibus-gtk4, locales, greetd,
+ ibus, ibus-wayland, ibus-hangul, gir1.2-ibus-1.0, ibus-gtk3, ibus-gtk4, locales, greetd,
  plymouth (>= 24.004.60-5+sekai1), plymouth-themes,
  dbus-user-session,
  libgl1-mesa-dri, libegl-mesa0, mesa-utils

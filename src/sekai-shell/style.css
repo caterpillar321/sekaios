@@ -121,6 +121,9 @@ window.toast-stack {
 
 .tray { padding: 0 2px; }
 .tray-item.attention { background: alpha(@accent, 0.18); }
+/* 한/영 표시 — ibus 태극 그림 대신 글자 (가 · A) */
+.tray-item .ime-mode { font-size: 14px; color: @text2; min-width: 18px; }
+.tray-item:hover .ime-mode { color: @fg; }
 
 /* 알림 버튼의 읽지 않음 개수 */
 .noti-badge {

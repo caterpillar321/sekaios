@@ -19,6 +19,7 @@ from gi.repository import Gtk, Gdk, GdkPixbuf, GLib, Gio  # noqa: E402
 from . import dbg
 from . import dbusutil as D
 from .dbusmenu import DBusMenuClient, build_rows
+from .imemode import HangulMode
 from .popup import PanelPopup
 
 WATCHER_NAME = "org.kde.StatusNotifierWatcher"
@@ -136,7 +137,15 @@ class TrayItem:
         self.button.set_valign(Gtk.Align.CENTER)
         self.image = Gtk.Image()
         self.image.set_pixel_size(box.icon_size)
-        self.button.add(self.image)
+        # 한글 입력기(ibus)는 태극 그림 대신 지금 상태를 글자로 — "가" 한글 · "A" 영문 (imemode)
+        self.text = Gtk.Label()
+        self.text.get_style_context().add_class("ime-mode")
+        for w in (self.image, self.text):
+            w.set_no_show_all(True)          # 둘 중 무엇을 보일지는 _apply 가 정한다
+        inner = Gtk.Box()
+        inner.pack_start(self.image, True, True, 0)
+        inner.pack_start(self.text, True, True, 0)
+        self.button.add(inner)
         self.button.add_events(Gdk.EventMask.SCROLL_MASK)
         self.button.connect("button-press-event", self._press)
         self.button.connect("scroll-event", self._scroll)
@@ -155,6 +164,12 @@ class TrayItem:
     def key(self):
         return f"{self.service}{self.path}"
 
+    def is_hangul_ime(self):
+        """ibus 패널의 아이콘이고 엔진이 한글이면 True — 그림 대신 "가"/"A" 를 그린다"""
+        p = self.props
+        return (self.box.ime is not None and str(p.get("Id") or "").startswith("ibus")
+                and "ibus-hangul" in str(p.get("IconName") or ""))
+
     # ── 속성 읽기 ──
     def refresh(self):
         def got(props):
@@ -169,6 +184,33 @@ class TrayItem:
         size = self.box.icon_size
         status = p.get("Status", "Active")
 
+        ime = self.is_hangul_ime()
+        self.image.set_visible(not ime)
+        self.text.set_visible(ime)
+        if ime:
+            self.text.set_text("가" if self.box.ime.state else "A")
+        else:
+            self._apply_icon(p, size, status)
+
+        title = p.get("Title") or p.get("Id") or "트레이 항목"
+        tip = p.get("ToolTip")
+        if isinstance(tip, tuple) and len(tip) >= 4:
+            head, body = tip[2], tip[3]
+            title = "\n".join(x for x in (head or title, body) if x)
+        if ime:
+            title = ("한글 입력" if self.box.ime.state else "영문 입력") + "\n누르거나 한/영 키로 바꿉니다"
+        self.button.set_tooltip_text(title)
+
+        ctx = self.button.get_style_context()
+        (ctx.add_class if status == "NeedsAttention" else ctx.remove_class)("attention")
+        self.button.set_visible(status != "Passive" or self.box.show_passive)
+
+        menu_path = p.get("Menu")
+        if menu_path and (self.menu_client is None
+                          or self.menu_client.path != menu_path):
+            self.menu_client = DBusMenuClient(self.conn, self.service, menu_path)
+
+    def _apply_icon(self, p, size, status):
         name = p.get("IconName")
         if status == "NeedsAttention" and p.get("AttentionIconName"):
             name = p["AttentionIconName"]
@@ -194,22 +236,6 @@ class TrayItem:
                                               Gtk.IconSize.MENU)
                 self.image.set_pixel_size(size)
 
-        title = p.get("Title") or p.get("Id") or "트레이 항목"
-        tip = p.get("ToolTip")
-        if isinstance(tip, tuple) and len(tip) >= 4:
-            head, body = tip[2], tip[3]
-            title = "\n".join(x for x in (head or title, body) if x)
-        self.button.set_tooltip_text(title)
-
-        ctx = self.button.get_style_context()
-        (ctx.add_class if status == "NeedsAttention" else ctx.remove_class)("attention")
-        self.button.set_visible(status != "Passive" or self.box.show_passive)
-
-        menu_path = p.get("Menu")
-        if menu_path and (self.menu_client is None
-                          or self.menu_client.path != menu_path):
-            self.menu_client = DBusMenuClient(self.conn, self.service, menu_path)
-
     def _set_pixbuf(self, pb, sf):
         if sf > 1:
             self.image.set_from_surface(Gdk.cairo_surface_create_from_pixbuf(pb, sf, None))
@@ -219,7 +245,9 @@ class TrayItem:
     # ── 입력 ──
     def _press(self, widget, ev):
         x, y = self._screen_xy(widget)
-        if ev.button == 1:
+        if ev.button == 1 and self.is_hangul_ime():
+            self._toggle_hangul()
+        elif ev.button == 1:
             if self.props.get("ItemIsMenu") or not self._call("Activate", x, y):
                 self.box.show_menu(self, widget)
         elif ev.button == 2:
@@ -247,6 +275,38 @@ class TrayItem:
         D.call(self.conn, self.service, self.path, ITEM_IFACE, "Scroll",
                GLib.Variant("(is)", (delta, orient)))
         return True
+
+    def _toggle_hangul(self):
+        """한/영 전환 — ibus 패널의 트레이 메뉴에서 그 항목("한글 상태")을 누른 것처럼.
+        입력 칸(InputContext)은 그것을 만든 앱만 다룰 수 있어서 우리가 직접 바꿀 수는 없다.
+        항목을 못 찾으면 메뉴를 연다."""
+        label = self.box.ime.label.replace("_", "")
+        if self.menu_client is None or not label:
+            self.box.show_menu(self, self.button)
+            return
+
+        def find(node):
+            for ch in node.children:
+                if ch.toggle_type == "checkmark" and ch.label == label:
+                    return ch
+                hit = find(ch)
+                if hit is not None:
+                    return hit
+            return None
+
+        def ready(node):
+            hit = find(node) if node is not None else None
+            if hit is None:
+                self.box.show_menu(self, self.button)
+                return
+            # 그 항목의 체크 표시는 메뉴에서 누를 때만 바뀐다 — 한/영 키로 바꾸거나 다른 창으로 옮기면
+            #   실제 상태와 어긋난 채 남는다. 누르면 "체크 표시의 반대"로 맞추라고 보내므로, 어긋나 있으면
+            #   첫 번째는 지금 상태 그대로(아무 일 없음)이고 두 번째가 바꾼다. (같은 연결이라 순서대로 간다)
+            real = self.box.ime.state
+            if real is not None and (hit.toggle_state == 1) != real:
+                self.menu_client.clicked(hit.id)
+            self.menu_client.clicked(hit.id)
+        self.menu_client.fetch(ready)
 
     def _screen_xy(self, widget):
         try:
@@ -350,6 +410,7 @@ class TrayBox(Gtk.Box):
         self.items = {}
         self.host_registered = False
         self.menu = None
+        self.ime = None
 
         try:
             self.conn = D.bus()
@@ -361,6 +422,14 @@ class TrayBox(Gtk.Box):
         self._node = D.node_info(WATCHER_XML)
         self._reg_id = None
         self._start_watcher()
+
+        self.ime = HangulMode()
+        self.ime.on_change(self._ime_changed)
+
+    def _ime_changed(self):
+        for item in list(self.items.values()):
+            if item.props and item.is_hangul_ime():
+                item._apply()
 
     # ── Watcher ────────────────────────────────────────────
     def refresh_icons(self):
