@@ -92,6 +92,7 @@ install -m644 "$SELF/hypr/patch-hyprbars-icons.py" "$BR/build/patch-hyprbars-ico
 install -m644 "$SELF/hypr/patch-hyprbars-hover.py" "$BR/build/patch-hyprbars-hover.py"
 install -m644 "$SELF/hypr/patch-hyprbars-snap.py"  "$BR/build/patch-hyprbars-snap.py"
 install -m644 "$SELF/hypr/patch-hyprbars-theme.py" "$BR/build/patch-hyprbars-theme.py"
+install -m644 "$SELF/hypr/patch-hyprland-clientmove.py" "$BR/build/patch-hyprland-clientmove.py"
 
 # ── 빌드 ─────────────────────────────────────────────
 say "빌드 시작"; echo

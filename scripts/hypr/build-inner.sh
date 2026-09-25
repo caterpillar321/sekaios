@@ -14,7 +14,8 @@ REV="sekai2"
 #   hyprbars sekai6: 스냅 레이아웃 — 최대화 버튼에 마우스 올림/벗어남 알림
 #   hyprbars sekai7: 끄는 중 손을 떼면 커서 밑이 레이어여도 끌기를 끝냄 (위쪽 레이아웃 바)
 #   hyprbars sekai8: 버튼 마우스 올림 배경을 글자색에서 (라이트 모드)
-rev_for() { case "$1" in hyprbars) echo sekai8 ;; *) echo "$REV" ;; esac; }
+#   hyprland sekai3: 창이 그린 제목줄(CSD — Chromium 탭 줄 등)을 끌어서 옮기기 (patch-hyprland-clientmove.py)
+rev_for() { case "$1" in hyprbars) echo sekai8 ;; hyprland) echo sekai3 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
@@ -132,6 +133,8 @@ if leftover:
     print("    !! 잔존:", ", ".join(leftover)); sys.exit(1)
 PYEOF
     [ $? -eq 0 ] || die "패치 실패"
+    say "SekaiOS 패치: 창이 그린 제목줄 끌기"
+    python3 /build/patch-hyprland-clientmove.py "$dir" || die "패치 실패 (clientmove)"
     ok "패치 완료"
 }
 
@@ -211,7 +214,7 @@ add_copyright() {
         echo "패키지:  $pkg (SekaiOS 빌드)"
         echo "원본:    https://github.com/hyprwm/$repo  (태그 $tag)"
         case "$pkg" in
-            hyprland) echo "수정:    GCC 14 빌드 호환 패치 (scripts/hypr/build-inner.sh 의 patch_hyprland)" ;;
+            hyprland) echo "수정:    GCC 14 빌드 호환 패치, 창이 그린 제목줄 끌기 (scripts/hypr/build-inner.sh 의 patch_hyprland, patch-hyprland-clientmove.py)" ;;
             hyprbars) echo "수정:    창 조작 버튼 벡터 아이콘·마우스 올림 배경·끌어서 스냅 알림 (scripts/hypr/patch-hyprbars-*.py)" ;;
             *)        echo "수정:    없음 (원본 그대로 빌드)" ;;
         esac
@@ -389,7 +392,7 @@ build_cmake hyprgraphics         v0.1.5  hyprgraphics         "Hyprland graphics
 build_meson hyprland-protocols   v0.6.4  hyprland-protocols   "Hyprland-specific Wayland protocols"
 build_cmake aquamarine           v0.9.2  aquamarine           "Hyprland rendering and backend library"
 verify_shim
-if [ ! -f "$OUT/hyprland_0.50.1-${REV}_amd64.deb" ] || [ "${SKIP_BUILT:-1}" != "1" ]; then
+if [ ! -f "$OUT/hyprland_0.50.1-$(rev_for hyprland)_amd64.deb" ] || [ "${SKIP_BUILT:-1}" != "1" ]; then
     fetch Hyprland v0.50.1
     patch_hyprland
 fi
