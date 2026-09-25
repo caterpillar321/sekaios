@@ -1,0 +1,36 @@
+#!/usr/bin/python3
+"""SekaiOS — 그래픽 장치(/dev/dri/card*)를 열어 두기만 한다. 로그인 화면 ↔ 바탕화면이 끊김 없이 넘어가게.
+
+로그인 화면(Hyprland)이 끝나고 사용자 Hyprland 가 뜨기 전 잠깐, 장치를 연 프로그램이 하나도 없으면
+커널이 콘솔 화면(fbdev)을 되살린다(lastclose). 조용한 부팅이면 콘솔이 한 번도 그려지지 않아
+그 버퍼엔 지난 화면 조각이 남아 있고, 한 장이 모든 모니터 (0,0) 에 복제돼 보였다
+(좌상단·보조 모니터에 로그인 화면이 남는 아티팩트, 부팅 때 잠깐 보이는 쓰레기 화면).
+장치를 열어 두면 그 되살리기가 없고, 마지막 화면이 남은 채 다음 Hyprland 가 넘겨받는다.
+
+화면 제어권(DRM master)은 갖지 않는다 — 열자마자 내려놓는다. 로그인 화면이 제어권을 가진 뒤에
+시작해야 한다 (greetd.service 가 plymouth-handoff 다음에 띄운다).
+"""
+import fcntl
+import glob
+import os
+import signal
+
+DRM_IOCTL_DROP_MASTER = 0x641F          # _IO('d', 0x1f)
+
+fds = []
+for path in sorted(glob.glob("/dev/dri/card[0-9]*")):
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CLOEXEC)
+    except OSError:
+        continue
+    try:
+        fcntl.ioctl(fd, DRM_IOCTL_DROP_MASTER)   # 혹시 제어권이 넘어왔으면 곧바로 내려놓는다
+    except OSError:
+        pass                                     # 보통은 제어권이 없어 실패한다 — 정상
+    fds.append(fd)
+
+if not fds:
+    raise SystemExit(0)
+signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
+while True:
+    signal.pause()

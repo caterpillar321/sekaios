@@ -1,0 +1,8 @@
+[Unit]
+Description=SekaiOS: keep the graphics device open (no console flash between login screen and desktop)
+# greetd.service 가 로그인 화면이 뜬 뒤에 띄운다 (sekai-drm-hold 머리말 참고)
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/sekai/sekai-drm-hold
+Restart=on-failure

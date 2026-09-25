@@ -4,6 +4,7 @@
 #     ① 가상 터미널 1 (부팅 화면과 같은 곳 — 가상 터미널을 바꾸면 콘솔이 한 번 끼어든다)
 #     ② 시작 전엔 Plymouth 를 비활성화만 (로고가 남는다)
 #     ③ 로그인 화면이 뜬 뒤에 Plymouth 를 끝낸다 (plymouth-handoff)
+#     ④ 그래픽 장치를 열어 두는 도우미를 띄운다 (sekai-drm-hold — 로그인 ↔ 바탕화면 사이 콘솔 화면 방지)
 #   실행 명령은 greetd.service.d/sekai.conf 가 greetd-launch 로 바꾼다.
 [Unit]
 Description=Greeter daemon
@@ -17,6 +18,8 @@ Type=simple
 ExecStartPre=-/usr/bin/plymouth deactivate
 ExecStart=greetd
 ExecStartPost=-/usr/libexec/sekai/plymouth-handoff
+# 로그인 화면이 화면을 잡은 뒤 — 그래픽 장치를 열어 두는 도우미 (넘어갈 때 콘솔 화면이 끼어들지 않게)
+ExecStartPost=-/bin/systemctl --no-block start sekai-drm-hold.service
 IgnoreSIGPIPE=no
 SendSIGHUP=yes
 TimeoutStopSec=30s

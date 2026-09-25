@@ -1,0 +1,35 @@
+#!/bin/sh
+# SekaiOS — 부팅·로그인 화면 전환 진단 (화면 깜박임·신호 끊김 원인 찾기)
+#   sudo /usr/libexec/sekai/sekai-bootdiag [저장할 파일]   (기본: ~/sekai-bootdiag.txt)
+#   개인 정보(파일·비밀번호 등)는 모으지 않는다 — 부팅 기록 중 그래픽 관련 줄만.
+U=${SUDO_USER:-$(id -un)}
+H=$(getent passwd "$U" | cut -d: -f6)
+OUT=${1:-$H/sekai-bootdiag.txt}
+{
+echo "== $(date)  $(uname -r)"
+echo "== cmdline";           cat /proc/cmdline
+echo "== boot-video";        cat /var/lib/sekai/boot-video 2>&1
+echo "== modes (세션)";      cat /var/lib/sekai/displays/*.modes 2>&1
+echo "== displays conf";     cat /var/lib/sekai/displays/*.conf 2>&1
+echo "== modprobe";          cat /etc/modprobe.d/sekai-nvidia.conf 2>&1
+echo "== initramfs nvidia";  lsinitramfs "/boot/initrd.img-$(uname -r)" 2>/dev/null | grep -E "/nvidia(-[a-z]+|_[a-z]+)?\.ko" | head
+echo "== plymouth";          plymouth-set-default-theme 2>&1
+echo "== drm 장치";           ls -l /dev/dri/ 2>&1
+for c in /sys/class/drm/card*-*; do
+    [ -f "$c/status" ] || continue
+    echo "-- ${c##*/}: $(cat $c/status) enabled=$(cat $c/enabled 2>/dev/null) $(head -3 $c/modes 2>/dev/null | tr '\n' ' ')"
+done
+echo "== fb";                cat /proc/fb 2>&1
+echo "== 커널 (그래픽)"
+journalctl -b -k --no-pager -o short-monotonic 2>/dev/null | grep -iE "nvidia|drm|fbcon|fb0|simpledrm|efifb|framebuffer|console" | head -120
+echo "== 부팅 순서 (plymouth·greetd·sekai)"
+journalctl -b --no-pager -o short-monotonic -u plymouth-start -u plymouth-quit -u plymouth-quit-wait -u greetd -u sekai-drm-hold -u sekai-bootmode 2>/dev/null | head -60
+echo "== 세션 Hyprland (DRM)"
+for f in /run/user/*/hypr/*/hyprland.log; do
+    [ -f "$f" ] || continue
+    echo "-- $f"
+    grep -iE "\[AQ\].*(drm|modeset|crtc|connector|mode |commit fail|restor)|monitor .*(added|mode)" "$f" | head -80
+done
+} > "$OUT" 2>&1
+chown "$U" "$OUT" 2>/dev/null
+echo "저장했습니다: $OUT"
