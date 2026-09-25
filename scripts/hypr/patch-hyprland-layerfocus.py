@@ -48,3 +48,33 @@ if MARK not in t:
     print("    적용: InputManager.cpp 누를 때 초점")
 else:
     print("    (InputManager.cpp 초점 이미 적용됨)")
+
+# ── SEKAI_LAYER_HOVER: 마우스를 올리기만 해도 바탕화면이 키보드를 가져가던 것 ─────────────
+#   Hyprland 는 키보드를 받을 수 있는 레이어 위에 커서가 오면 follow_mouse 와 상관없이 그 레이어에
+#   키보드 초점을 준다. 터미널에 치다가 커서를 창 밖(바탕화면)으로 옮기거나 창 크기를 바꾸면(커서가
+#   창 밖으로 나간다) 바탕화면이 키보드를 가져가, 터미널 커서가 빈 네모가 되고 입력이 씹혔다.
+#   클릭해야 초점 이동(follow_mouse = 2)일 땐 아래쪽 레이어(BACKGROUND·BOTTOM)는 올림으로 초점을
+#   가져가지 않고, 누를 때 준다 (바탕화면 아이콘 이름 바꾸기·Delete 는 누른 뒤에 된다).
+t = inp.read_text()
+if "SEKAI_LAYER_HOVER" not in t:
+    t = sub(t, '''        if (pFoundLayerSurface && (pFoundLayerSurface->m_layerSurface->m_current.interactivity != ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE) && FOLLOWMOUSE != 3 &&
+            (allowKeyboardRefocus || pFoundLayerSurface->m_layerSurface->m_current.interactivity == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE)) {''',
+            '''        if (pFoundLayerSurface && (pFoundLayerSurface->m_layerSurface->m_current.interactivity != ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE) && FOLLOWMOUSE != 3 &&
+            !(FOLLOWMOUSE == 2 && !refocus && pFoundLayerSurface->m_layer <= ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM) && // SEKAI_LAYER_HOVER
+            (allowKeyboardRefocus || pFoundLayerSurface->m_layerSurface->m_current.interactivity == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE)) {''',
+            "레이어 올림 초점")
+    t = sub(t, '''            // SEKAI_LAYER_FOCUS: 누른 창이 마지막 창이어도 키보드가 레이어(바탕화면 등)에 가 있으면 다시 초점''',
+            '''            // SEKAI_LAYER_HOVER: 창이 아닌 곳(바탕화면 레이어)을 누르면 그 레이어에 키보드 초점 — 올림으로는 안 준다
+            if (!w && *PFOLLOWMOUSE == 2) {
+                const auto PSURF = g_pSeatManager->m_state.pointerFocus.lock();
+                const auto PLS   = PSURF ? g_pCompositor->getLayerSurfaceFromSurface(PSURF) : nullptr;
+                if (PLS && PLS->m_layerSurface->m_current.interactivity != ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE && g_pSeatManager->m_state.keyboardFocus != PSURF)
+                    g_pCompositor->focusSurface(PSURF);
+            }
+
+            // SEKAI_LAYER_FOCUS: 누른 창이 마지막 창이어도 키보드가 레이어(바탕화면 등)에 가 있으면 다시 초점''',
+            "누를 때 레이어 초점")
+    inp.write_text(t)
+    print("    적용: InputManager.cpp 레이어는 올림 대신 누를 때 초점")
+else:
+    print("    (InputManager.cpp 레이어 올림 이미 적용됨)")

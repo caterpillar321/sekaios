@@ -19,7 +19,8 @@ REV="sekai2"
 #   hyprland sekai5: 창 테두리 크기 조절을 윈도우처럼 — 커서, 안쪽 가장자리, 위쪽, 한 방향 (patch-hyprland-bordergrab.py)
 #   hyprbars sekai9: 제목줄 가장자리 4px 누름은 넘긴다 — 위쪽으로 크기 조절 (patch-hyprbars-bordergrab.py)
 #   hyprland sekai6: 바탕화면 레이어가 창의 키보드 초점을 가로채지 않게 (patch-hyprland-layerfocus.py)
-rev_for() { case "$1" in hyprbars) echo sekai9 ;; hyprland) echo sekai6 ;; *) echo "$REV" ;; esac; }
+#   hyprland sekai7: follow_mouse=2 에서 바탕화면 레이어가 커서 올림만으로 키보드를 가져가지 않게
+rev_for() { case "$1" in hyprbars) echo sekai9 ;; hyprland) echo sekai7 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
