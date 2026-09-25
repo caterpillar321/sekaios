@@ -214,11 +214,22 @@ def _rgba(v):   return hex_to_rgba(v)
 def _accent(v): return hex_to_rgba(v, 0.53)
 
 
+def _apply_wm_mode(mode):
+    """모드가 바뀌었을 때 창 관리자 쪽 — keyword·GTK 설정으로는 바뀌지 않는 것들 (set_mode·되돌리기 공용)"""
+    if os.environ.get("WAYLAND_DISPLAY"):
+        # 제목줄 버튼 색은 설정을 다시 읽어야 바뀐다 (hyprbars 가 다시 읽을 때 버튼을 새로 만든다)
+        run(["hyprctl", "reload"])
+    else:
+        # 기본 화면 모드(X11): xfwm4 창 테두리 테마를 바로 바꾼다
+        run(["xfconf-query", "-c", "xfwm4", "-p", "/general/theme",
+             "-s", "Sekai-Light" if mode == "light" else "Sekai"])
+
+
 class Store:
     def __init__(self):
         self.data = copy.deepcopy(DEFAULTS)
         self._listeners = []
-        # 페이지를 다시 그려 달라는 요청을 받을 곳 — 설정 창이 넣는다 (on_rebuild(page_id 또는 None, 지연 ms)).
+        # 페이지를 다시 그려 달라는 요청을 받을 곳 — 설정 창이 넣는다 (on_rebuild(page_id 또는 None, 지연 ms, 섹션)).
         #   저장소는 GTK 를 모른다 (세션 시작 스크립트도 쓰므로)
         self.on_rebuild = None
         self.load()
@@ -300,13 +311,7 @@ class Store:
         a.update(theme.PALETTES[mode])
         self.save()                         # 조각 파일 다시 쓰기 + 패널·바탕화면에 SIGHUP
         theme.apply_system(mode)            # GTK·Chromium 등
-        if os.environ.get("WAYLAND_DISPLAY"):
-            # 제목줄 버튼 색은 설정을 다시 읽어야 바뀐다 (hyprbars 가 다시 읽을 때 버튼을 새로 만든다)
-            run(["hyprctl", "reload"])
-        else:
-            # 기본 화면 모드(X11): xfwm4 창 테두리 테마를 바로 바꾼다
-            run(["xfconf-query", "-c", "xfwm4", "-p", "/general/theme",
-                 "-s", "Sekai-Light" if mode == "light" else "Sekai"])
+        _apply_wm_mode(mode)
         for cb in self._listeners:
             try:
                 cb("appearance", "mode", mode)
@@ -314,6 +319,7 @@ class Store:
                 dbg("리스너 예외", e)
 
     def reset_section(self, section):
+        old_mode = theme.mode_of(self.get("appearance"))
         self.data[section] = copy.deepcopy(DEFAULTS.get(section, {}))
         self.save()
         self.apply_all()
@@ -321,20 +327,23 @@ class Store:
             # 색·모드가 바뀌었다 — 창의 CSS·GTK 설정과 일반 앱이 따라오게 (set_mode 와 같은 알림)
             mode = theme.mode_of(self.get("appearance"))
             theme.apply_system(mode)
+            if mode != old_mode:
+                _apply_wm_mode(mode)
             for key in ("accent", "mode"):
                 for cb in self._listeners:
                     try:
                         cb("appearance", key, self.get("appearance", key))
                     except Exception as e:
                         dbg("리스너 예외", e)
-        # 화면의 스위치·콤보가 옛 값을 보여 주지 않게 페이지들을 다시 그린다
-        self.request_rebuild()
+        # 화면의 스위치·콤보가 옛 값을 보여 주지 않게 이 섹션을 쓰는 페이지들을 다시 그린다
+        self.request_rebuild(section=section)
 
-    def request_rebuild(self, page_id=None, delay_ms=0):
-        """설정 창에 페이지를 다시 그려 달라고 (page_id=None 이면 모든 페이지)"""
+    def request_rebuild(self, page_id=None, delay_ms=0, section=None):
+        """설정 창에 페이지를 다시 그려 달라고 — page_id 가 없으면 section 을 쓰는 페이지들
+        (둘 다 없으면 모든 페이지)"""
         if self.on_rebuild is not None:
             try:
-                self.on_rebuild(page_id, delay_ms)
+                self.on_rebuild(page_id, delay_ms, section)
             except Exception as e:
                 dbg("다시 그리기 요청 실패", e)
 

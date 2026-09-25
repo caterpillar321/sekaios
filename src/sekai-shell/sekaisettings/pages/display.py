@@ -500,7 +500,8 @@ def build(store):
             if n:
                 keyword("monitor", f"{n}, preferred, auto, 1")
         sync_widgets()
-        # reset_section 이 곧바로 다시 그리지만, 꺼 뒀던 모니터가 켜지기까지 틈이 있다 — 한 번 더
+        # reset_section 도 다시 그리기를 요청하지만, 꺼 뒀던 모니터가 켜지기까지 틈이 있다 — 그 요청을
+        #   조금 뒤로 미룬다 (같은 페이지 요청은 나중 것만 남는다. 그동안 칸은 위 sync_widgets 가 맞춘다)
         rebuild_later()
 
     row(s, "기본값으로 되돌리기", "모든 모니터 설정을 지웁니다",
@@ -511,4 +512,4 @@ def build(store):
 PAGES = [{"id": "display", "title": "디스플레이",
           "icon": ["video-display", "preferences-desktop-display", "display",
                     "preferences-desktop-display-symbolic", "video-display-symbolic"],
-          "build": build}]
+          "build": build, "sections": ("display", "layout", "appearance")}]   # appearance: 배치 그림의 강조색

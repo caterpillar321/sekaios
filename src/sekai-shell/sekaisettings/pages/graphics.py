@@ -61,7 +61,6 @@ def _mode():
 
 class GraphicsPage:
     def __init__(self, store):
-        self.busy = False
         self.st = None
         self.p = Page("그래픽", "그래픽 카드와 드라이버를 확인하고, NVIDIA 드라이버를 설치합니다.")
 
@@ -232,7 +231,7 @@ class GraphicsPage:
         ver = st.get("nvidia")
         for b in (self.install_btn, self.remove_btn, self.mok_btn, self.reboot_btn):
             b.hide()
-        if self.busy:
+        if self.p.busy:
             return
         if not ver:
             self._set("설치되어 있지 않음",
@@ -257,9 +256,9 @@ class GraphicsPage:
 
     # ── 도우미 실행 ──
     def _run(self, action):
-        if self.busy:
+        if self.p.busy:
             return
-        self.busy = True
+        self.p.busy = True
         self._nv_state()
         self.progress.set_fraction(0)
         self.progress.show()
@@ -305,7 +304,7 @@ class GraphicsPage:
         return False
 
     def _finish(self, action, err, st=None):
-        self.busy = False
+        self.p.busy = False
         self.progress.hide()
         self.progress_text.hide()
         err = self._got["error"] or err          # 도우미가 알려 준 이유가 더 자세하다

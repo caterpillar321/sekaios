@@ -6,6 +6,10 @@ import subprocess
 
 DEBUG = os.environ.get("SEKAI_DEBUG") == "1"
 
+# 지금 잠그기 — sekai-lock 을 직접 띄우지 않는다. lock-now 는 sekai-lock 이 못 잠그면 swaylock 으로 대신 잠그고,
+#   잠금 화면이 풀리지 않은 채 죽으면 다시 띄운다 (Super+L·패널과 같은 길)
+LOCK_NOW = "/usr/libexec/sekai/lock-now"
+
 
 def dbg(*a):
     if DEBUG:

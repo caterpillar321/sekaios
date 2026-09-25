@@ -4,12 +4,13 @@ import os
 import pwd
 import shutil
 import subprocess
+import threading
 
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib  # noqa: E402
 
-from ..util import run, spawn
+from ..util import LOCK_NOW, run, spawn
 from ..widgets import Page, button, combo, entry, icon_image, info, row
 
 TERMINALS = [("sekai-terminal", "SekaiOS 터미널 (자동)"), ("kitty", "Kitty"), ("foot", "Foot"), ("xterm", "XTerm")]
@@ -199,39 +200,75 @@ def build_account(store):
             e.set_visibility(False)
             box.add(e)
             fields[key] = e
+        status = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        spinner = Gtk.Spinner()
+        spinner.set_no_show_all(True)
+        status.pack_start(spinner, False, False, 0)
         msg = Gtk.Label(label="", xalign=0)
         msg.get_style_context().add_class("notice")
-        box.add(msg)
-        d.show_all()
+        status.pack_start(msg, True, True, 0)
+        box.add(status)
 
-        while True:
-            if d.run() != Gtk.ResponseType.OK:
-                break
-            old, new, new2 = (fields[k].get_text() for k in ("old", "new", "new2"))
-            if new != new2:
-                msg.set_text("새 비밀번호가 서로 다릅니다.")
-                continue
-            if len(new) < 4:
-                msg.set_text("비밀번호가 너무 짧습니다.")
-                continue
+        # passwd 는 현재 비밀번호가 틀리면 몇 초 뒤에야 답한다 (PAM 실패 지연) — 작업 스레드에서 돌리고
+        #   그동안은 칸·버튼·닫기를 막는다 (예전엔 설정 창 전체가 최대 15초 멈췄다)
+        busy = {"on": False}
+
+        def set_busy(on):
+            busy["on"] = on
+            for e in fields.values():
+                e.set_sensitive(not on)
+            for resp in (Gtk.ResponseType.CANCEL, Gtk.ResponseType.OK):
+                d.set_response_sensitive(resp, not on)
+            spinner.set_visible(on)
+            (spinner.start if on else spinner.stop)()
+
+        def work(old, new):
+            # 비밀번호는 표준 입력으로만 (명령줄에 넣으면 ps 로 누구나 본다)
             try:
                 proc = subprocess.run(["passwd"], input=f"{old}\n{new}\n{new}\n",
                                       text=True, capture_output=True, timeout=15)
-                if proc.returncode == 0:
-                    msg.set_text("변경되었습니다.")
-                    GLib.timeout_add(700, lambda: (d.destroy(), False)[1])
-                    return
-                msg.set_text((proc.stderr or proc.stdout).strip().splitlines()[-1:][0]
-                             if (proc.stderr or proc.stdout).strip() else "변경 실패")
+                out = (proc.stderr or proc.stdout).strip()
+                GLib.idle_add(done, proc.returncode == 0, out.splitlines()[-1] if out else "변경 실패")
             except Exception as e:
-                msg.set_text(f"변경 실패: {e}")
-        d.destroy()
+                GLib.idle_add(done, False, f"변경 실패: {e}")
+
+        def done(ok, text):
+            if ok:
+                spinner.stop()
+                spinner.hide()
+                msg.set_text("변경되었습니다.")
+                GLib.timeout_add(700, lambda: (d.destroy(), False)[1])   # 닫힐 때까지 막아 둔 채로
+                return False
+            set_busy(False)
+            msg.set_text(text)
+            return False
+
+        def on_response(_d, resp):
+            if busy["on"]:
+                return
+            if resp != Gtk.ResponseType.OK:
+                d.destroy()
+                return
+            old, new, new2 = (fields[k].get_text() for k in ("old", "new", "new2"))
+            if new != new2:
+                msg.set_text("새 비밀번호가 서로 다릅니다.")
+                return
+            if len(new) < 4:
+                msg.set_text("비밀번호가 너무 짧습니다.")
+                return
+            set_busy(True)
+            msg.set_text("바꾸는 중…")
+            threading.Thread(target=work, args=(old, new), daemon=True).start()
+
+        d.connect("response", on_response)
+        # 도는 동안은 창 닫기(X·Esc)도 막는다 — 닫히면 결과를 보여 줄 곳이 없다
+        d.connect("delete-event", lambda *_: busy["on"])
+        d.show_all()
 
     row(s, "비밀번호 변경", "현재 비밀번호를 알아야 합니다",
         icon=["dialog-password", "changes-prevent"],
         control=button("변경…", change_pw))
-    row(s, "화면 잠그기", control=button("잠그기",
-                                     lambda: spawn("sekai-lock")))
+    row(s, "화면 잠그기", control=button("잠그기", lambda: spawn(LOCK_NOW)))
     return p
 
 
@@ -239,7 +276,7 @@ PAGES = [
     {"id": "defaults", "title": "기본 앱",
      "icon": ["preferences-desktop-default-applications",
               "application-x-executable"],
-     "build": build_defaults},
+     "build": build_defaults, "sections": ("apps",)},
     {"id": "installed", "title": "설치된 앱",
      "icon": ["applications-other", "applications-system", "view-grid-symbolic"],
      "build": build_installed},

@@ -7,7 +7,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk  # noqa: E402
 
-from ..util import human_bytes, run, spawn
+from ..util import LOCK_NOW, human_bytes, run, spawn
 from ..widgets import Page, button, combo, info, row, switch
 
 
@@ -111,7 +111,7 @@ def build_power(store):
         p.add_widget(w)
 
     s = p.section("지금 실행")
-    row(s, "화면 잠그기", control=button("잠그기", lambda: spawn("sekai-lock")))
+    row(s, "화면 잠그기", control=button("잠그기", lambda: spawn(LOCK_NOW)))
     row(s, "로그아웃", control=button("로그아웃", lambda: spawn("hyprctl dispatch exit")))
     row(s, "다시 시작", control=button("다시 시작", lambda: spawn("systemctl reboot")))
     row(s, "시스템 종료", control=button("종료", lambda: spawn("systemctl poweroff")))
@@ -125,5 +125,5 @@ PAGES = [
     {"id": "power", "title": "전원 및 잠금",
      "icon": ["battery", "preferences-system-power", "gnome-power-manager",
               "battery-symbolic"],
-     "build": build_power},
+     "build": build_power, "sections": ("power",)},
 ]

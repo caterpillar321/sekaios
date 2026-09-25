@@ -98,4 +98,4 @@ def _test():
 PAGES = [{"id": "notifications", "title": "알림",
           "icon": ["preferences-system-notifications", "dialog-information",
                    "notification", "dialog-information-symbolic"],
-          "build": build}]
+          "build": build, "sections": ("notifications",)}]

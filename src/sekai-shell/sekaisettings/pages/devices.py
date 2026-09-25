@@ -182,5 +182,5 @@ PAGES = [
     {"id": "input", "title": "키보드 및 마우스",
      "icon": ["input-keyboard", "preferences-desktop-peripherals",
               "input-keyboard-symbolic"],
-     "build": build_input},
+     "build": build_input, "sections": ("input",)},
 ]

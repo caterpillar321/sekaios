@@ -83,7 +83,6 @@ def _version():
 
 class UpdatePage:
     def __init__(self, store):
-        self.busy = False
         self.pkgs = []
         self.p = Page("업데이트", "보안 수정과 새 기능을 받습니다. 설치는 직접 누를 때만 합니다.")
 
@@ -179,7 +178,7 @@ class UpdatePage:
             # no_show_all 이 켜진 위젯은 show_all 이 안쪽으로 내려가지 않는다 → 행을 직접
             for r in self.list.get_children():
                 r.show_all()
-        self.apply_btn.set_visible(has and not self.busy)
+        self.apply_btn.set_visible(has and not self.p.busy)
 
     def _summary(self, pkgs):
         last = _ago(_last_check())
@@ -193,21 +192,27 @@ class UpdatePage:
         GLib.idle_add(self._cached_done, pk)
 
     def _cached_done(self, pk):
-        if self.busy:
+        if self.p.busy:
             return False
-        self.pkgs = pk or []
+        if pk is None:
+            # 셀 수 없었다 (다른 설치가 잠금을 쥐었거나, 깨진 의존성, 시간 초과) — "최신"이라고 하지 않고 목록은 그대로
+            self._set_status("업데이트를 확인하지 못했습니다",
+                             "받아 둔 목록으로 셀 수 없었습니다. ‘업데이트 확인’으로 다시 확인해 주세요")
+            self._show_list(self.pkgs)
+            return False
+        self.pkgs = pk
         self._summary(pk)
         self._show_list(pk)
         return False
 
     # ── 도우미 실행 ──
     def _run(self, action, title):
-        if self.busy:
+        if self.p.busy:
             return
         if not os.path.exists(HELPER):
             self._set_status("업데이트 도우미가 없습니다", HELPER)
             return
-        self.busy = True
+        self.p.busy = True
         for b in (self.check_btn, self.apply_btn):
             b.set_sensitive(False)
         self.progress.set_fraction(0)
@@ -260,7 +265,7 @@ class UpdatePage:
         return False
 
     def _finish(self, action, err):
-        self.busy = False
+        self.p.busy = False
         for b in (self.check_btn, self.apply_btn):
             b.set_sensitive(True)
         self.progress.hide()
@@ -285,13 +290,32 @@ class UpdatePage:
         else:
             self.ver_label.set_text(_version() or "알 수 없음")
             left = self._got["count"]
-            self.pkgs = [] if not left else (_pending() or [])
+            sub = ("다시 시작해야 일부 업데이트가 적용됩니다" if self._got["reboot"]
+                   else "지금부터 새 버전이 쓰입니다 (열려 있던 앱은 다시 열면 적용)")
+            self.pkgs = []                       # 설치 전 목록은 이제 맞지 않는다
             self._show_list(self.pkgs)
-            self._set_status("업데이트를 설치했습니다",
-                             "다시 시작해야 일부 업데이트가 적용됩니다" if self._got["reboot"]
-                             else "지금부터 새 버전이 쓰입니다 (열려 있던 앱은 다시 열면 적용)")
+            self._set_status("업데이트를 설치했습니다", sub)
+            if left:
+                # 남은 것(보류된 패키지 등)을 받아 둔 목록 기준으로 센다 — 수십 초 걸릴 수 있어 작업 스레드에서
+                threading.Thread(target=self._reload_after_apply, args=(left, sub), daemon=True).start()
             if self._got["reboot"]:
                 self.reboot_btn.show()
+        return False
+
+    def _reload_after_apply(self, left, sub):
+        pk = _pending()
+        GLib.idle_add(self._reloaded_after_apply, pk, left, sub)
+
+    def _reloaded_after_apply(self, pk, left, sub):
+        if self.p.busy:
+            return False
+        if pk is None:
+            # 도우미는 남은 것이 있다고 했는데 목록을 셀 수 없었다 — 없는 것처럼 보이지 않게 개수만이라도
+            self._set_status("업데이트를 설치했습니다",
+                             f"{sub} — 남은 업데이트 {left}개는 목록을 읽지 못했습니다")
+            return False
+        self.pkgs = pk
+        self._show_list(pk)
         return False
 
     def _reload_after_fail(self, err):
@@ -299,7 +323,7 @@ class UpdatePage:
         GLib.idle_add(self._reloaded_after_fail, pk, err)
 
     def _reloaded_after_fail(self, pk, err):
-        if self.busy:
+        if self.p.busy:
             return False
         if pk is not None:                       # 다시 셀 수 있었으면 그것으로 (못 셌으면 이전 목록 유지)
             self.pkgs = pk

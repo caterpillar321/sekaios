@@ -310,9 +310,9 @@ PAGES = [
     {"id": "wallpaper", "title": "배경화면",
      "icon": ["preferences-desktop-wallpaper", "image-x-generic",
               "image-x-generic-symbolic"],
-     "build": build_wallpaper},
+     "build": build_wallpaper, "sections": ("wallpaper",)},
     {"id": "appearance", "title": "색 및 모양",
      "icon": ["preferences-desktop-theme", "applications-graphics",
               "applications-graphics-symbolic"],
-     "build": build_appearance},
+     "build": build_appearance, "sections": ("appearance", "panel")},
 ]

@@ -63,7 +63,8 @@ class SettingsWindow(Gtk.Window):
         self._css = _load_css(store)
         store.connect(self._on_change)
         store.on_rebuild = self._request_rebuild
-        self._rebuild_src = {}              # 페이지 아이디(None = 전부) → 예약된 다시 그리기
+        self._rebuild_src = {}              # 페이지 아이디 → 예약된 다시 그리기
+        self._stale = set()                 # 작업 중이라 다시 그리기를 미뤄 둔 페이지 (다음에 열 때)
 
         root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self.add(root)
@@ -139,6 +140,8 @@ class SettingsWindow(Gtk.Window):
             self._select(r.page_id)
 
     def _select(self, page_id):
+        if page_id in self._stale and self.stack.get_visible_child_name() != page_id:
+            self.rebuild_page(page_id)        # 미뤄 둔 다시 그리기 — 아직 작업 중이면 그대로 둔다
         if page_id not in self._built:
             pg = next((p for p in self.pages if p["id"] == page_id), None)
             if pg is None:
@@ -163,28 +166,41 @@ class SettingsWindow(Gtk.Window):
     # ── 페이지 다시 그리기 ──────────────────────────────
     #   페이지는 처음 열 때 한 번 만들어진다. 되돌리기(reset_section)나 모니터를 켜고 끄는 것처럼
     #   화면의 구성·값이 통째로 바뀌면 새로 만들어야 옛 값·옛 구성이 남지 않는다.
-    def _request_rebuild(self, page_id=None, delay_ms=0):
-        """store.request_rebuild 가 부른다. 신호 처리 도중일 수 있으니 바로 없애지 않고 미룬다."""
-        old = self._rebuild_src.pop(page_id, 0)
-        if old:
-            GLib.source_remove(old)
+    def _request_rebuild(self, page_id=None, delay_ms=0, section=None):
+        """store.request_rebuild 가 부른다. 신호 처리 도중일 수 있으니 바로 없애지 않고 미룬다.
+        page_id 가 없으면 그 섹션을 쓰는 페이지들만 (섹션도 없으면 만들어 둔 모든 페이지).
+        같은 페이지에 대한 요청이 겹치면 나중 것만 남는다."""
+        if page_id is not None:
+            ids = [page_id]
+        else:
+            ids = [pg["id"] for pg in self.pages if pg["id"] in self._built and
+                   (section is None or section in pg.get("sections", ()))]
+        for pid in ids:
+            old = self._rebuild_src.pop(pid, 0)
+            if old:
+                GLib.source_remove(old)
 
-        def go():
-            self._rebuild_src.pop(page_id, None)
-            if page_id is None:
-                self.rebuild_all()
-            else:
-                self.rebuild_page(page_id)
-            return False
-        self._rebuild_src[page_id] = (GLib.timeout_add(delay_ms, go) if delay_ms > 0
+            def go(pid=pid):
+                self._rebuild_src.pop(pid, None)
+                self.rebuild_page(pid)
+                return False
+            self._rebuild_src[pid] = (GLib.timeout_add(delay_ms, go) if delay_ms > 0
                                       else GLib.idle_add(go))
 
     def rebuild_page(self, page_id):
-        """그 페이지를 새로 만든다. 보고 있던 페이지면 스크롤 위치를 지켜 다시 보여 준다."""
+        """그 페이지를 새로 만든다. 보고 있던 페이지면 스크롤 위치를 지켜 다시 보여 주고,
+        안 보이는 페이지는 없애 두었다가 다음에 열 때 만든다."""
         old = self.stack.get_child_by_name(page_id)
         if old is None:
             self._built.discard(page_id)
+            self._stale.discard(page_id)
             return
+        if getattr(old, "busy", False):
+            # 작업(관리자 권한 설치 등)이 도는 중 — 없애면 진행 상태·결과를 잃고 같은 작업을 또 띄울 수 있다.
+            #   끝난 뒤 이 페이지를 다시 열 때 새로 만든다
+            self._stale.add(page_id)
+            return
+        self._stale.discard(page_id)
         showing = self.stack.get_visible_child_name() == page_id
         scroll = None
         if showing and isinstance(old, Gtk.ScrolledWindow):
@@ -201,19 +217,6 @@ class SettingsWindow(Gtk.Window):
             new = self.stack.get_visible_child()
             if isinstance(new, Gtk.ScrolledWindow):
                 GLib.idle_add(lambda: (new.get_vadjustment().set_value(scroll), False)[1])
-
-    def rebuild_all(self):
-        """보고 있는 페이지는 지금, 나머지는 다음에 열 때 새로 만든다"""
-        cur = self.stack.get_visible_child_name()
-        for pid in list(self._built):
-            if pid != cur:
-                w = self.stack.get_child_by_name(pid)
-                self._built.discard(pid)
-                if w is not None:
-                    self.stack.remove(w)
-                    w.destroy()
-        if cur:
-            self.rebuild_page(cur)
 
     # ── 설정이 바뀌면 ───────────────────────────────────
     def _on_change(self, section, key, value):

@@ -1,6 +1,6 @@
 """네트워크 — NetworkManager(nmcli) 기반.
 
-오래 걸리는 nmcli(무선 검색·연결)는 작업 스레드에서 — 창이 멈추지 않게.
+nmcli(장치 상태·무선 검색·연결·Wi-Fi 켜고 끄기)는 작업 스레드에서 — 창이 멈추지 않게.
 """
 import os
 import re
@@ -12,7 +12,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib  # noqa: E402
 
-from ..util import run, spawn
+from ..util import run, run_async, spawn
 from ..widgets import Page, button, info, row, switch
 
 
@@ -20,9 +20,14 @@ def _nm(*args, timeout=8):
     return run(["nmcli", "-t", "-c", "no", *args], timeout=timeout)
 
 
+def _unescape(v):
+    """nmcli 간결 출력(-t, -g)의 \\: \\\\ 를 원래 글자로"""
+    return re.sub(r"\\(.)", r"\1", v)
+
+
 def _fields(line):
     """nmcli -t 한 줄 → 칸들. 값 안의 : 는 \\: 로 이스케이프되어 온다 (SSID 에 : 가 들어갈 수 있다)"""
-    return [re.sub(r"\\(.)", r"\1", f) for f in re.split(r"(?<!\\):", line)]
+    return [_unescape(f) for f in re.split(r"(?<!\\):", line)]
 
 
 def _devices():
@@ -89,7 +94,10 @@ def wifi_connect_secret(ssid, sec, pw, dev=None, timeout=45):
     for line in _nm("-f", "UUID,TYPE", "connection", "show").splitlines():
         f = _fields(line)
         if len(f) >= 2 and f[1] == "802-11-wireless":
-            got = run(["nmcli", "-g", "802-11-wireless.ssid", "connection", "show", "uuid", f[0]]).strip()
+            # -g 도 간결 출력이라 : 와 \ 가 이스케이프되어 온다 — 풀어야 'Home:5G' 같은 SSID 의 프로필을 찾는다
+            #   (못 찾으면 연결할 때마다 같은 이름의 프로필이 새로 쌓였다)
+            got = _unescape(run(["nmcli", "-g", "802-11-wireless.ssid", "connection", "show",
+                                 "uuid", f[0]]).rstrip("\n"))
             if got == ssid:
                 uuid = f[0]
                 break
@@ -156,31 +164,50 @@ def build(store):
 
     body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
     p.box.pack_start(body, False, False, 0)
+    row(_sect(body, "연결 상태"), "연결 상태를 읽는 중…")
+    gen = {"n": 0}                  # 새로 고침이 겹치면 마지막 요청의 결과만 그린다
 
     def refresh(*_):
+        gen["n"] += 1
+        n = gen["n"]
+        threading.Thread(target=lambda: GLib.idle_add(show, n, *_state()), daemon=True).start()
+
+    def show(n, devs, radio):
+        if n != gen["n"]:
+            return False
         for c in body.get_children():
             body.remove(c)
-        _fill(p, body, store, refresh)
+        _fill(p, body, store, devs, radio, refresh)
         body.show_all()
+        return False
 
-    _fill(p, body, store, refresh)
+    refresh()
     return p
 
 
-def _fill(page, body, store, refresh=None):
-    def sect(title):
-        l = Gtk.Label(label=title, xalign=0)
-        l.get_style_context().add_class("section-title")
-        body.pack_start(l, False, False, 0)
-        lb = Gtk.ListBox()
-        lb.set_selection_mode(Gtk.SelectionMode.NONE)
-        lb.get_style_context().add_class("section")
-        body.pack_start(lb, False, False, 0)
-        return lb
-
-    # ── 장치 상태 ──
-    s = sect("연결 상태")
+def _state():
+    """장치 목록(IP 포함)과 Wi-Fi 켜짐 — nmcli 를 장치마다 부르니 작업 스레드에서 (창이 멈추지 않게)"""
     devs = _devices()
+    for d in devs:
+        d["ip"] = _ip4(d["dev"])
+    radio = any(d["type"] == "wifi" for d in devs) and _nm("radio", "wifi").strip() == "enabled"
+    return devs, radio
+
+
+def _sect(body, title):
+    l = Gtk.Label(label=title, xalign=0)
+    l.get_style_context().add_class("section-title")
+    body.pack_start(l, False, False, 0)
+    lb = Gtk.ListBox()
+    lb.set_selection_mode(Gtk.SelectionMode.NONE)
+    lb.get_style_context().add_class("section")
+    body.pack_start(lb, False, False, 0)
+    return lb
+
+
+def _fill(page, body, store, devs, radio, refresh=None):
+    # ── 장치 상태 ──
+    s = _sect(body, "연결 상태")
     if not devs:
         row(s, "장치 없음", "네트워크 인터페이스를 찾지 못했습니다")
     for d in devs:
@@ -192,17 +219,16 @@ def _fill(page, body, store, refresh=None):
         sub = f"{d['type']}  ·  {state}"
         if d["conn"]:
             sub += f"  ·  {d['conn']}"
-        row(s, d["dev"], sub, icon=ico, control=info(_ip4(d["dev"])))
+        row(s, d["dev"], sub, icon=ico, control=info(d["ip"]))
 
     # ── Wi-Fi ──
     has_wifi = any(d["type"] == "wifi" for d in devs)
     if has_wifi:
-        radio = _nm("radio", "wifi").strip() == "enabled"
-        s = sect("Wi-Fi")
+        s = _sect(body, "Wi-Fi")
         row(s, "Wi-Fi 사용", None, icon=["network-wireless"],
-            control=switch(radio, lambda v: (
-                run(["nmcli", "radio", "wifi", "on" if v else "off"]),
-                GLib.timeout_add(1200, lambda: (refresh and refresh(), False)[1]))))
+            control=switch(radio, lambda v: run_async(
+                ["nmcli", "radio", "wifi", "on" if v else "off"],
+                lambda *_: GLib.timeout_add(1200, lambda: (refresh and refresh(), False)[1]))))
 
         if radio:
             wifi_dev = next((d["dev"] for d in devs if d["type"] == "wifi"), None)
@@ -250,7 +276,7 @@ def _fill(page, body, store, refresh=None):
                     refresh()
                 return False
 
-            def show(nets):
+            def show(nets, s=s):            # 기본 인자로 묶는다 — 아래에서 s 가 "도구" 섹션으로 바뀐 뒤에 불린다
                 s.remove(waiting)
                 if not nets:
                     row(s, "검색된 네트워크 없음", "잠시 후 새로 고쳐 보세요")
@@ -271,7 +297,7 @@ def _fill(page, body, store, refresh=None):
             threading.Thread(target=lambda: GLib.idle_add(show, _wifi_list()), daemon=True).start()
 
     # ── 도구 ──
-    s = sect("도구")
+    s = _sect(body, "도구")
     row(s, "고급 연결 편집기", "고정 IP, VPN, 프로파일 관리",
         icon=["preferences-system-network", "network-workgroup"],
         control=button("nm-connection-editor 열기",

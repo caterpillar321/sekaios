@@ -37,6 +37,10 @@ def icon_image(names, size=16):
 class Page(Gtk.ScrolledWindow):
     """설정 한 페이지. 제목 + 섹션들."""
 
+    # 오래 걸리는 작업(관리자 권한 설치 등)이 도는 동안 True — 설정 창이 이 페이지를 다시 그리지(없애지) 않는다.
+    #   없애면 진행 상태와 한 번만 나오는 결과(MOK 비밀번호 등)를 잃고, 새 페이지에서 같은 작업을 또 띄울 수 있다
+    busy = False
+
     def __init__(self, title, subtitle=None):
         super().__init__()
         self.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)

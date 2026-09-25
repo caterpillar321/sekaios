@@ -82,11 +82,16 @@ def build(store):
     t_note.set_no_show_all(True)
     t_quiet = {"on": False}
     t_state = {"tz": tz}
+    t_wait = {"n": 0}               # 도는 timedatectl 수 — 그동안은 페이지를 다시 그리지 않는다 (결과를 이 페이지가 받는다)
 
     def timedate(args, on_fail, on_ok=None):
         t_note.hide()
+        t_wait["n"] += 1
+        p.busy = True
 
         def done(ok, _out, err):
+            t_wait["n"] -= 1
+            p.busy = t_wait["n"] > 0
             if ok:
                 if on_ok:
                     on_ok()
@@ -157,4 +162,4 @@ def build(store):
 PAGES = [{"id": "locale", "title": "시간 및 언어",
           "icon": ["preferences-desktop-locale", "config-language", "preferences-system-time",
                    "preferences-desktop-locale-symbolic"],
-          "build": build}]
+          "build": build, "sections": ("locale", "input")}]   # input: 한/영 스위치 (kb_options)
