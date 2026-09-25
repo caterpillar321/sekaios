@@ -142,6 +142,7 @@ class TaskPreview(Gtk.Window):
         self.mon = mon
         if mon is not None:
             GtkLayerShell.set_monitor(self, mon)
+        self._wins, self._active = list(wins), active_addr
         if not same:
             self._fill(wins, active_addr, mon)
         self._place(btn, panel, len(wins), mon)
@@ -152,13 +153,18 @@ class TaskPreview(Gtk.Window):
         return max(1, (mw - 16 - 2 * PAD) // (CARD_W + SPACING))
 
     def _place(self, btn, panel, n, mon):
-        """버튼 한가운데 위로"""
+        """버튼 한가운데 위로. 버튼 가운데를 기억해 둔다 — 카드 수가 바뀌면 다시 맞추려고
+        (버튼은 작업 표시줄이 다시 그려질 때 새로 만들어지므로 버튼 자체는 붙잡지 않는다)"""
+        pos = btn.translate_coordinates(panel, 0, 0)
+        self._center = (pos[0] if pos else 0) + btn.get_allocated_width() / 2
+        self._recenter(n)
+
+    def _recenter(self, n):
+        mon = self.mon
         per = min(n, self._per_line(mon))
         w = per * CARD_W + (per - 1) * SPACING + 2 * PAD + 2
-        pos = btn.translate_coordinates(panel, 0, 0)
-        bx = pos[0] if pos else 0
         mw = mon.get_geometry().width if mon is not None else 1280
-        x = int(bx + btn.get_allocated_width() / 2 - w / 2)
+        x = int(getattr(self, "_center", 0) - w / 2)
         x = max(8, min(x, mw - w - 8))
         GtkLayerShell.set_margin(self, GtkLayerShell.Edge.LEFT, x)
 
@@ -242,17 +248,17 @@ class TaskPreview(Gtk.Window):
     def _close(self, c):
         if self._cb:
             self._cb[1](c)
-        addrs = [a for a in getattr(self, "_addrs", []) if a != c.get("address")]
-        self._addrs = addrs
-        if not addrs:
+        self._wins = [w for w in self._wins if w.get("address") != c.get("address")]
+        self._addrs = [w.get("address") for w in self._wins]
+        if not self._wins:
             self.hide_now()
             return
-        for child in self.flow.get_children():
-            card = child.get_child()
-            if getattr(card, "_sekai_addr", None) == c.get("address"):
-                self.flow.remove(child)
-        self.flow.set_max_children_per_line(len(addrs))
-        self.flow.set_min_children_per_line(len(addrs))
+        # 남은 카드를 새로 만든다 — 창이 줄어 옮겨 가면 커서 밑이 바뀌는데 GTK 는 몰라서
+        #   옛 카드엔 마우스 올림 표시(닫기 버튼 빨강 등)가 남는다
+        self._fill(self._wins, self._active, self.mon)
+        self._recenter(len(self._wins))
+        self.resize(1, 1)                     # 줄어든 크기로
+        self.show_all()
 
     # ── 창 그림 ──
     def _capture(self, addr, img, gen):
