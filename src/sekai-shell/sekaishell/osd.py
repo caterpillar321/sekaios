@@ -3,7 +3,9 @@
 윈도우 11 처럼: [아이콘] ━━━━━━━○──── 57
 입력은 받지 않는다 (키보드 초점을 뺏지 않는다).
 """
+import queue
 import subprocess
+import threading
 
 import gi
 gi.require_version("Gtk", "3.0")
@@ -117,6 +119,8 @@ class Osd(Gtk.Window):
         box.pack_start(self.text, False, False, 0)
         self.add(box)
         self._timer = None
+        self._jobs = None
+        self.on_volume = None      # 음량을 바꾼 뒤 부른다 (작업 표시줄 아이콘 새로 고침) — 메인 스레드에서
 
     def set_bottom(self, px):
         GtkLayerShell.set_margin(self, E.BOTTOM, px)
@@ -157,21 +161,52 @@ class Osd(Gtk.Window):
         return False
 
     # ── 동작 + 표시 ──
+    #   wpctl·brightnessctl 은 메인 스레드 밖에서 (PipeWire 가 바쁘면 몇 초씩 멈춰 패널 전체가 굳었다).
+    #   키를 누른 차례대로 하나의 작업 스레드가 처리하고, 표시는 메인 스레드에서.
+    def _run_bg(self, work, show):
+        if self._jobs is None:
+            self._jobs = queue.Queue()
+            threading.Thread(target=self._worker, daemon=True).start()
+        self._jobs.put((work, show))
+
+    def _worker(self):
+        while True:
+            work, show = self._jobs.get()
+            try:
+                res = work()
+            except Exception as e:
+                dbg("osd 작업 실패", e)
+                continue
+            GLib.idle_add(lambda r=res, s=show: (s(r), False)[1])
+
     def volume(self, action):
-        volume_do(action)
-        if action == "mic-mute":
-            m = mic_muted()
-            self.show_text("microphone-sensitivity-muted-symbolic" if m
-                           else "audio-input-microphone-symbolic",
-                           "마이크 꺼짐" if m else "마이크 켜짐")
-            return
-        v, muted = volume_get()
-        self.show_level(vol_icon(v, muted), v, dimmed=muted)
+        def work():
+            volume_do(action)
+            if action == "mic-mute":
+                return ("mic", mic_muted(), None)
+            return ("vol",) + volume_get()
+
+        def show(r):
+            if r[0] == "mic":
+                m = r[1]
+                self.show_text("microphone-sensitivity-muted-symbolic" if m
+                               else "audio-input-microphone-symbolic",
+                               "마이크 꺼짐" if m else "마이크 켜짐")
+            else:
+                v, muted = r[1], r[2]
+                self.show_level(vol_icon(v, muted), v, dimmed=muted)
+            if self.on_volume:
+                self.on_volume()
+        self._run_bg(work, show)
 
     def brightness(self, action):
-        brightness_do(action)
-        b = brightness_get()
-        if b is None:
-            self.show_text("display-brightness-symbolic", "밝기를 바꿀 수 없는 화면입니다")
-            return
-        self.show_level("display-brightness-symbolic", b)
+        def work():
+            brightness_do(action)
+            return brightness_get()
+
+        def show(b):
+            if b is None:
+                self.show_text("display-brightness-symbolic", "밝기를 바꿀 수 없는 화면입니다")
+                return
+            self.show_level("display-brightness-symbolic", b)
+        self._run_bg(work, show)

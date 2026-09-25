@@ -1,5 +1,6 @@
 """알림 — 토스트 동작과 기록."""
 import os
+import time
 
 import gi
 gi.require_version("Gtk", "3.0")
@@ -36,8 +37,7 @@ def build(store):
             s, "방해 금지", "켜면 팝업을 띄우지 않고 알림 센터에만 쌓입니다",
             icon=["notifications-disabled", "preferences-system-notifications",
                   "dialog-information"],
-            control=switch(shellconf.state("dnd", False),
-                           lambda v: shellconf.set_state("dnd", bool(v))))
+            control=switch(shellconf.state("dnd", False), lambda v: _set_dnd(store, v)))
         _ = dnd_row
     row(s, "팝업이 떠 있는 시간", "초. 긴급 알림은 직접 닫을 때까지 남습니다",
         icon=["preferences-system-time", "alarm"],
@@ -49,7 +49,7 @@ def build(store):
         control=spin(n["history"], 20, 1000, 10,
                      lambda v: store.set("notifications", "history", v)))
     cnt = row(s, "지금 보관 중", f"{_hist_count()}개",
-              control=button("기록 지우기", lambda: _clear(cnt)))
+              control=button("기록 지우기", lambda: _clear(store, cnt)))
 
     w = Gtk.Label(
         label="알림 센터는 작업 표시줄 오른쪽의 🔔 을 눌러 엽니다.\n"
@@ -65,7 +65,13 @@ def build(store):
     return p
 
 
-def _clear(row_widget):
+def _set_dnd(store, on):
+    """상태 파일에 쓰고 패널에 알린다 — 패널은 SIGHUP 을 받아야 다시 읽는다 (안 알리면 효과가 없었다)"""
+    shellconf.set_state("dnd", bool(on))
+    store.notify_panel()
+
+
+def _clear(store, row_widget):
     if shellconf is None:
         return
     path = os.path.join(shellconf.STATE_DIR, "notifications.json")
@@ -73,6 +79,10 @@ def _clear(row_widget):
         os.remove(path)
     except Exception:
         pass
+    # 파일만 지우면 패널 메모리의 기록이 다음 알림 때 도로 저장된다 — 지운 시각을 남기고 패널에 알린다
+    #   (패널 NotificationService.sync_settings 가 보고 메모리 기록도 비운다)
+    shellconf.set_state("history_cleared", time.time())
+    store.notify_panel()
     if hasattr(row_widget, "sub_label"):
         row_widget.sub_label.set_text("0개")
 

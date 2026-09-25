@@ -4,13 +4,16 @@ fnott 같은 외부 데몬을 쓰면 알림이 화면에 잠깐 떴다 사라질
 지난 알림을 다시 볼 방법이 없다. 그래서 데몬을 직접 구현하고
 받은 알림을 기록해 '알림 센터'에서 다시 볼 수 있게 한다.
 """
+import html
 import json
 import os
+import re
 import time
 
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, Gdk, GdkPixbuf, GLib  # noqa: E402
+gi.require_version("Pango", "1.0")
+from gi.repository import Gtk, Gdk, GdkPixbuf, GLib, Pango  # noqa: E402
 
 from .layer import GtkLayerShell
 from . import dbg
@@ -60,7 +63,14 @@ XML = """
 EXPIRED, DISMISSED, CLOSED_BY_CALL, UNDEFINED = 1, 2, 3, 4
 
 HISTORY_FILE = os.path.join(config.STATE_DIR, "notifications.json")
-MAX_HISTORY = 200
+MAX_HISTORY = 200             # 설정(알림 → 보관할 알림 개수)이 없을 때
+
+
+def max_history():
+    try:
+        return max(1, int(config.settings("notifications", "history", MAX_HISTORY)))
+    except (TypeError, ValueError):
+        return MAX_HISTORY
 
 URGENCY_NAMES = {0: "낮음", 1: "보통", 2: "긴급"}
 
@@ -71,6 +81,50 @@ def _hint(hints, *names):
         if n in hints:
             return hints[n]
     return None
+
+
+_TAG = re.compile(r"<(/?)([A-Za-z]+)([^<>]*)>")
+
+
+def body_markup(body):
+    """알림 본문(규격상 제한된 HTML: b·i·u·a·br·img) → Pango 마크업. 못 만들면 None.
+    set_markup 은 틀린 마크업이어도 예외 없이 빈 글자가 된다 — "&" 나 "<" 가 든 본문이 빈칸으로 보였다.
+    태그 사이 글자는 엔티티를 풀었다가 다시 이스케이프한다 (규격대로 &amp; 를 보내는 앱도, 날것 & 를
+    보내는 앱도 같게 보이게). 허용하지 않은 태그(img 등)는 뺀다."""
+    out, pos, open_a = [], 0, False
+    for m in _TAG.finditer(body):
+        out.append(GLib.markup_escape_text(html.unescape(body[pos:m.start()])))
+        pos = m.end()
+        close, tag, attrs = m.group(1), m.group(2).lower(), m.group(3)
+        if tag in ("b", "i", "u"):
+            out.append(f"<{close}{tag}>")
+        elif tag == "br":
+            out.append("\n")
+        elif tag == "a":
+            if close:
+                if open_a:
+                    out.append("</a>")
+                    open_a = False
+            elif not open_a:
+                h = re.search(r"""href\s*=\s*["']([^"']*)["']""", attrs)
+                if h:
+                    out.append('<a href="%s">' % GLib.markup_escape_text(html.unescape(h.group(1))))
+                    open_a = True
+    out.append(GLib.markup_escape_text(html.unescape(body[pos:])))
+    if open_a:
+        out.append("</a>")
+    s = "".join(out)
+    try:
+        # 짝이 안 맞는 <b> 같은 것. <a> 는 Pango 가 아니라 GtkLabel 이 다루므로 빼고 검사한다
+        Pango.parse_markup(re.sub(r"</?a[^>]*>", "", s), -1, "\0")
+    except GLib.Error:
+        return None
+    return s
+
+
+def body_plain(body):
+    """마크업을 못 쓸 때 — 태그를 빼고 엔티티를 푼 글자"""
+    return html.unescape(re.sub(r"<[^<>]*>", "", re.sub(r"<br\s*/?>", "\n", body, flags=re.I)))
 
 
 def pixbuf_from_image_data(v):
@@ -120,7 +174,8 @@ class Notification:
         # actions 는 [키, 라벨, 키, 라벨, ...]
         self.actions = [(actions[i], actions[i + 1])
                         for i in range(0, len(actions) - 1, 2)]
-        self.urgency = int(_hint(hints, "urgency") or 1)
+        u = _hint(hints, "urgency")              # 0(낮음)도 살린다 — "or 1" 이면 0 이 1 로 바뀐다
+        self.urgency = int(u) if u is not None else 1
         self.transient = bool(_hint(hints, "transient") or False)
         self.resident = bool(_hint(hints, "resident") or False)
         self.desktop_entry = _hint(hints, "desktop-entry", "desktop_entry") or ""
@@ -217,11 +272,12 @@ def build_card(n, on_action, on_close, compact=False):
 
     if n.body:
         b = Gtk.Label(xalign=0)
-        # 알림 본문은 제한된 HTML 을 허용하는 규격이다
-        try:
-            b.set_markup(n.body)
-        except Exception:
-            b.set_text(n.body)
+        # 알림 본문은 제한된 HTML 을 허용하는 규격이다 (body_markup 이 걸러 낸다)
+        mk = body_markup(n.body)
+        if mk is not None:
+            b.set_markup(mk)
+        else:
+            b.set_text(body_plain(n.body))
         b.get_style_context().add_class("noti-body")
         b.set_line_wrap(True)
         b.set_max_width_chars(42)
@@ -410,6 +466,8 @@ class NotificationService:
         self.unread = 0
         self.on_count_changed = on_count_changed
         self.dnd = bool(config.state("dnd", False))
+        # 설정 앱에서 "기록 지우기"를 누른 시각 — 이보다 새 값이 오면 메모리의 기록도 비운다
+        self._cleared_seen = config.state("history_cleared", 0)
         self.conn = None
         self.toasts = None
         self.center = None
@@ -476,8 +534,9 @@ class NotificationService:
         if not n.transient:
             self.history = [h for h in self.history if h.id != nid]
             self.history.append(n)
-            if len(self.history) > MAX_HISTORY:
-                self.history = self.history[-MAX_HISTORY:]
+            keep = max_history()
+            if len(self.history) > keep:
+                self.history = self.history[-keep:]
             self._save_history()
             self.unread += 1
             self._changed()
@@ -550,6 +609,25 @@ class NotificationService:
         if self.center:
             self.center.rebuild()
         self._changed()
+
+    def sync_settings(self):
+        """설정 앱이 바꾼 것을 따라간다 (패널이 SIGHUP 을 받으면) — 방해 금지, 기록 지우기, 보관 개수"""
+        dnd = bool(config.state("dnd", False))
+        if dnd != self.dnd:
+            self.set_dnd(dnd)
+        cleared = config.state("history_cleared", 0)
+        if cleared and cleared != self._cleared_seen:
+            # 파일만 지우면 메모리에 남은 기록이 다음 알림 때 도로 저장된다
+            self._cleared_seen = cleared
+            self.clear_history()
+            return
+        keep = max_history()
+        if len(self.history) > keep:
+            self.history = self.history[-keep:]
+            self._save_history()
+            if self.center is not None and self.center.get_visible():
+                self.center.rebuild()
+            self._changed()
 
     def mark_read(self):
         if self.unread:

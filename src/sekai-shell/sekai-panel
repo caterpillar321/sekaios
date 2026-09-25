@@ -7,7 +7,7 @@
 # ═══════════════════════════════════════════════════════════════
 import gi, os, json, socket, subprocess, shlex, time, sys, cairo
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, Gdk, GLib, Pango
+from gi.repository import Gtk, Gdk, GLib, Gio, Pango
 
 PANEL_HEIGHT = 48
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -647,10 +647,7 @@ class StartMenu(Gtk.Window):
             it = Gtk.MenuItem(label="작업 표시줄에 고정")
             it.connect("activate", lambda *_: pins.pin(aid))
         m.append(it)
-        m.get_style_context().add_class("task-menu")
-        m.attach_to_widget(self, None)
-        m.show_all()
-        m.popup_at_pointer(ev)
+        popup_menu(m, self, ev)
         return True
 
     def on_row(self, _lb, row):
@@ -714,6 +711,37 @@ def focused_gdk_monitor(hypr):
     return primary_monitor()
 
 
+def popup_menu(menu, widget, ev):
+    """우클릭 메뉴 띄우기 — 닫히면 해제한다.
+    attach_to_widget 로 붙인 메뉴는 창이 살아 있는 한 남아서, 우클릭할 때마다 하나씩 쌓였다.
+    항목의 activate 는 deactivate 바로 뒤에 같은 흐름에서 불리므로 해제는 idle 로 미룬다."""
+    menu.get_style_context().add_class("task-menu")
+    menu.attach_to_widget(widget, None)
+    menu.connect("deactivate", lambda m: GLib.idle_add(m.destroy))
+    menu.show_all()
+    menu.popup_at_pointer(ev)
+
+
+def query_volume(cb):
+    """wpctl get-volume 을 기다리지 않고 — cb((0~1 음량, 음소거)) 또는 cb(None) 을 메인 스레드에서.
+    동기로 부르면 PipeWire 가 바쁠 때 작업 표시줄 전체가 굳었다."""
+    try:
+        proc = Gio.Subprocess.new(["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"],
+                                  Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE)
+    except GLib.Error:
+        cb(None)
+        return
+
+    def done(p, res):
+        try:
+            _ok, out, _err = p.communicate_utf8_finish(res)
+            parts = (out or "").split()
+            cb((float(parts[1]) if len(parts) > 1 else 0.0, "MUTED" in (out or "")))
+        except (GLib.Error, ValueError):
+            cb(None)
+    proc.communicate_utf8_async(None, None, done)
+
+
 class TaskbarMixin:
     """작업 버튼 — 주 작업 표시줄과 다른 모니터의 작업 표시줄이 함께 쓴다.
 
@@ -741,22 +769,34 @@ class TaskbarMixin:
         self.connect("leave-notify-event",
                      lambda _w, ev: ev.detail != Gdk.NotifyType.INFERIOR and self.preview.schedule_hide() and False)
 
-    def _my_clients(self, clients):
+    def _my_clients(self, clients, origins=None):
         disp = Gdk.Display.get_default()
         if disp.get_n_monitors() < 2 or self.gdk_monitor is None:
             return clients
         g = self.gdk_monitor.get_geometry()
-        origins = hypr_monitor_origins(self.hypr)
+        if origins is None:
+            origins = hypr_monitor_origins(self.hypr)
         return [c for c in clients if origins.get(c.get("monitor")) == (g.x, g.y)]
 
-    def rebuild_tasks(self):
+    def task_snapshot(self):
+        """작업 표시줄을 그리는 데 필요한 Hyprland 상태 — 모든 작업 표시줄이 한 번 조회한 것을 같이 쓴다"""
+        active = self.hypr.query("activewindow") or {}
+        return {"clients": self.hypr.query("clients") or [],
+                "active": active.get("address") if isinstance(active, dict) else None,
+                "origins": hypr_monitor_origins(self.hypr)}
+
+    def _queue_rebuild(self, delay=120):
+        (getattr(self, "main", None) or self).queue_rebuild_all(delay)
+
+    def rebuild_tasks(self, snap=None):
         self._hook_preview()
+        if snap is None:
+            snap = self.task_snapshot()
         for c in self.tasks.get_children():
             self.tasks.remove(c)
-        clients = self._my_clients(self.hypr.query("clients") or [])
+        clients = self._my_clients(snap["clients"], snap["origins"])
         clients = [c for c in clients if c.get("mapped", True) and c.get("address")]  # 연 순서
-        active = self.hypr.query("activewindow") or {}
-        active_addr = active.get("address") if isinstance(active, dict) else None
+        active_addr = snap["active"]
 
         groups = {}                                         # 묶음 키 → 창들
         order = []
@@ -840,7 +880,7 @@ class TaskbarMixin:
             self.restore_window(c.get("address"))
         else:
             self.hypr.dispatch(f"focuswindow address:{c.get('address')}")
-            GLib.timeout_add(120, self.rebuild_tasks)
+            self._queue_rebuild()
 
     def _preview_close(self, c):
         self.hypr.dispatch(f"closewindow address:{c.get('address')}")
@@ -853,7 +893,7 @@ class TaskbarMixin:
             self.hypr.dispatch(f"movetoworkspacesilent special:min,address:{addr}")
         else:
             self.hypr.dispatch(f"focuswindow address:{addr}")
-        GLib.timeout_add(120, self.rebuild_tasks)
+        self._queue_rebuild()
 
     def restore_window(self, addr):
         """최소화(special:min)된 창을 지금 워크스페이스로 되돌리고 초점"""
@@ -861,7 +901,7 @@ class TaskbarMixin:
         wid = cur.get("id", 1)
         self.hypr.dispatch(f"movetoworkspace {wid},address:{addr}")
         self.hypr.dispatch(f"focuswindow address:{addr}")
-        GLib.timeout_add(120, self.rebuild_tasks)
+        self._queue_rebuild()
 
     # ── 우클릭 메뉴 (윈도우의 점프 목록처럼) · 가운데 클릭 = 새 창 ──
     def on_app_press(self, _w, ev, app_id, wins, name):
@@ -898,10 +938,7 @@ class TaskbarMixin:
         return True
 
     def _popup(self, menu, ev):
-        menu.get_style_context().add_class("task-menu")
-        menu.attach_to_widget(self, None)
-        menu.show_all()
-        menu.popup_at_pointer(ev)
+        popup_menu(menu, self, ev)
 
 
 class SecondaryPanel(Gtk.Window, TaskbarMixin):
@@ -1151,21 +1188,23 @@ class Panel(Gtk.Window, TaskbarMixin):
         return pop
 
     def _sync_vol_popup(self):
+        query_volume(self._apply_vol_popup)
+        return False
+
+    def _apply_vol_popup(self, r):
+        if r is None:
+            return
+        v, muted = r
+        self._vol_guard = True
         try:
-            out = subprocess.run(["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"],
-                                 capture_output=True, text=True, timeout=1).stdout
-            v = float(out.split()[1]) if len(out.split()) > 1 else 0.0
-            self._vol_guard = True
             self.vol_scale.set_value(round(v * 100))
-            muted = "MUTED" in out
             self.mute_btn.set_active(muted)
             self.mute_icon.set_from_icon_name(
                 "audio-volume-muted-symbolic" if muted else "audio-volume-high-symbolic",
                 Gtk.IconSize.MENU)
             self.vol_value.set_text("음소거" if muted else f"{round(v * 100)}%")
+        finally:
             self._vol_guard = False
-        except Exception:
-            pass
 
     def _on_vol_scale(self, sc):
         if getattr(self, "_vol_guard", False):
@@ -1173,7 +1212,7 @@ class Panel(Gtk.Window, TaskbarMixin):
         subprocess.Popen(["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@",
                           f"{int(sc.get_value())}%"])
         self.vol_value.set_text(f"{int(sc.get_value())}%")
-        GLib.timeout_add(150, self.update_sys)
+        self.refresh_sys(150)
 
     def _on_vol_scroll(self, _w, ev):
         step = 0
@@ -1187,7 +1226,7 @@ class Panel(Gtk.Window, TaskbarMixin):
         if step:
             subprocess.Popen(["wpctl", "set-volume", "-l", "1.0", "@DEFAULT_AUDIO_SINK@",
                               f"{abs(step)}%{'+' if step > 0 else '-'}"])
-            GLib.timeout_add(120, self.update_sys)
+            self.refresh_sys(120)
         return True
 
     def _on_mute(self, btn):
@@ -1195,8 +1234,8 @@ class Panel(Gtk.Window, TaskbarMixin):
             return
         subprocess.Popen(["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@",
                           "1" if btn.get_active() else "0"])
-        GLib.timeout_add(150, self.update_sys)
-        GLib.timeout_add(200, lambda: (self._sync_vol_popup(), False)[1])
+        self.refresh_sys(150)
+        GLib.timeout_add(200, self._sync_vol_popup)
 
     # ── 달력 팝업 ───────────────────────────────────────
     def _build_cal_popup(self):
@@ -1285,12 +1324,32 @@ class Panel(Gtk.Window, TaskbarMixin):
                     "movewindow", "movewindowv2", "windowtitle", "windowtitlev2",
                     "workspace", "activespecial", "fullscreen", "changefloatingmode",
                     "focusedmon", "moveworkspace", "monitoradded", "monitorremoved"):
-            GLib.idle_add(self.rebuild_all_tasks)
+            # 창 하나를 열거나 옮기면 이벤트가 여럿 한꺼번에 온다 — 모아서 한 번에.
+            #   제목만 바뀐 것(터미널은 명령마다 바뀐다)은 조금 더 느긋하게
+            self.queue_rebuild_all(250 if name in ("windowtitle", "windowtitlev2") else 50)
+
+    def queue_rebuild_all(self, delay=50):
+        """작업 표시줄 다시 그리기를 모은다. 이미 걸려 있으면 더 이른 쪽만 남긴다."""
+        due = GLib.get_monotonic_time() + delay * 1000
+        if getattr(self, "_rebuild_src", 0):
+            if due >= self._rebuild_due:
+                return
+            GLib.source_remove(self._rebuild_src)
+        self._rebuild_due = due
+        self._rebuild_src = GLib.timeout_add(delay, self._rebuild_due_now)
+
+    def _rebuild_due_now(self):
+        self._rebuild_src = 0
+        return self.rebuild_all_tasks()
 
     def rebuild_all_tasks(self):
-        self.rebuild_tasks()
+        if getattr(self, "_rebuild_src", 0):        # 곧 할 것을 지금 했다
+            GLib.source_remove(self._rebuild_src)
+            self._rebuild_src = 0
+        snap = self.task_snapshot()                 # Hyprland 조회는 한 번 — 모든 작업 표시줄이 같이 쓴다
+        self.rebuild_tasks(snap)
         for p in self.others:
-            p.rebuild_tasks()
+            p.rebuild_tasks(snap)
         return False
 
     def sync_monitors(self):
@@ -1324,13 +1383,32 @@ class Panel(Gtk.Window, TaskbarMixin):
         self.clock_btn.set_tooltip_text(time.strftime("%Y년 ", t) + korean_date(t, True))
         return True
 
+    def refresh_sys(self, delay=150):
+        """음량을 바꾼 직후 한 번 새로 읽기 — 1회용. 이미 걸려 있으면 다시 걸지 않는다.
+        (update_sys 는 5초 반복 타이머라 True 를 돌려준다 — 그대로 timeout_add 에 걸면 영원히 반복됐다)"""
+        if getattr(self, "_sys_src", 0):
+            return
+
+        def go():
+            self._sys_src = 0
+            self.update_sys()
+            return False
+        self._sys_src = GLib.timeout_add(delay, go)
+
     def update_sys(self):
+        """5초마다 (반복 타이머 — True) — 볼륨 아이콘. 조회는 기다리지 않는다 (query_volume)"""
+        if not getattr(self, "_sys_busy", False):
+            self._sys_busy = True                # wpctl 이 멈춰 있으면 새로 띄우지 않는다 (쌓이지 않게)
+            query_volume(self._apply_sys)
+        return True
+
+    def _apply_sys(self, r):
+        self._sys_busy = False
         # 볼륨
         try:
-            out = subprocess.run(["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"],
-                                 capture_output=True, text=True, timeout=1).stdout
-            muted = "MUTED" in out
-            v = float(out.split()[1]) if len(out.split()) > 1 else 0.0
+            if r is None:
+                raise ValueError("wpctl")
+            v, muted = r
             pct = int(round(v * 100))
             if muted or pct == 0:
                 name = "audio-volume-muted-symbolic"
@@ -1346,7 +1424,6 @@ class Panel(Gtk.Window, TaskbarMixin):
             (ctx.add_class if muted else ctx.remove_class)("muted")
         except Exception:
             self.vol.set_tooltip_text("음량")
-        return True
 
 
 # ───────────────────────────────────────────────────────────────
@@ -1423,7 +1500,7 @@ def main():
         _mon_src["id"] = GLib.timeout_add(600, go)
     Gdk.Display.get_default().connect("monitor-added", _monitors_changed)
     Gdk.Display.get_default().connect("monitor-removed", _monitors_changed)
-    pins.on_change(lambda: GLib.idle_add(panel.rebuild_all_tasks))
+    pins.on_change(lambda: panel.queue_rebuild_all(0))
 
     # ── 창 전환기 · OSD · 클립보드 · 창 배치 — org.sekai.Shell 로 부른다 (sekai-ctl) ──
     switcher = Switcher(hypr, on_restore=panel.restore_window)
@@ -1443,9 +1520,11 @@ def main():
         wm.layouts = SnapLayouts(wm)          # 최대화 버튼에 마우스를 올리면 뜨는 배치 그림
     panel.event_hooks.append(wm.on_event)
 
+    # 음량 키 — OSD 가 작업 스레드에서 바꾸고, 끝나면 작업 표시줄 아이콘도 새로
+    osd.on_volume = lambda: panel.refresh_sys(0)
+
     def volume(action):
         osd.volume(action)
-        panel.update_sys()
 
     panel.updates = UpdateNotifier()
     panel.gpuhint = GpuHint()
@@ -1498,15 +1577,11 @@ def main():
                 # 해상도·주사율을 바꿨을 수 있다 — 부팅 옵션용으로 다시 알린다
                 GLib.timeout_add(2500, lambda: monitors.publish_modes() and False)
             panel.tray.refresh_icons()
-            # 방해 금지는 설정 앱에서도 바꿀 수 있다 — 상태를 다시 읽는다
+            # 방해 금지·기록 지우기·보관 개수는 설정 앱에서도 바꾼다 — 다시 읽는다
             try:
-                from sekaishell import config as _c
-                svc = panel.notifications
-                dnd = bool(_c.state("dnd", False))
-                if dnd != svc.dnd:
-                    svc.set_dnd(dnd)
+                panel.notifications.sync_settings()
             except Exception as e:
-                dbg("방해 금지 상태 갱신 실패:", e)
+                dbg("알림 설정 갱신 실패:", e)
             panel.queue_draw()
             return False
         GLib.idle_add(reload_)

@@ -43,7 +43,8 @@ def set_state(key, value):
     data = state()
     data[key] = value
     os.makedirs(STATE_DIR, exist_ok=True)
-    tmp = STATE + ".tmp"
+    # 임시 파일은 프로세스마다 따로 — 패널과 설정 앱이 같은 때 쓰면 한 임시 파일을 서로 덮어 깨뜨린다
+    tmp = f"{STATE}.{os.getpid()}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
     os.replace(tmp, STATE)
