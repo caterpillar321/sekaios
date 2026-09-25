@@ -164,6 +164,13 @@ class TrayItem:
     def key(self):
         return f"{self.service}{self.path}"
 
+    def is_hidden(self):
+        """작업 표시줄이 직접 보여 주는 것 (TrayBox.hidden_ids) — appindicator 는 Id 를, 못 읽으면
+        객체 경로 끝(/org/ayatana/NotificationItem/nm_applet)을 본다"""
+        ids = self.box.hidden_ids
+        return bool(ids) and (str(self.props.get("Id") or "") in ids
+                              or os.path.basename(self.path).replace("_", "-") in ids)
+
     def is_hangul_ime(self):
         """ibus 패널의 아이콘이고 엔진이 한글이면 True — 그림 대신 "가"/"A" 를 그린다"""
         p = self.props
@@ -203,7 +210,7 @@ class TrayItem:
 
         ctx = self.button.get_style_context()
         (ctx.add_class if status == "NeedsAttention" else ctx.remove_class)("attention")
-        self.button.set_visible(status != "Passive" or self.box.show_passive)
+        self.button.set_visible((status != "Passive" or self.box.show_passive) and not self.is_hidden())
 
         menu_path = p.get("Menu")
         if menu_path and (self.menu_client is None
@@ -445,11 +452,14 @@ class TrayMenuPopup(PanelPopup):
 class TrayBox(Gtk.Box):
     """패널에 들어가는 트레이 영역. Watcher + Host 를 겸한다."""
 
-    def __init__(self, icon_size=18, show_passive=False):
+    def __init__(self, icon_size=18, show_passive=False, hidden_ids=()):
         super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
         self.get_style_context().add_class("tray")
         self.icon_size = icon_size
         self.show_passive = show_passive
+        # 등록은 받되 그리지 않는 항목 (SNI Id) — 예: nm-applet. 네트워크 상태는 작업 표시줄의
+        #   빠른 설정 아이콘이 보여 주고, nm-applet 은 Wi-Fi 암호 요청(비밀 에이전트)을 맡아 계속 돈다
+        self.hidden_ids = frozenset(hidden_ids)
         self.items = {}
         self.host_registered = False
         self.menu = None

@@ -125,6 +125,148 @@ window.toast-stack {
 .tray-item .ime-mode { font-size: 14px; color: @text2; min-width: 18px; }
 .tray-item:hover .ime-mode { color: @fg; }
 
+/* ═══ 빠른 설정 (Win+A · 네트워크·음량·배터리 아이콘) ═══════════════ */
+/* 작업 표시줄의 아이콘 묶음 — 한 버튼 (윈도우 11). 열려 있는 동안 눌린 모양 */
+.qs-btn { padding: 0 10px; }
+.qs-btn.open { background: @hover; }
+.qs-btn.open image { color: @fg; }
+.qs-btn image.muted { color: @text3; }
+
+.quick-settings .popup-root { padding: 0; }
+.quick-settings scrolledwindow, .quick-settings viewport { background: transparent; border: none; }
+.qs-body { padding: 16px 16px 14px 16px; }
+
+/* 버튼 초기화 — Adwaita 의 입체 테두리·그림자를 지운다 */
+.qs-tile-main, .qs-tile-more, .qs-icon-btn, .qs-row-btn, .qs-link, .qs-primary {
+    background: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    text-shadow: none;
+    min-height: 0;
+    min-width: 0;
+    color: @fg;
+    transition: background 120ms ease;
+}
+
+/* 타일: [아이콘 | ›] + 아래 이름. 켜지면 강조색 */
+.qs-tile {
+    background: @raised;
+    border: 1px solid @line;
+    border-radius: 8px;
+}
+.qs-tile-main { border-radius: 7px; padding: 0; min-height: 46px; }
+.qs-tile.has-more .qs-tile-main { border-radius: 7px 0 0 7px; }
+.qs-tile-more {
+    border-radius: 0 7px 7px 0;
+    border-left: 1px solid @line;
+    padding: 0 8px;
+    min-height: 46px;
+}
+.qs-tile-main:hover, .qs-tile-more:hover   { background: @hover; }
+.qs-tile-main:active, .qs-tile-more:active { background: @pressed; }
+.qs-tile image { color: @fg; }
+.qs-tile.on { background: @accent; border-color: transparent; }
+.qs-tile.on image { color: @on_accent; }
+.qs-tile.on .qs-tile-more { border-left-color: alpha(@on_accent, 0.25); }
+.qs-tile.on .qs-tile-main:hover, .qs-tile.on .qs-tile-more:hover   { background: alpha(#ffffff, 0.16); }
+.qs-tile.on .qs-tile-main:active, .qs-tile.on .qs-tile-more:active { background: alpha(#000000, 0.10); }
+.qs-tile-label { font-size: 12px; color: @fg; }
+.qs-tile-main:disabled image, .qs-tile-label:disabled { color: @text3; }
+
+/* 밝기·음량 */
+.qs-slider scale { padding: 6px 4px; }
+.qs-slider image { color: @text2; }
+.qs-value { font-size: 12px; color: @text2; }
+.qs-slider.muted scale highlight { background: @text3; }
+.qs-slider.muted scale slider { border-color: @text3; }
+
+.qs-icon-btn { border-radius: 6px; padding: 6px; min-width: 22px; min-height: 22px; }
+.qs-icon-btn image { color: @text2; }
+.qs-icon-btn:hover { background: @hover; }
+.qs-icon-btn:hover image { color: @fg; }
+.qs-icon-btn:active { background: @pressed; }
+/* › · ‹ (세부 보기) */
+.qs-chevron { font-size: 16px; color: @text2; min-width: 12px; margin-top: -2px; }
+.qs-icon-btn:hover .qs-chevron, .qs-tile-more:hover .qs-chevron { color: @fg; }
+.qs-tile.on .qs-chevron { color: @on_accent; }
+
+/* 아래줄: 배터리 · 설정 — 한 단계 어두운 띠 */
+.qs-foot {
+    background: alpha(@bg, 0.45);
+    border-top: 1px solid @line;
+    border-radius: 0 0 11px 11px;
+    padding: 6px 10px 6px 18px;
+    min-height: 36px;
+}
+.qs-battery image { color: @fg; }
+.qs-battery-pct   { font-size: 13px; font-weight: 600; color: @fg; }
+.qs-battery-state { font-size: 12px; color: @text2; }
+
+/* 세부 보기 (Wi-Fi · 블루투스 · 출력 장치) */
+.qs-title { font-size: 15px; font-weight: 700; color: @fg; }
+.qs-note  { color: @text3; padding: 20px 8px; }
+.qs-list  { padding: 2px 0; }
+.qs-row { border-radius: 8px; }
+.qs-row.current, .qs-row.expanded { background: @raised; }
+.qs-row-btn { border-radius: 8px; padding: 8px 10px; }
+.qs-row-btn:hover  { background: @hover; }
+.qs-row-btn:active { background: @pressed; }
+.qs-row-btn image { color: @text2; }
+.qs-row.current .qs-row-btn image { color: @accent; }
+.qs-row .qs-row-btn image.qs-row-trail { color: @text3; }     /* 잠금 — 연결된 줄에서도 흐리게 */
+.qs-row .qs-row-btn image.qs-row-check { color: @accent; }    /* 고른 출력 장치 */
+.qs-row-name { font-size: 13px; color: @fg; }
+.qs-row.current .qs-row-name { font-weight: 600; }
+.qs-row-sub  { font-size: 11px; color: @text2; }
+.qs-row-actions { padding: 2px 10px 10px 40px; }
+.qs-status { font-size: 12px; color: @text2; }
+.qs-status.error { color: @danger; }
+.qs-entry {
+    background: @raised;
+    border: 1px solid @line;
+    border-bottom: 2px solid @line;
+    border-radius: 6px;
+    color: @fg;
+    caret-color: @accent;
+    padding: 6px 10px;
+    min-height: 20px;
+    box-shadow: none;
+}
+.qs-entry:focus { border-bottom-color: @accent; }
+.qs-entry image { color: @text3; }
+.qs-primary { background: @accent; border-radius: 8px; padding: 7px 18px; }
+.qs-primary label { color: @on_accent; font-weight: 600; }
+.qs-primary:hover { background: @accent_hi; }
+.qs-primary:disabled { background: alpha(@accent, 0.45); }
+.qs-link { border-radius: 6px; padding: 6px 8px; }
+.qs-link label { color: @accent; }
+.qs-link:hover { background: @hover; }
+
+/* 켜고 끄기 스위치 (세부 보기 머리) */
+.quick-settings switch {
+    background: alpha(@fg, 0.14);
+    background-image: none;
+    border: 1px solid @line;
+    border-radius: 999px;
+    box-shadow: none;
+    min-width: 40px;
+    min-height: 20px;
+}
+.quick-settings switch:checked { background: @accent; border-color: transparent; }
+.quick-settings switch image { color: transparent; }
+.quick-settings switch slider {
+    background: @fg;
+    background-image: none;
+    border: none;
+    border-radius: 999px;
+    box-shadow: none;
+    min-width: 16px;
+    min-height: 16px;
+    margin: 2px;
+}
+.quick-settings switch:checked slider { background: @on_accent; }
+
 /* 알림 버튼의 읽지 않음 개수 */
 .noti-badge {
     background: @accent;
@@ -214,6 +356,27 @@ window.toast-stack {
 .app-list row:selected { background: @raised; }
 .app-row { padding: 7px 10px; }
 .app-row label { font-size: 13px; color: @fg; }
+
+/* 검색 결과 — 가장 일치하는 항목 · 앱 · 설정 · 파일 묶음 (윈도우 검색처럼) */
+.result-header {
+    font-size: 12px;
+    font-weight: 600;
+    color: @text2;
+    padding: 12px 10px 4px 10px;
+}
+.app-row .result-sub { font-size: 11px; color: @text3; }
+.app-row .best-title { font-size: 15px; font-weight: 600; }
+.app-list row.best-row .app-row { padding: 10px 10px; }
+/* 검색 칸에 초점이 있어도 ↓/↑ 로 고른 행이 보이게 — 왼쪽 강조 막대 */
+.app-list.searching row:selected {
+    background: @hover;
+    box-shadow: inset 3px 0 @accent;
+}
+.search-empty {
+    font-size: 13px;
+    color: @text3;
+    padding: 32px 16px;
+}
 
 /* 고정 타일 */
 .tiles flowboxchild { padding: 0; }
@@ -478,7 +641,8 @@ tooltip {
     border-radius: 6px;
     color: @fg;
 }
-tooltip label { font-size: 12px; }
+/* 글자색도 — 라이트 모드에서 Adwaita 기본(흰 글자)이 남아 밝은 바탕에 안 보였다 */
+tooltip label { font-size: 12px; color: @fg; }
 
 /* ═══ 끌어서 스냅 미리보기 (윈도우 11) ═══════════════════════════ */
 window.snap-preview-win { background: transparent; }

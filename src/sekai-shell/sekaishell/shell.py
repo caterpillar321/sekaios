@@ -21,6 +21,7 @@ XML = """
     <method name="Clipboard"/>
     <method name="StartMenu"/>
     <method name="NotificationCenter"/>
+    <method name="QuickSettings"/>
     <method name="Osd">
       <arg type="s" name="icon" direction="in"/>
       <arg type="s" name="text" direction="in"/>

@@ -23,6 +23,7 @@ from sekaishell import logo as sekai_logo                # noqa: E402
 from sekaishell.appicon import app_icon                  # noqa: E402
 from sekaishell.switcher import Switcher                 # noqa: E402
 from sekaishell.osd import Osd                           # noqa: E402
+from sekaishell.quicksettings import QuickSettings       # noqa: E402
 from sekaishell.clipboard import ClipboardPopup          # noqa: E402
 from sekaishell.windows import WindowManager             # noqa: E402
 from sekaishell.shell import ShellService                # noqa: E402
@@ -32,6 +33,7 @@ from sekaishell import pins                               # noqa: E402
 from sekaishell import startpins                          # noqa: E402
 from sekaishell import monitors                           # noqa: E402
 from sekaishell.taskpreview import TaskPreview           # noqa: E402
+from sekaishell import search                             # noqa: E402
 
 # 시작 버튼 로고: layers / world / diamond / blockS / nested / slashes
 DEBUG = os.environ.get("SEKAI_DEBUG") == "1"
@@ -334,6 +336,12 @@ def load_apps():
                 "terminal": entry.get("Terminal", "").lower() == "true",
                 "comment": localized(entry, "Comment"),
                 "name_en": entry.get("Name", name),      # 영어 이름으로도 검색되게
+                # 검색용 — 현지화한 것과 영어 것을 함께 (어느 말로 쳐도 찾게)
+                "generic": list(dict.fromkeys(v for v in (localized(entry, "GenericName"),
+                                                          entry.get("GenericName", "")) if v)),
+                "keywords": list(dict.fromkeys(
+                    k.strip() for k in (localized(entry, "Keywords") + ";" + entry.get("Keywords", "")).split(";")
+                    if k.strip())),
                 "path": os.path.join(d, fn),              # 바탕 화면 바로 가기를 만들 때 복사한다
             })
     apps.sort(key=lambda a: sort_key(a["name"]))
@@ -402,6 +410,7 @@ def make_desktop_shortcut(app):
 
 
 def launch(app):
+    search.note_launch(app.get("id"))             # 시작 메뉴 검색에서 자주 여는 앱을 앞으로
     cmd = app["exec"]
     if app.get("terminal"):
         cmd = f"sekai-terminal -e {cmd}"
@@ -478,6 +487,15 @@ class StartMenu(Gtk.Window):
         super().__init__(type=Gtk.WindowType.TOPLEVEL)
         self.hypr = hypr
         self.apps = []
+        # 검색: 앱·설정·계산은 입력마다 바로, 파일은 작업 스레드에서 (도착하면 목록 끝에 붙는다)
+        self.files = search.FileSearcher(self._files_arrived)
+        self._usage = {}          # 앱 실행 횟수 (메뉴를 열 때 읽는다)
+        self._preedit = ""        # 조합 중인 한글 — 아직 칸에 들어가지 않은 글자도 찾게
+        self._refill_src = 0
+        self._q = None            # 지금 보여 주는 검색어 (search.Query) — 없으면 모든 앱
+        self._res = None
+        self._best = None
+        self._files_pending = False
         self.get_style_context().add_class("start-menu")
         make_translucent(self)
 
@@ -554,9 +572,12 @@ class StartMenu(Gtk.Window):
         col.set_size_request(320, -1)
 
         self.search = Gtk.SearchEntry()
-        self.search.set_placeholder_text("앱 검색")
+        self.search.set_placeholder_text("앱·설정·파일 검색")
         self.search.get_style_context().add_class("menu-search")
-        self.search.connect("search-changed", lambda *_: self.refill())
+        # search-changed 는 150ms 늦게 온다 — changed 로 바로 (같은 차례의 변화는 한 번에 모아 그린다)
+        self.search.connect("changed", lambda *_: self._queue_refill())
+        self.search.connect("preedit-changed", self._on_preedit)
+        self.search.connect("key-press-event", self._on_search_key)
         self.search.connect("activate", self.on_activate_first)
         self.search.connect("stop-search", lambda *_: self.close())
         col.pack_start(self.search, False, False, 0)
@@ -564,16 +585,25 @@ class StartMenu(Gtk.Window):
         lbl = Gtk.Label(label="모든 앱", xalign=0)
         lbl.get_style_context().add_class("section-title")
         col.pack_start(lbl, False, False, 0)
+        self.list_title = lbl
 
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroll.set_vexpand(True)
+        self.list_scroll = scroll
         self.listbox = Gtk.ListBox()
         self.listbox.get_style_context().add_class("app-list")
         self.listbox.set_header_func(self._letter_header, None)
         self.listbox.connect("row-activated", self.on_row)
         self.listbox.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
         self.listbox.connect("button-press-event", self._row_menu)
+        # 결과가 없을 때 (파일을 찾는 동안은 "검색 중…")
+        self.empty_label = Gtk.Label(label="", xalign=0.5)
+        self.empty_label.get_style_context().add_class("search-empty")
+        self.empty_label.set_line_wrap(True)
+        self.empty_label.set_max_width_chars(28)
+        self.empty_label.show()
+        self.listbox.set_placeholder(self.empty_label)
         scroll.add(self.listbox)
         col.pack_start(scroll, True, True, 0)
         return col
@@ -679,6 +709,7 @@ class StartMenu(Gtk.Window):
         self.power_box.hide()
         self.hide()
         self.catcher.hide()
+        self.files.drop()             # 늦게 온 파일 결과는 버리고, 파일 색인도 놓는다
         for c in self.other_catchers:
             c.destroy()
         self.other_catchers = []
@@ -696,6 +727,8 @@ class StartMenu(Gtk.Window):
                     c.show_all()
                     self.other_catchers.append(c)
         self.apps = load_apps()
+        self._usage = search.load_usage()
+        self._preedit = ""
         self.search.set_text("")
         self.refill()
         self.fill_tiles()
@@ -744,14 +777,65 @@ class StartMenu(Gtk.Window):
             self.flow.add(btn)
         self.flow.show_all()
 
+    # ── 검색 ─────────────────────────────────────────────
+    GROUP_TITLES = {"best": "가장 일치하는 항목", "app": "앱", "setting": "설정", "file": "파일"}
+    GROUP_MAX = {"app": 6, "setting": 4, "file": 6}
+
+    def _query_text(self):
+        """칸의 글 + 조합 중인 글자(커서 자리에) — ibus 는 조합이 끝나야 칸에 넣는다"""
+        text = self.search.get_text()
+        if self._preedit:
+            pos = self.search.get_position()
+            text = text[:pos] + self._preedit + text[pos:]
+        return text
+
+    def _on_preedit(self, _entry, pre):
+        self._preedit = pre or ""
+        self._queue_refill()
+
+    def _queue_refill(self):
+        """글자 확정(changed)과 조합 변화(preedit-changed)가 잇달아 와도 한 번만, 그리기 전에"""
+        if not self._refill_src:
+            self._refill_src = GLib.idle_add(self._idle_refill, priority=GLib.PRIORITY_HIGH_IDLE)
+
+    def _idle_refill(self):
+        self._refill_src = 0
+        self.refill()
+        return False
+
+    def _flush_refill(self):
+        """Enter·방향키가 밀린 다시 그리기보다 먼저 오면 옛 결과를 고르지 않게"""
+        if self._refill_src:
+            self.refill()
+
     def refill(self):
-        q = self.search.get_text().strip().lower()
+        if self._refill_src:
+            GLib.source_remove(self._refill_src)
+            self._refill_src = 0
+        text = self._query_text()
+        qo = search.Query(text) if text.strip() else None
         for child in self.listbox.get_children():
             self.listbox.remove(child)
+        self._q, self._res, self._best = qo, None, None
+        self.list_scroll.get_vadjustment().set_value(0)
+        ctx = self.listbox.get_style_context()
+        if qo is not None:
+            self.list_title.set_text("검색 결과")
+            ctx.add_class("searching")
+            self.listbox.set_header_func(self._group_header, None)
+            self._res = search.find(qo, self.apps, self._usage)
+            self._res["files"] = []
+            self._files_pending = self.files.search(qo)
+            self._render()
+            return
+        # 검색어가 없으면 모든 앱 (알파벳·초성 머리표)
+        self.files.cancel()
+        self._files_pending = False
+        self.list_title.set_text("모든 앱")
+        self.empty_label.set_text("")
+        ctx.remove_class("searching")
+        self.listbox.set_header_func(self._letter_header, None)
         for app in self.apps:
-            if q and q not in app["name"].lower() and q not in app["comment"].lower() \
-                    and q not in app.get("name_en", "").lower():
-                continue
             row = Gtk.ListBoxRow()
             row.app = app
             box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -764,6 +848,194 @@ class StartMenu(Gtk.Window):
             self.listbox.add(row)
         self.listbox.invalidate_headers()
         self.listbox.show_all()
+
+    def _render(self):
+        """윈도우처럼 묶어서: 가장 일치하는 항목 → 앱 → 설정 → 파일 (파일은 나중에 와서 붙기도 한다)"""
+        res = self._res
+        best = None
+        if res["calc"] is not None:
+            best = ("calc", res["calc"])             # 수식을 쳤으면 계산 결과가 원하는 것
+        else:
+            cands = []                               # (점수, 같을 때 앞설 순서, 종류, 항목)
+            if res["apps"]:
+                cands.append((res["apps"][0][0], 2, "app", res["apps"][0][1]))
+            if res["settings"]:
+                cands.append((res["settings"][0][0], 1, "setting", res["settings"][0][1]))
+            if not cands and res["files"]:           # 앱·설정이 없을 때만 — 보던 맨 위가 바뀌지 않게
+                cands.append((0, 0, "file", res["files"][0]))
+            if cands:
+                _s, _o, kind, item = max(cands, key=lambda c: (c[0], c[1]))
+                best = (kind, item)
+        self._best = best
+        if best:
+            self.listbox.add(self._result_row(best[0], best[1], "best"))
+        for kind, items in (("app", [a for _s, a in res["apps"]]),
+                            ("setting", [e for _s, e in res["settings"]]),
+                            ("file", res["files"])):
+            self._add_group(kind, items)
+        self._update_empty()
+        self.listbox.show_all()
+        first = self.listbox.get_row_at_index(0)
+        if first is not None:
+            self.listbox.select_row(first)           # Enter 가 무엇을 열지 보이게
+
+    def _add_group(self, kind, items):
+        best = self._best[1] if self._best else None
+        items = [it for it in items if it is not best][:self.GROUP_MAX[kind]]
+        for it in items:
+            self.listbox.add(self._result_row(kind, it, kind))
+
+    def _files_arrived(self, qo, files):
+        """작업 스레드의 파일 결과 (메인 루프에서). 검색어가 그새 바뀌었으면 버린다"""
+        if qo is not self._q or self._res is None:
+            return
+        self._files_pending = False
+        self._res["files"] = files
+        if self._best is None and files:             # 아무것도 없던 목록 — 파일이 가장 일치하는 항목이 된다
+            self._render()
+            return
+        self._add_group("file", files)
+        self._update_empty()
+        self.listbox.show_all()
+
+    def _update_empty(self):
+        q = self._q.raw if self._q is not None else ""
+        self.empty_label.set_text("" if not q else "검색 중…" if self._files_pending
+                                  else f"'{q}'에 대한 검색 결과가 없습니다")
+
+    def _group_header(self, row, before, _d):
+        """묶음이 바뀌는 곳에 제목 (가장 일치하는 항목 · 앱 · 설정 · 파일)"""
+        g = getattr(row, "group", None)
+        if g is None or (before is not None and getattr(before, "group", None) == g):
+            row.set_header(None)
+            return
+        cur = row.get_header()
+        if cur is not None and getattr(cur, "group", None) == g:
+            return
+        h = Gtk.Label(label=self.GROUP_TITLES.get(g, ""), xalign=0)
+        h.group = g
+        h.get_style_context().add_class("result-header")
+        h.show_all()
+        row.set_header(h)
+
+    def _result_row(self, kind, item, group):
+        best = group == "best"
+        size = 32 if best else 24
+        row = Gtk.ListBoxRow()
+        row.kind, row.item, row.group = kind, item, group
+        if kind == "app":
+            row.app = item                           # 우클릭 메뉴(_row_menu)가 쓴다
+            icon, title, sub = icon_image(item["icon"], size), item["name"], ("앱" if best else "")
+        elif kind == "setting":
+            icon = icon_image(list(item["icons"]) + ["preferences-system"], size)
+            title, where = item["title"], item["sub"]
+            sub = ("설정" + (f" › {where}" if where else "")) if best else where
+        elif kind == "file":
+            icon = self._file_icon(item, size)
+            title = item["name"]
+            parent, home = os.path.dirname(item["path"]), os.path.expanduser("~")
+            if parent == home or parent.startswith(home + os.sep):
+                parent = "~" + parent[len(home):]
+            sub = f"{'폴더' if item['dir'] else '파일'} · {parent}" if best else parent
+            row.set_tooltip_text(item["path"])
+        else:                                        # calc
+            icon = icon_image(["accessories-calculator", "galculator", "org.gnome.Calculator"], size)
+            title = f"= {item}"
+            sub = f"{self._q.raw if self._q else ''}  ·  Enter 로 결과 복사"
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        box.get_style_context().add_class("app-row")
+        box.pack_start(icon, False, False, 0)
+        text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        text.set_valign(Gtk.Align.CENTER)
+        t = Gtk.Label(label=title, xalign=0)
+        t.set_ellipsize(Pango.EllipsizeMode.END)
+        t.get_style_context().add_class("result-title")
+        if best:
+            t.get_style_context().add_class("best-title")
+        text.pack_start(t, False, False, 0)
+        if sub:
+            s = Gtk.Label(label=sub, xalign=0)
+            s.set_ellipsize(Pango.EllipsizeMode.MIDDLE if kind == "file" else Pango.EllipsizeMode.END)
+            s.get_style_context().add_class("result-sub")
+            text.pack_start(s, False, False, 0)
+        box.pack_start(text, True, True, 0)
+        row.add(box)
+        if best:
+            row.get_style_context().add_class("best-row")
+        return row
+
+    @staticmethod
+    def _file_icon(item, size):
+        img = Gtk.Image()
+        img.set_pixel_size(size)
+        gicon = None
+        if not item["dir"]:
+            ctype, _unsure = Gio.content_type_guess(item["name"], None)
+            gicon = Gio.content_type_get_icon(ctype) if ctype else None
+        if gicon is not None:
+            img.set_from_gicon(gicon, Gtk.IconSize.MENU)
+        else:
+            img.set_from_icon_name("folder" if item["dir"] else "text-x-generic", Gtk.IconSize.MENU)
+        return img
+
+    def _on_search_key(self, _w, ev):
+        """검색 칸에 초점을 둔 채 ↓/↑ 로 결과를 고른다 (계속 칠 수 있게)"""
+        step = {Gdk.KEY_Down: 1, Gdk.KEY_KP_Down: 1, Gdk.KEY_Up: -1, Gdk.KEY_KP_Up: -1}.get(ev.keyval)
+        if step is None:
+            return False
+        self._flush_refill()
+        rows = self.listbox.get_children()
+        if rows:
+            cur = self.listbox.get_selected_row()
+            i = rows.index(cur) + step if cur in rows else (0 if step > 0 else len(rows) - 1)
+            row = rows[max(0, min(len(rows) - 1, i))]
+            self.listbox.select_row(row)
+            self._scroll_to(row)
+        return True
+
+    def _scroll_to(self, row):
+        """고른 행(과 그 묶음 제목)이 보이게. 목록 상자는 자기 창이 있어 행 위치가 곧 내용 좌표다"""
+        adj = self.list_scroll.get_vadjustment()
+        a = row.get_allocation()
+        top, bottom = a.y, a.y + a.height
+        hdr = row.get_header()
+        if hdr is not None and hdr.get_visible():
+            top = min(top, hdr.get_allocation().y)
+        if row.get_index() == 0:
+            top = 0
+        if top < adj.get_value():
+            adj.set_value(top)
+        elif bottom > adj.get_value() + adj.get_page_size():
+            adj.set_value(bottom - adj.get_page_size())
+
+    def _open_file(self, item):
+        """파일은 기본 앱으로, 폴더는 설정한 파일 관리자로. 열 앱이 없으면 든 폴더를 연다"""
+        fm = shlex.split(sekai_conf("apps", "files", "thunar") or "thunar")
+        if item["dir"]:
+            self._run(fm + [item["path"]])
+            return
+        self.close()
+        try:
+            Gio.AppInfo.launch_default_for_uri(Gio.File.new_for_path(item["path"]).get_uri(), None)
+        except GLib.Error as e:
+            dbg("파일 열기 실패", item["path"], e)
+            self._run(fm + [os.path.dirname(item["path"])])
+
+    @staticmethod
+    def _copy_text(text):
+        """계산 결과를 클립보드로 — Wayland 는 메뉴가 닫혀도 남게 wl-copy, X11 은 패널이 계속 쥔다"""
+        if _layer.WAYLAND:
+            try:
+                p = subprocess.Popen(["wl-copy"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL, start_new_session=True)
+                p.stdin.write(text.encode())
+                p.stdin.close()
+            except OSError as e:
+                dbg("wl-copy 실패", e)
+        else:
+            cb = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+            cb.set_text(text, -1)
+            cb.store()
 
     def _row_menu(self, lb, ev):
         """앱 목록 우클릭"""
@@ -807,15 +1079,24 @@ class StartMenu(Gtk.Window):
         return True
 
     def on_row(self, _lb, row):
-        if not hasattr(row, "app"):
-            return
-        launch(row.app)
-        self.close()
+        kind = getattr(row, "kind", "app" if hasattr(row, "app") else None)
+        if kind == "app":
+            launch(row.app)
+            self.close()
+        elif kind == "setting":
+            self._run(["sekai-settings", "--page=" + row.item["page"]])
+        elif kind == "file":
+            self._open_file(row.item)
+        elif kind == "calc":
+            self._copy_text(row.item)
+            self.close()
 
     def on_activate_first(self, _entry):
-        rows = [r for r in self.listbox.get_children() if hasattr(r, "app")]
-        if rows:
-            self.on_row(self.listbox, rows[0])
+        """Enter — 고른 결과, 없으면 첫 결과"""
+        self._flush_refill()
+        row = self.listbox.get_selected_row() or self.listbox.get_row_at_index(0)
+        if row is not None:
+            self.on_row(self.listbox, row)
 
 
 # ───────────────────────────────────────────────────────────────
@@ -1259,7 +1540,8 @@ class Panel(Gtk.Window, TaskbarMixin):
         # ── 트레이 (StatusNotifierItem) ──
         #   Watcher 와 Host 를 우리가 직접 구현한다. 없으면 앱들이
         #   트레이 아이콘을 아예 만들지 않는다.
-        self.tray = TrayBox(icon_size=18)
+        #   nm-applet 아이콘은 숨긴다 — 네트워크 상태는 빠른 설정 아이콘이 보여 준다 (아래)
+        self.tray = TrayBox(icon_size=18, hidden_ids=("nm-applet",))
         sys_box.pack_start(self.tray, False, False, 0)
 
         # ── 알림 ──
@@ -1282,26 +1564,19 @@ class Panel(Gtk.Window, TaskbarMixin):
         self.notifications = NotificationService(
             on_count_changed=self._on_noti_count)
         if self.notifications.center is not None:
-            self.noti_btn.connect(
-                "clicked", lambda *_: self.notifications.center.toggle())
+            self.noti_btn.connect("clicked", lambda *_: self.toggle_center())
         self._on_noti_count(self.notifications.unread,
                             len(self.notifications.history),
                             self.notifications.dnd)
 
-        self.vol_popup = self._build_vol_popup()
-        self.vol = Gtk.Button()
-        self.vol_icon = icon_image("audio-volume-high-symbolic", 16)
-        self.vol.add(self.vol_icon)
-        self.vol.get_style_context().add_class("sys-item")
-        self.vol.set_valign(Gtk.Align.CENTER)
-        self.vol.connect("clicked", lambda *_: self.vol_popup.toggle())
-        self.vol.add_events(Gdk.EventMask.SCROLL_MASK | Gdk.EventMask.SMOOTH_SCROLL_MASK)
-        self.vol.connect("scroll-event", self._on_vol_scroll)
-        sys_box.pack_start(self.vol, False, False, 0)
-
-        # 네트워크 표시는 트레이의 nm-applet 아이콘이 맡는다
-        #   (연결 상태·연결 메뉴·Wi-Fi 암호 입력까지). 전에는 여기에
-        #   인터페이스 이름(ens33 등)을 글자로 찍었는데 사용자에겐 의미가 없었다.
+        # ── 빠른 설정 (윈도우 11) — 네트워크·음량·배터리 아이콘을 한 버튼으로. 누르면 빠른 설정, 휠은 음량.
+        #   네트워크 상태는 NetworkManager 신호로 받아 여기에 보인다 (nm-applet 은 트레이에서 숨기고
+        #   Wi-Fi 암호 요청 같은 비밀 에이전트로만 계속 돈다)
+        self.qs = QuickSettings(run_limited, notifications=self.notifications,
+                                on_volume=lambda: self.refresh_sys(0))
+        self.qs.before_open = self._close_for_qs
+        self.qs_btn = self.qs.make_button(on_scroll=self._on_vol_scroll, monitor=lambda: self.gdk_monitor)
+        sys_box.pack_start(self.qs_btn, False, False, 0)
 
         self.cal_popup = self._build_cal_popup()
         self.clock_btn = Gtk.Button()
@@ -1346,90 +1621,34 @@ class Panel(Gtk.Window, TaskbarMixin):
         self.noti_btn.set_tooltip_text(
             "방해 금지" if dnd else
             (f"읽지 않은 알림 {unread}개" if unread else f"알림 {total}개"))
+        qs = getattr(self, "qs", None)            # 알림 센터·설정 앱에서 바꾼 방해 금지를 빠른 설정 타일에도
+        if qs is not None:
+            qs.sync_dnd()
 
-    # ── 볼륨 팝업 ───────────────────────────────────────
-    def _build_vol_popup(self):
-        pop = PanelPopup(GtkLayerShell.Edge.RIGHT, margin=10)
-        box = pop.root
-        box.set_spacing(12)
-        box.set_size_request(300, -1)
+    # ── 빠른 설정 · 알림 센터 · 시작 메뉴 — 한 번에 하나만 ──
+    #   팝업 바깥은 클릭 캐처가 덮으므로 마우스로는 겹칠 수 없다. 단축키(Win+A·Win+N·Win)로 열 때 서로 닫는다
+    def toggle_quick_settings(self):
+        """Win+A (sekai-ctl quicksettings) — 주 모니터의 작업 표시줄 위에"""
+        self.qs.toggle(self.gdk_monitor)
 
-        head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        t = Gtk.Label(label="음량", xalign=0)
-        t.get_style_context().add_class("pop-title")
-        head.pack_start(t, True, True, 0)
-        self.vol_value = Gtk.Label(label="", xalign=1)
-        self.vol_value.get_style_context().add_class("pop-value")
-        head.pack_end(self.vol_value, False, False, 0)
-        box.pack_start(head, False, False, 0)
+    def _close_for_qs(self):
+        if self.menu.get_visible():
+            self.menu.close()
+        c = getattr(self.notifications, "center", None)
+        for p in (c, getattr(self, "cal_popup", None)):
+            if p is not None and p.get_visible():
+                p.close()
 
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        self.mute_btn = Gtk.ToggleButton()
-        self.mute_btn.get_style_context().add_class("icon-btn")
-        self.mute_icon = icon_image("audio-volume-high-symbolic", 16)
-        self.mute_btn.add(self.mute_icon)
-        self.mute_btn.set_tooltip_text("음소거")
-        self.mute_btn.set_valign(Gtk.Align.CENTER)
-        self.mute_btn.connect("toggled", self._on_mute)
-        row.pack_start(self.mute_btn, False, False, 0)
+    def toggle_center(self):
+        """알림 센터 (알림 데몬이 없으면 달력)"""
+        c = getattr(self.notifications, "center", None) or self.cal_popup
+        if not c.get_visible():
+            self.qs.close()
+            if self.menu.get_visible():
+                self.menu.close()
+        c.toggle()
 
-        self.vol_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
-        self.vol_scale.set_draw_value(False)
-        self.vol_scale.connect("value-changed", self._on_vol_scale)
-        row.pack_start(self.vol_scale, True, True, 0)
-        box.pack_start(row, False, False, 0)
-
-        mix = Gtk.Button(label="소리 설정")
-        mix.get_style_context().add_class("pop-btn")
-        mix.set_halign(Gtk.Align.END)
-        mix.connect("clicked", lambda *_: (pop.close(),
-                    subprocess.Popen(["sekai-settings", "--page=sound"], start_new_session=True,
-                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)))
-        box.pack_start(mix, False, False, 0)
-
-        pop.on_open = self._sync_vol_popup
-        return pop
-
-    def _sync_vol_popup(self):
-        query_volume(self._apply_vol_popup)
-        return False
-
-    def _apply_vol_popup(self, r):
-        if r is None:
-            return
-        v, muted = r
-        self._vol_guard = True
-        try:
-            self.vol_scale.set_value(round(v * 100))
-            self.mute_btn.set_active(muted)
-            self.mute_icon.set_from_icon_name(
-                "audio-volume-muted-symbolic" if muted else "audio-volume-high-symbolic",
-                Gtk.IconSize.MENU)
-            self.vol_value.set_text("음소거" if muted else f"{round(v * 100)}%")
-        finally:
-            self._vol_guard = False
-
-    def _on_vol_scale(self, sc):
-        if getattr(self, "_vol_guard", False):
-            return
-        self._set_volume(int(sc.get_value()))
-        self.vol_value.set_text(f"{int(sc.get_value())}%")
-        self.refresh_sys(150)
-
-    def _set_volume(self, pct):
-        """슬라이더 음량 — 마지막 값만. wpctl 은 한 번에 하나만 띄우고, 도는 동안 바뀐 값은 끝난 뒤
-        한 번 더 (값마다 따로 띄우면 늦게 끝난 옛 값이 이겨 슬라이더와 실제 음량이 어긋났다)"""
-        self._vol_want = pct
-        if getattr(self, "_vol_setting", False):
-            return
-        self._vol_setting = True
-
-        def done(_out, sent=pct):
-            self._vol_setting = False
-            if self._vol_want != sent:
-                self._set_volume(self._vol_want)
-        run_limited(["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{pct}%"], done)
-
+    # ── 음량 (작업 표시줄 아이콘 위 휠) — 슬라이더는 빠른 설정에 ──
     def _on_vol_scroll(self, _w, ev):
         """휠 한 칸 = 5%. 터치패드는 작은 dy 를 초당 수십 번 보낸다 — 모아서 1.0 마다 한 칸
         (이벤트마다 5% 로 치면 살짝 쓸어도 100% 로 튀었다). 한 이벤트는 많아야 한 칸 (휠 한 칸의 dy 가 1.5 여도)"""
@@ -1457,7 +1676,7 @@ class Panel(Gtk.Window, TaskbarMixin):
         return True
 
     def _step_volume(self, delta):
-        """휠 음량 — 슬라이더(_set_volume)처럼 wpctl 은 한 번에 하나만. 도는 동안 온 칸은 모았다가
+        """휠 음량 — 빠른 설정의 슬라이더(LastValue)처럼 wpctl 은 한 번에 하나만. 도는 동안 온 칸은 모았다가
         끝난 뒤 한 번에 (이벤트마다 띄우면 wpctl 이 이벤트 수만큼 쌓였다)"""
         self._vol_delta = getattr(self, "_vol_delta", 0) + delta
         if getattr(self, "_vol_stepping", False) or not self._vol_delta:
@@ -1473,14 +1692,6 @@ class Panel(Gtk.Window, TaskbarMixin):
                 self.refresh_sys(0)
         run_limited(["wpctl", "set-volume", "-l", "1.0", "@DEFAULT_AUDIO_SINK@",
                      f"{abs(d)}%{'+' if d > 0 else '-'}"], done)
-
-    def _on_mute(self, btn):
-        if getattr(self, "_vol_guard", False):
-            return
-        subprocess.Popen(["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@",
-                          "1" if btn.get_active() else "0"])
-        self.refresh_sys(150)
-        GLib.timeout_add(200, self._sync_vol_popup)
 
     # ── 달력 팝업 ───────────────────────────────────────
     def _build_cal_popup(self):
@@ -1551,6 +1762,7 @@ class Panel(Gtk.Window, TaskbarMixin):
         if self.menu.get_visible():
             self.menu.close()
         else:
+            self.qs.close()                  # 빠른 설정과 같이 열리지 않게
             if monitor is None:
                 monitor = focused_gdk_monitor(self.hypr)
             self.menu.present_menu(monitor)  # None 이면 모니터를 정하지 않는다
@@ -1680,26 +1892,8 @@ class Panel(Gtk.Window, TaskbarMixin):
 
     def _apply_sys(self, r):
         self._sys_busy = False
-        # 볼륨
-        try:
-            if r is None:
-                raise ValueError("wpctl")
-            v, muted = r
-            pct = int(round(v * 100))
-            if muted or pct == 0:
-                name = "audio-volume-muted-symbolic"
-            elif pct < 34:
-                name = "audio-volume-low-symbolic"
-            elif pct < 67:
-                name = "audio-volume-medium-symbolic"
-            else:
-                name = "audio-volume-high-symbolic"
-            self.vol_icon.set_from_icon_name(name, Gtk.IconSize.MENU)
-            self.vol.set_tooltip_text("음소거" if muted else f"음량 {pct}%")
-            ctx = self.vol.get_style_context()
-            (ctx.add_class if muted else ctx.remove_class)("muted")
-        except Exception:
-            self.vol.set_tooltip_text("음량")
+        # 음량 — 아이콘 묶음과 (열려 있으면) 빠른 설정의 슬라이더
+        self.qs.show_volume(r)
 
 
 # ───────────────────────────────────────────────────────────────
@@ -1812,8 +2006,8 @@ def main():
         "Snap": wm.snap,
         "Clipboard": clip.toggle,
         "StartMenu": panel.toggle_menu,
-        "NotificationCenter": lambda: (getattr(panel.notifications, "center", None)
-                                       or panel.cal_popup).toggle(),
+        "NotificationCenter": panel.toggle_center,
+        "QuickSettings": panel.toggle_quick_settings,
         "Osd": osd.show_text,
     })
 
@@ -1827,8 +2021,7 @@ def main():
     # SIGUSR2 = 알림 센터 토글  (pkill -USR2 -f sekai-panel)
     #   달력은 시계를 누르면 열리므로 단축키는 알림 센터에 준다.
     def on_usr2(*_):
-        c = getattr(panel.notifications, "center", None)
-        GLib.idle_add(c.toggle if c is not None else panel.cal_popup.toggle)
+        GLib.idle_add(panel.toggle_center)
         return True
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR2, on_usr2)
 
@@ -1853,6 +2046,7 @@ def main():
                 # 해상도·주사율을 바꿨을 수 있다 — 부팅 옵션용으로 다시 알린다
                 GLib.timeout_add(2500, lambda: monitors.publish_modes() and False)
             panel.tray.refresh_icons()
+            panel.qs.refresh_icons()        # 네트워크·음량·배터리 아이콘도 새 테마로 (다크 모드 타일도 맞춘다)
             # 방해 금지·기록 지우기·보관 개수는 설정 앱에서도 바꾼다 — 다시 읽는다
             try:
                 panel.notifications.sync_settings()

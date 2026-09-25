@@ -14,8 +14,10 @@ super + {r,d}
 	sekai-ctl menu
 super + i
 	sekai-settings
-super + {n,a}
+super + n
 	sekai-ctl notifications
+super + a
+	sekai-ctl quicksettings
 super + v
 	sekai-ctl clipboard
 super + l
