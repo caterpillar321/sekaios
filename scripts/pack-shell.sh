@@ -36,6 +36,7 @@ install -Dm755 "$SRC/sekai-greeter"   "$STAGE/usr/bin/sekai-greeter"
 install -Dm755 "$SRC/sekai-greeter-session" "$STAGE/usr/bin/sekai-greeter-session"
 install -Dm644 "$SRC/lib/hw-env.sh"   "$STAGE/usr/lib/sekai/hw-env.sh"
 install -Dm755 "$SRC/lib/keep-running" "$STAGE/usr/lib/sekai/keep-running"
+install -Dm755 "$SRC/lib/autostart"    "$STAGE/usr/lib/sekai/autostart"
 install -Dm755 "$SRC/sekai-terminal"  "$STAGE/usr/bin/sekai-terminal"
 # 기본 화면 모드 (X11) — 그래픽 드라이버가 없을 때
 for f in "$SRC"/lib/x11/*; do

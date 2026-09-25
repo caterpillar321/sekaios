@@ -1,0 +1,81 @@
+#!/usr/bin/python3
+"""SekaiOS — 로그인할 때 자동 시작 앱(XDG autostart)을 실행한다.
+
+세션(hyprland.conf exec-once, x11/session)이 작업 표시줄을 띄운 뒤 한 번 부른다 — 트레이 아이콘을 가진
+앱이 작업 표시줄보다 먼저 떠도 되지만, 알림을 바로 띄우는 앱이 있어서 조금 뒤에.
+무엇을 실행할지는 sekaishell.autostart (작업 관리자의 시작 앱 탭과 같은 규칙).
+세션마다 한 번만 ($XDG_RUNTIME_DIR 표시 파일 — 컴포지터만 다시 떠도 또 띄우지 않게).
+기록: ~/.local/state/sekai/autostart.log
+"""
+import os
+import sys
+import time
+
+import gi
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio  # noqa: E402
+
+from sekaishell import autostart  # noqa: E402
+
+LOG = os.path.expanduser("~/.local/state/sekai/autostart.log")
+
+
+def log(msg):
+    try:
+        os.makedirs(os.path.dirname(LOG), exist_ok=True)
+        with open(LOG, "a", encoding="utf-8") as f:
+            f.write(time.strftime("%H:%M:%S ") + msg + "\n")
+    except OSError:
+        pass
+
+
+def once():
+    """이 세션에서 처음이면 True"""
+    rt = os.environ.get("XDG_RUNTIME_DIR")
+    if not rt:
+        return True
+    try:
+        os.close(os.open(os.path.join(rt, "sekai-autostart.done"), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        return True
+    except FileExistsError:
+        return False
+    except OSError:
+        return True
+
+
+def main():
+    if "--force" not in sys.argv and not once():
+        return 0
+    try:
+        os.remove(LOG)                          # 이번 로그인 것만 남긴다
+    except OSError:
+        pass
+    items = [it for it in autostart.scan() if it["runs"]]
+    for it in autostart.scan():
+        if not it["runs"]:
+            why = ("세션이 직접 실행" if it["managed"] else "꺼짐" if not it["enabled"] else
+                   "이 데스크톱에서는 실행 안 함" if not it["here"] else
+                   "프로그램 없음" if not it["installed"] else "실행할 명령 없음")
+            log(f"건너뜀 {it['file']}: {why}")
+    start = time.monotonic()
+    for it in sorted(items, key=autostart.delay_of):
+        wait = start + autostart.delay_of(it) - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        try:
+            app = Gio.DesktopAppInfo.new_from_filename(it["path"])
+        except TypeError:
+            app = None
+        if app is None:
+            log(f"읽지 못함 {it['path']}")
+            continue
+        try:
+            app.launch([], None)
+            log(f"실행 {it['file']}: {it['exec']}")
+        except Exception as e:                  # 한 앱이 실패해도 나머지는 띄운다
+            log(f"실패 {it['file']}: {e}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

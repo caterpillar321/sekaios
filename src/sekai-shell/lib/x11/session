@@ -52,6 +52,9 @@ nm-applet --indicator >/dev/null 2>&1 &
 # 설치 USB 로 켰으면 설치 화면
 ( sleep 3; command -v sekai-installer >/dev/null && sekai-installer --autostart ) >/dev/null 2>&1 &
 
+# 자동 시작 앱 (작업 관리자 › 시작 앱) — 위에서 직접 띄운 것은 건너뛴다
+( sleep 2; exec /usr/lib/sekai/autostart ) >/dev/null 2>&1 &
+
 # 로그아웃(패널이 이 셸에 TERM 을 보냄)까지 기다린다. 끝날 때 딸린 프로세스를 함께 정리
 trap 'kill 0 2>/dev/null; exit 0' TERM INT HUP
 sleep infinity &

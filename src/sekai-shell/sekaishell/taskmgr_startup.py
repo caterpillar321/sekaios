@@ -1,10 +1,12 @@
 """작업 관리자 — 시작 앱 탭 (XDG 자동 시작).
 
+무엇이 실행되는지는 sekaishell.autostart — 로그인할 때 실행기(/usr/lib/sekai/autostart)와 같은 규칙.
 사용자 폴더(~/.config/autostart)의 파일이 시스템 폴더(/etc/xdg/autostart)의 같은 이름을 가린다 (XDG 규칙).
   사용 안 함  사용자 폴더의 같은 이름 파일에 Hidden=true. 시스템 항목이면 그 내용을 복사해 덮어쓴다.
   다시 사용   우리가 만든 덮어쓰기(X-Sekai-Override=true)면 지워서 시스템 항목으로 돌리고,
               사용자가 직접 만든 항목이면 Hidden=false.
-OnlyShowIn·NotShowIn 은 참고로 보여 주기만 한다.
+SekaiOS 세션이 직접 띄우는 것, NoDisplay=true(시스템 구성 요소), 이 데스크톱에서는 실행하지 않거나
+프로그램이 없는 항목은 목록에 보이지 않는다 (켜고 꺼도 달라지지 않는다).
 """
 import os
 import subprocess
@@ -16,126 +18,35 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, GLib, GObject, Gtk  # noqa: E402
 
+from . import autostart  # noqa: E402
 from .taskmgr_common import (FALLBACK_ICON, SortHeaders, key_is_menu, menu_item,  # noqa: E402
                              notice, open_location, popup, text_column)
 
 OVERRIDE_KEY = "X-Sekai-Override"
-GROUP = "[Desktop Entry]"
+GROUP = autostart.GROUP
 
 
-def autostart_dirs():
-    home = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    sysdirs = [d for d in (os.environ.get("XDG_CONFIG_DIRS") or "/etc/xdg").split(":") if d]
-    return os.path.join(home, "autostart"), [os.path.join(d, "autostart") for d in sysdirs]
+autostart_dirs = autostart.autostart_dirs
+entry_enabled = autostart.entry_enabled
 
 
-def parse_entry(path):
-    """[Desktop Entry] 묶음의 키=값 (지역화 키 Name[ko] 도 그대로)"""
-    try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            lines = f.read().splitlines()
-    except OSError:
-        return None
-    out, inside = {}, False
-    for line in lines:
-        s = line.strip()
-        if not s or s.startswith("#"):
-            continue
-        if s.startswith("["):
-            inside = s == GROUP
-            continue
-        if inside and "=" in s:
-            k, _, v = s.partition("=")
-            out.setdefault(k.strip(), v.strip())
-    return out
-
-
-def _true(v):
-    return (v or "").strip().lower() == "true"
-
-
-def entry_enabled(d):
-    return not _true(d.get("Hidden")) and (d.get("X-GNOME-Autostart-enabled", "true").strip().lower() != "false")
-
-
-def localized(d, key):
-    lang = (os.environ.get("LC_ALL") or os.environ.get("LC_MESSAGES") or os.environ.get("LANG") or "").split(".")[0]
-    cands = []
-    if lang and lang not in ("C", "POSIX"):
-        cands.append(f"{key}[{lang}]")
-        if "_" in lang:
-            cands.append(f"{key}[{lang.split('_')[0]}]")
-    cands.append(key)
-    for c in cands:
-        if d.get(c):
-            return d[c]
-    return ""
-
-
-def _desktops():
-    return [x for x in (os.environ.get("XDG_CURRENT_DESKTOP") or "").split(":") if x]
-
-
-def entry_note(d):
-    """OnlyShowIn·NotShowIn·TryExec 를 사람이 읽을 한 줄로"""
-    cur = set(_desktops())
-    notes = []
-    only = [x for x in d.get("OnlyShowIn", "").split(";") if x]
-    notshow = [x for x in d.get("NotShowIn", "").split(";") if x]
-    if only:
-        n = f"{', '.join(only)} 에서만"
-        if cur and not cur & set(only):
-            n += " (여기서는 실행 안 됨)"
-        notes.append(n)
-    if notshow:
-        n = f"{', '.join(notshow)} 제외"
-        if cur & set(notshow):
-            n += " (여기서는 실행 안 됨)"
-        notes.append(n)
-    te = d.get("TryExec")
-    if te and not (os.path.isabs(te) and os.access(te, os.X_OK)) and not GLib.find_program_in_path(te):
-        notes.append("프로그램이 설치되어 있지 않음")
-    return " · ".join(notes)
+def entry_note(it):
+    """참고 한 줄 — 로그인하고 얼마 뒤에 시작하는지 (X-GNOME-Autostart-Delay)"""
+    d = autostart.delay_of(it)
+    return f"로그인 {d:.0f}초 뒤" if d >= 1 else ""
 
 
 def scan():
-    """→ 항목 목록. 같은 파일 이름은 사용자 폴더 → 앞쪽 시스템 폴더 순으로 이긴다"""
-    user, sysdirs = autostart_dirs()
-    found = {}
-    for d in reversed(sysdirs):                  # 앞 폴더가 이기도록 거꾸로 채운다
-        try:
-            for f in os.listdir(d):
-                if f.endswith(".desktop"):
-                    found.setdefault(f, {})["sys"] = os.path.join(d, f)
-        except OSError:
-            pass
-    try:
-        for f in os.listdir(user):
-            if f.endswith(".desktop"):
-                found.setdefault(f, {})["user"] = os.path.join(user, f)
-    except OSError:
-        pass
+    """목록에 보일 항목 — 세션이 직접 띄우는 것·시스템 구성 요소(NoDisplay)는 뺀다"""
     items = []
-    for f, where in sorted(found.items()):
-        up, sp = where.get("user"), where.get("sys")
-        sd = parse_entry(sp) if sp else None
-        ud = parse_entry(up) if up else None
-        eff = ud if ud is not None else sd
-        if eff is None:
+    for it in autostart.scan():
+        # 켜고 꺼도 달라지지 않는 것은 보이지 않는다 — 이 데스크톱에서는 실행하지 않는 항목(OnlyShowIn=GNOME 등),
+        #   프로그램이 없는 항목(TryExec)
+        if it["managed"] or it["nodisplay"] or not it["here"] or not it["installed"]:
             continue
-        # 덮어쓰기가 Hidden=true 한 줄뿐이어도 이름·아이콘은 시스템 항목에서
-        show = dict(sd or {})
-        show.update({k: v for k, v in (ud or {}).items()})
-        items.append({
-            "file": f, "user": up, "sys": sp, "data": eff,
-            "name": localized(show, "Name") or f[:-8],
-            "comment": localized(show, "Comment"),
-            "icon": show.get("Icon", ""), "exec": show.get("Exec", ""),
-            "enabled": entry_enabled(eff),
-            "sys_enabled": entry_enabled(sd) if sd is not None else None,
-            "ours": _true((ud or {}).get(OVERRIDE_KEY)),
-            "note": entry_note(show),
-        })
+        it["ours"] = autostart._true((autostart.parse_entry(it["user"]) or {}).get(OVERRIDE_KEY)) if it["user"] else False
+        it["note"] = entry_note(it)
+        items.append(it)
     return items
 
 
