@@ -156,6 +156,10 @@ if [ "$1" = "configure" ]; then
     systemctl enable sekai-bootmode.path >/dev/null 2>&1 || true
     [ -d /run/systemd/system ] && systemctl start sekai-bootmode.path >/dev/null 2>&1 || true
     systemctl set-default graphical.target >/dev/null 2>&1 || true
+    # cups-browsed 는 cups 의 권장 패키지라 업데이트 때 같이 깔린다 — 실행 조건 조각(etc/systemd/system/
+    #   cups-browsed.service.d)으로 막아 두고, 이미 떠 있으면 멈춘다. (Conflicts 로 막았더니 apt 가
+    #   cups-browsed 대신 sekai-desktop 을 지우려 했다)
+    systemctl stop cups-browsed.service >/dev/null 2>&1 || true
     # 관리자(sudo)는 시스템 기록(이벤트 뷰어)·프린터 관리(CUPS)도 — 새 계정은 sekai-users 가 넣는다,
     #   이미 있는 관리자는 여기서 (다음 로그인부터)
     for g in systemd-journal lpadmin; do
@@ -296,7 +300,7 @@ Recommends: htop, tmux, tree, ncdu, vim, nano, git, curl, wget,
  bash-completion, less, man-db,
  chromium, thunar, thunar-volman, mousepad, ristretto, evince, xarchiver, galculator,
  pavucontrol, cups-pk-helper
-Conflicts: fnott, cups-browsed
+Conflicts: fnott
 Description: SekaiOS desktop (metapackage)
  Pulls in everything that makes up the SekaiOS desktop: the Hyprland
  compositor with title-bar and overview plugins, the sekai-shell panel,
