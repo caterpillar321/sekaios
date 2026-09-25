@@ -253,11 +253,10 @@ Depends: sekai-shell (= ${FULL}),
  xinit, x11-xserver-utils, xfwm4, xfconf, sxhkd, xcape, xsecurelock, xss-lock, maim, slop, xclip,
  xdotool, xterm, gir1.2-wnck-3.0,
  wl-clipboard, cliphist, lxpolkit, libnotify-bin, wayland-utils,
- pipewire, pipewire-audio, pipewire-pulse, wireplumber, pavucontrol,
+ pipewire, pipewire-audio, pipewire-pulse, wireplumber,
  network-manager, network-manager-gnome, systemd-resolved,
- thunar, thunar-volman, tumbler, gvfs, gvfs-backends,
- mousepad, ristretto, evince, xarchiver, galculator, xfce4-taskmanager,
- chromium, qt6-wayland, xdg-user-dirs, xdg-user-dirs-gtk,
+ tumbler, gvfs, gvfs-backends,
+ qt6-wayland, xdg-user-dirs, xdg-user-dirs-gtk,
  fonts-pretendard, fonts-dejavu, fonts-jetbrains-mono, fonts-nanum,
  fonts-noto-color-emoji,
  papirus-icon-theme, adwaita-icon-theme,
@@ -267,7 +266,9 @@ Depends: sekai-shell (= ${FULL}),
  dbus-user-session,
  libgl1-mesa-dri, libegl-mesa0, mesa-utils
 Recommends: htop, tmux, tree, ncdu, vim, nano, git, curl, wget,
- bash-completion, less, man-db
+ bash-completion, less, man-db,
+ chromium, thunar, thunar-volman, mousepad, ristretto, evince, xarchiver, galculator,
+ xfce4-taskmanager, pavucontrol
 Conflicts: fnott
 Description: SekaiOS desktop (metapackage)
  Pulls in everything that makes up the SekaiOS desktop: the Hyprland
