@@ -83,12 +83,12 @@ def apply_system(mode):
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
     except Exception:
         pass
-    vals = {"gtk-application-prefer-dark-theme": g["prefer_dark"], "gtk-theme-name": g["gtk"],
-            "gtk-icon-theme-name": icons}
+    # 다크는 테마 이름(Adwaita-dark)으로만 — "다크 선호"(prefer-dark)는 앱이 뜰 때 한 번만 읽는다.
+    #   그걸 1 로 적어 두면 열려 있던 GTK3·GTK4 앱은 라이트로 바꿔도 "Adwaita + 다크 선호" = 다크로 남았다
+    #   (테마 이름은 설정 포털로 바로 바뀐다). libadwaita·Chromium 은 color-scheme 을 본다.
+    vals = {"gtk-application-prefer-dark-theme": 0, "gtk-theme-name": g["gtk"], "gtk-icon-theme-name": icons}
     for d in ("gtk-3.0", "gtk-4.0"):
         try:
-            _write_ini(os.path.join(home, ".config", d, "settings.ini"),
-                       vals if d == "gtk-3.0" else
-                       {"gtk-application-prefer-dark-theme": g["prefer_dark"], "gtk-icon-theme-name": icons})
+            _write_ini(os.path.join(home, ".config", d, "settings.ini"), vals)
         except OSError:
             pass
