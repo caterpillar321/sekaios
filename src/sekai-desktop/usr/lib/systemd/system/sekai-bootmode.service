@@ -6,3 +6,5 @@ Description=SekaiOS: boot screen and console in the same monitor mode as the des
 Type=oneshot
 ExecStart=/usr/libexec/sekai/sekai-bootmode
 Nice=10
+# update-grub 은 os-prober 가 모든 디스크를 훑어 수십 초 걸릴 수 있다 — 그래도 영영 붙잡히진 않게
+TimeoutStartSec=180

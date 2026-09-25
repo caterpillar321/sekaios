@@ -7,8 +7,9 @@ LCD 는 "신호 없음"으로 보고 백라이트까지 끄기도 한다. 부팅
 커널 콘솔(과 그 위의 부팅 화면)을 바탕화면과 같은 모드로 시작하면 뒤의 전환에서 모드가 그대로다.
 
 사용자 세션(sekai-panel)이 지금 쓰는 모드를 /var/lib/sekai/displays/<사용자>.modes 에 적으면
-sekai-bootmode.path 가 이것을 부른다. 가장 최근에 적은 사용자의 것을 쓴다.
-그 폴더는 누구나 쓸 수 있으므로 ① 파일 주인이 이름의 사용자인지 ② 줄 형식을 엄격히 확인한다.
+sekai-bootmode.path 가 이것을 부른다. 지금 화면 앞(seat0)의 활성 세션 사용자의 것만 쓴다
+(예전엔 "가장 최근에 쓴 사용자" — 수정 시각은 누구나 touch 로 바꿀 수 있어 다른 사용자가 값을 정할 수 있었다).
+그 폴더는 누구나 쓸 수 있으므로 ① 파일 주인이 그 사용자인지 ② 줄 형식을 엄격히 확인한다.
 값이 바뀌었을 때만 /var/lib/sekai/boot-video 를 고치고 update-grub (09_sekaios 가 읽는다).
 """
 import os
@@ -46,30 +47,41 @@ def read_owned(path, uid):
         os.close(fd)
 
 
-def newest():
-    """(사용자, 내용) — 주인이 맞는 .modes 중 가장 최근 것"""
-    best = None
+def loginctl(*args):
     try:
-        names = os.listdir(DIR)
-    except OSError:
+        r = subprocess.run(["loginctl", *args], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return r.stdout if r.returncode == 0 else ""
+
+
+def active_user():
+    """지금 화면 앞(seat0)의 활성 세션 사용자 — 없거나 로그인 화면·원격 세션이면 None.
+    모니터 모드는 그 화면을 쓰는 사람의 것이 맞다. 로그인 화면(_greetd)은 class=greeter 라 빠진다."""
+    sid = loginctl("show-seat", "seat0", "-p", "ActiveSession", "--value").strip()
+    if not sid or not re.fullmatch(r"[A-Za-z0-9_.-]{1,32}", sid):
         return None
-    for f in names:
-        if not f.endswith(".modes"):
-            continue
-        user = f[:-len(".modes")]
-        if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", user):
-            continue
-        try:
-            uid = pwd.getpwnam(user).pw_uid
-        except KeyError:
-            continue
-        got = read_owned(os.path.join(DIR, f), uid)
-        if got is None:
-            continue
-        text, mtime = got
-        if best is None or mtime > best[0]:
-            best = (mtime, user, text)
-    return best[1:] if best else None
+    props = {}
+    for line in loginctl("show-session", sid, "-p", "Name", "-p", "Class", "-p", "Remote").splitlines():
+        k, _, v = line.partition("=")
+        props[k] = v
+    if props.get("Class") != "user" or props.get("Remote") == "yes":
+        return None
+    name = props.get("Name", "")
+    return name if re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", name) else None
+
+
+def newest():
+    """(사용자, 내용) — 화면 앞 활성 세션 사용자의 .modes (주인이 그 사용자일 때만)"""
+    user = active_user()
+    if not user:
+        return None
+    try:
+        uid = pwd.getpwnam(user).pw_uid
+    except KeyError:
+        return None
+    got = read_owned(os.path.join(DIR, user + ".modes"), uid)
+    return (user, got[0]) if got else None
 
 
 def video_opts(text):

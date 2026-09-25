@@ -16,6 +16,7 @@
 #  ESP 구조 (SekaiOS 가 설치된 디스크의 자기 ESP):
 #    /EFI/sekai/    shimx64.efi grubx64.efi mmx64.efi grub.cfg BOOTX64.CSV
 #    /EFI/debian/   grub.cfg  ← 데비안 서명 GRUB 이 설정을 여기서 찾는다
+#                   (진짜 데비안이 같은 ESP 를 쓰면 그쪽 것이라 건드리지 않는다 — debian_cfg 참고)
 #    /EFI/BOOT/     BOOTX64.EFI(=shim) grubx64.efi mmx64.efi fbx64.efi sekaios.sha256
 #                   (NVRAM 부팅 항목이 지워져도 켜지고, fbx64 가 항목을 되살린다.
 #                    다른 OS 와 같이 쓰는 ESP 면 건드리지 않는다 — fallback 참고)
@@ -38,11 +39,31 @@ grub_install() {
     grub-install --target=x86_64-efi --efi-directory="$ESP" --bootloader-id="$ID" \
         --uefi-secure-boot --no-nvram >/dev/null 2>&1 || die "grub-install 실패"
     [ -f "$EFIDIR/shimx64.efi" ] || die "shim 이 설치되지 않았습니다 (shim-signed 패키지)"
-    # 데비안 서명 GRUB 은 설정을 /EFI/debian/grub.cfg 에서 찾는다
-    mkdir -p "$ESP/EFI/debian"
-    cp -f "$EFIDIR/grub.cfg" "$ESP/EFI/debian/grub.cfg"
+    debian_cfg
     # fbx64 가 NVRAM 항목을 되살릴 때 쓰는 목록 (UTF-16LE)
     printf 'shimx64.efi,%s,,%s\n' "$LABEL" "SekaiOS 부팅" | iconv -f UTF-8 -t UTF-16LE > "$EFIDIR/BOOTX64.CSV"
+}
+
+debian_cfg() {
+    # 데비안 서명 GRUB(grubx64.efi)은 설정 위치가 /EFI/debian 으로 박혀 있다 (서명된 이미지라 바꿀 수 없다).
+    #   그 폴더가 없으면 자기가 켜진 곳($cmdpath = EFI/sekai)의 grub.cfg 를 읽는다.
+    #   진짜 데비안이 같은 ESP 를 쓰면 이 파일은 그쪽 것이다 — 덮으면 데비안 부팅이 망가진다.
+    #   그래서 폴백 경로와 같은 원칙으로, 우리가 쓴 것만 갱신한다:
+    #     ① 파일이 없다  ② 지난번에 우리가 쓴 그대로다 (EFI/sekai/debian-grub.sha256)
+    #     ③ 우리 grub.cfg 와 내용이 같다  ④ EFI/debian 에 grub.cfg 말고 아무것도 없다 (표시가 없던 예전 설치본)
+    #   그 밖엔 건드리지 않는다. 이때 SekaiOS 를 켜면 데비안 쪽 메뉴가 뜬다 — 데비안에서 os-prober 를
+    #   켜면(GRUB_DISABLE_OS_PROBER=false) 그 메뉴에 SekaiOS 도 나온다.
+    local D="$ESP/EFI/debian" CFG="$ESP/EFI/debian/grub.cfg" MARK="$EFIDIR/debian-grub.sha256"
+    if [ -f "$CFG" ] \
+       && [ "$(sha256sum "$CFG" | cut -d" " -f1)" != "$(cat "$MARK" 2>/dev/null)" ] \
+       && ! cmp -s "$CFG" "$EFIDIR/grub.cfg" \
+       && [ -n "$(find "$D" -mindepth 1 ! -iname grub.cfg -print -quit 2>/dev/null)" ]; then
+        say "이 ESP 를 데비안이 같이 써서 EFI/debian/grub.cfg 는 건드리지 않습니다 (SekaiOS 는 데비안 쪽 부팅 메뉴로 켜질 수 있습니다)"
+        return 0
+    fi
+    mkdir -p "$D"
+    cp -f "$EFIDIR/grub.cfg" "$CFG"
+    sha256sum "$CFG" | cut -d" " -f1 > "$MARK"
 }
 
 other_os() {
