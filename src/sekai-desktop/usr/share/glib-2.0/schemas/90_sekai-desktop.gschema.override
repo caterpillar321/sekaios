@@ -3,7 +3,7 @@
 #   사용자가 바꾼 값(dconf)이 있으면 그쪽이 이긴다.
 [org.gnome.desktop.interface]
 color-scheme='prefer-dark'
-gtk-theme='Adwaita-dark'
+gtk-theme='Sekai-Dark'
 icon-theme='Papirus-Dark'
 cursor-size=24
 font-name='Pretendard 10'

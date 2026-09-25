@@ -25,8 +25,10 @@ PALETTES = {
 
 # 모드별 GTK 테마·아이콘 테마 — 작업 표시줄(패널) 아이콘이 Papirus·Papirus-Dark 는 흰색,
 #   Papirus-Light 는 어두운 색이다. 밝은 작업 표시줄엔 Papirus-Light 를 써야 트레이 아이콘이 보인다
+# Sekai-Dark 는 GTK 에 들어 있는 Adwaita 다크를 부르는 우리 테마 (/usr/share/themes/Sekai-Dark) —
+#   "Adwaita-dark" 는 GNOME 패키지(gnome-themes-extra-data)가 있어야 해서, 없는 설치에선 GTK3 앱이 라이트로 떴다
 GTK = {
-    "dark":  {"gtk": "Adwaita-dark", "icons": "Papirus-Dark", "scheme": "prefer-dark", "prefer_dark": 1},
+    "dark":  {"gtk": "Sekai-Dark",   "icons": "Papirus-Dark", "scheme": "prefer-dark", "prefer_dark": 1},
     "light": {"gtk": "Adwaita",      "icons": "Papirus-Light", "scheme": "prefer-light", "prefer_dark": 0},
 }
 
@@ -83,7 +85,7 @@ def apply_system(mode):
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
     except Exception:
         pass
-    # 다크는 테마 이름(Adwaita-dark)으로만 — "다크 선호"(prefer-dark)는 앱이 뜰 때 한 번만 읽는다.
+    # 다크는 테마 이름(Sekai-Dark)으로만 — "다크 선호"(prefer-dark)는 앱이 뜰 때 한 번만 읽는다.
     #   그걸 1 로 적어 두면 열려 있던 GTK3·GTK4 앱은 라이트로 바꿔도 "Adwaita + 다크 선호" = 다크로 남았다
     #   (테마 이름은 설정 포털로 바로 바뀐다). libadwaita·Chromium 은 color-scheme 을 본다.
     vals = {"gtk-application-prefer-dark-theme": 0, "gtk-theme-name": g["gtk"], "gtk-icon-theme-name": icons}
