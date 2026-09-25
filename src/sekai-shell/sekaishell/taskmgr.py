@@ -88,7 +88,12 @@ button.tm-end:disabled { opacity: 0.55; }
 /* 성능 */
 .perf-side { border-right: 1px solid @line; }
 .perf-list, .perf-list row { background: transparent; }
-.perf-list row { padding: 8px 10px; margin: 2px 8px; border-radius: 8px; }
+.perf-list row {
+    padding: 8px 10px; margin: 2px 8px; border-radius: 8px;
+    /* 선택 막대의 크기·자리를 선택 안 된 줄에도 — 없으면 선택이 풀릴 때 전환 효과가 막대 그림을 줄 전체 크기로
+       키우며 사라져, 방금 고른 줄이 강조색으로 번쩍였다 */
+    background-size: 3px 18px; background-position: 0% 50%; background-repeat: no-repeat;
+}
 .perf-list row:hover { background: @hover; }
 .perf-list row:selected {
     background-color: @card;

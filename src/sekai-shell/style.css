@@ -84,6 +84,10 @@ window.toast-stack {
     min-width: 150px;
     color: @text2;
     background-image: none;
+    /* 상태 막대의 크기·자리 기본값 — 없으면 막대가 없어질 때 전환 효과로 버튼 전체가 번쩍인다 */
+    background-size: 16px 3px;
+    background-position: 50% 94%;
+    background-repeat: no-repeat;
 }
 .task-btn label { color: @text2; }
 .task-btn:hover { background-color: @hover; }
