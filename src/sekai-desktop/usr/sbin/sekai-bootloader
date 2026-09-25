@@ -101,7 +101,8 @@ case "$cmd" in
         [ -n "$disk" ] && [ -n "$part" ] || die "사용법: install --disk /dev/sdX --part N"
         mountpoint -q "$ESP" || die "$ESP 가 마운트돼 있지 않습니다"
         grub_install; fallback
-        update-grub >/dev/null 2>&1 || die "update-grub 실패"
+        # 출력은 버리지 않는다 — 설치 기록에 남아야 os-prober 가 무엇을 찾았는지 알 수 있다
+        update-grub 2>&1 || die "update-grub 실패"
         nvram "$disk" "$part"
         ;;
     update)
