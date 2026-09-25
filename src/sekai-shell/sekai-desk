@@ -8,14 +8,20 @@
 #
 #  아이콘: 내 PC · 홈 폴더 · 휴지통 + 바탕화면 폴더(xdg-user-dir DESKTOP)의 내용
 #  조작:   클릭 선택 · 더블클릭 열기 · 끌어서 여러 개 선택 · 오른쪽 클릭 메뉴
-#          Delete 휴지통 · F2 이름 바꾸기 · Enter 열기 · Ctrl+A 전체 선택
-#          다른 곳에서 파일을 끌어다 놓으면 바탕화면으로 옮긴다
+#          Delete 휴지통 · F2 이름 바꾸기 · Enter 열기 · Ctrl+A 전체 선택 · 화살표 옆 아이콘으로
+#          아이콘을 끌어 바탕화면 안에 놓으면 그 자리로 (보기 › 자동 정렬 · 격자에 맞춤, 정렬 기준)
+#          다른 곳에서 파일을 끌어다 놓으면 바탕화면으로 옮기거나 복사한다
+#  실행기: .desktop 은 실행 권한 + 신뢰 표시가 있을 때만 바로 실행한다 (없으면 묻는다)
+#  저장:   ~/.config/sekai/desktop-icons.json — 아이콘 자리와 보기 설정
 #  신호:   SIGHUP = 설정 다시 읽기 (배경화면·강조색)
 # ═══════════════════════════════════════════════════════════════
+import errno
+import hashlib
 import json
 import math
 import os
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -37,12 +43,24 @@ from sekaishell.popup import PanelPopup, make_translucent  # noqa: E402,F401
 from sekaishell.monitors import primary_gdk  # noqa: E402
 
 CFG = os.path.expanduser("~/.config/sekai/settings.json")
+ICONS_CFG = os.path.expanduser("~/.config/sekai/desktop-icons.json")
 FALLBACK_WALL = "/usr/share/backgrounds/sekai/hatsune.jpg"
 DEBUG = os.environ.get("SEKAI_DEBUG") == "1"
 
 ICON = 48                 # 아이콘 크기
 CELL_W, CELL_H = 96, 100  # 한 칸
 MARGIN = 14
+
+# 바탕화면 안에서 아이콘 자리를 옮길 때만 쓰는 끌기 형식 (다른 앱은 모르니 받지 않는다)
+ICONS_TARGET = "application/x-sekai-desk-icons"
+SORTS = (("name", "이름"), ("size", "크기"), ("type", "항목 유형"), ("date", "수정한 날짜"))
+SPECIAL_ORDER = ("::computer", "::home", "::install", "::trash")
+# 믿을 수 없는 실행기는 파일 안의 Icon= 대신 이것으로
+UNTRUSTED_ICON = Gio.ThemedIcon.new_from_names(["application-x-desktop", "text-x-script",
+                                                "application-x-executable"])
+ARROWS = {Gdk.KEY_Left: (-1, 0), Gdk.KEY_Right: (1, 0), Gdk.KEY_Up: (0, -1), Gdk.KEY_Down: (0, 1),
+          Gdk.KEY_KP_Left: (-1, 0), Gdk.KEY_KP_Right: (1, 0), Gdk.KEY_KP_Up: (0, -1),
+          Gdk.KEY_KP_Down: (0, 1)}
 
 
 def dbg(*a):
@@ -88,15 +106,139 @@ def run(cmd, cwd=None):
         dbg("실행 실패", cmd, e)
 
 
+def notify(summary, body=""):
+    """실패를 사용자에게 알린다 (알림 센터에도 남는다).
+    본문이 '-' 로 시작하면 notify-send 가 옵션으로 읽으므로 본문은 따옴표로 시작하게 만든다."""
+    run(["notify-send", "-a", "바탕 화면", "-i", "dialog-error", summary, body])
+
+
 def file_manager():
     return settings().get("apps", {}).get("files") or "thunar"
+
+
+# ── 실행기(.desktop) 신뢰 ─────────────────────────────────────
+def launcher_trusted(path):
+    """실행기를 믿어도 되나 — Thunar·GNOME 과 같은 기준.
+    실행 권한이 있고 내 파일이며, 신뢰 표시가 있어야 한다: metadata::trusted = true
+    (작업 표시줄의 바로 가기 만들기가 붙인다) 또는 Thunar 의 metadata::xfce-exe-checksum 이 지금 내용과 맞음.
+    브라우저로 받은 '청구서.pdf.desktop' 은 어느 것도 없다."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or not os.access(path, os.X_OK):
+        return False
+    try:
+        info = Gio.File.new_for_path(path).query_info(
+            "metadata::trusted,metadata::xfce-exe-checksum", Gio.FileQueryInfoFlags.NONE, None)
+    except GLib.Error:
+        return False
+    if info.get_attribute_as_string("metadata::trusted") == "true":
+        return True
+    want = info.get_attribute_as_string("metadata::xfce-exe-checksum")
+    if not want or st.st_size > 1 << 20:
+        return False
+    try:
+        # Thunar 는 내용의 SHA-256 을 적어 둔다 — 내용이 바뀌면 신뢰도 풀린다
+        with open(path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest() == want
+    except OSError:
+        return False
+
+
+def mark_trusted(path):
+    """'신뢰하고 실행' — 실행 권한과 신뢰 표시를 붙인다
+    (작업 표시줄의 바로 가기 만들기 sekai-panel make_desktop_shortcut 과 같은 chmod + metadata::trusted)"""
+    try:
+        mode = os.stat(path).st_mode
+        # 읽을 수 있는 쪽에만 실행 권한 — 755 로 못 박으면 600 이던 파일을 남에게 열어 버린다
+        os.chmod(path, stat.S_IMODE(mode) | stat.S_IXUSR | ((mode & 0o044) >> 2))
+    except OSError as e:
+        dbg("실행 권한을 못 붙임", path, e)
+    try:
+        Gio.File.new_for_path(path).set_attribute_string(
+            "metadata::trusted", "true", Gio.FileQueryInfoFlags.NONE, None)
+    except GLib.Error as e:
+        dbg("신뢰 표시를 못 붙임", path, e)
+
+
+def launcher_command(path):
+    """확인 창에 보일 명령 (Exec=) — 읽기만 한다"""
+    try:
+        if os.path.getsize(path) > 1 << 20:
+            return ""
+        kf = GLib.KeyFile()
+        kf.load_from_file(path, GLib.KeyFileFlags.NONE)
+        return kf.get_string("Desktop Entry", "Exec")
+    except (OSError, GLib.Error):
+        return ""
+
+
+# ── 아이콘 배치 (칸 계산) ─────────────────────────────────────
+def grid_size(W, H, panel_h):
+    """화면에 들어가는 칸 수 (열, 행) — 아래 작업 표시줄 자리는 뺀다"""
+    cols = max(1, int((W - 2 * MARGIN) // CELL_W))
+    rows = max(1, int((H - panel_h - 2 * MARGIN) // CELL_H))
+    return cols, rows
+
+
+def cell_origin(c, r):
+    return MARGIN + c * CELL_W, MARGIN + r * CELL_H
+
+
+def cell_of(x, y):
+    """아이콘 왼쪽 위 좌표에 가장 가까운 칸 (화면 밖일 수도)"""
+    return round((x - MARGIN) / CELL_W), round((y - MARGIN) / CELL_H)
+
+
+def clamp_cell(cell, cols, rows):
+    return min(max(cell[0], 0), cols - 1), min(max(cell[1], 0), rows - 1)
+
+
+def first_free(taken, rows):
+    """위에서 아래로, 왼쪽 열부터 첫 빈 칸 — 화면이 다 차면 오른쪽 바깥 열로 넘친다 (자동 정렬과 같게)"""
+    c = 0
+    while True:
+        for r in range(rows):
+            if (c, r) not in taken:
+                return c, r
+        c += 1
+
+
+def nearest_free(want, taken, cols, rows):
+    """want 에서 가장 가까운 화면 안의 빈 칸. 화면이 다 찼으면 first_free"""
+    if want not in taken and 0 <= want[0] < cols and 0 <= want[1] < rows:
+        return want
+    wc, wr = want
+    best = None
+    for c in range(cols):
+        for r in range(rows):
+            if (c, r) in taken:
+                continue
+            d = ((c - wc) * CELL_W) ** 2 + ((r - wr) * CELL_H) ** 2
+            if best is None or d < best[0]:
+                best = (d, (c, r))
+    return best[1] if best else first_free(taken, rows)
+
+
+def free_name(name, is_dir, exists):
+    """겹치지 않는 이름 — 윈도우처럼 '이름 (2).확장자'. exists(이름) 가 참이면 이미 있는 이름"""
+    stem, ext = name, ""
+    dot = name.rfind(".")
+    if not is_dir and dot > 0:
+        stem, ext = name[:dot], name[dot:]
+    cand, n = name, 1
+    while exists(cand):
+        n += 1
+        cand = f"{stem} ({n}){ext}"
+    return cand
 
 
 # ───────────────────────────────────────────────────────────────
 class Item:
     """바탕화면 아이콘 하나."""
     __slots__ = ("key", "name", "uri", "path", "gicon", "special", "is_dir",
-                 "is_desktop_entry", "pixbuf", "x", "y", "app")
+                 "is_desktop_entry", "pixbuf", "x", "y", "app", "size", "mtime", "kind")
 
     def __init__(self, key, name, uri=None, path=None, gicon=None, special=False,
                  is_dir=False):
@@ -107,10 +249,35 @@ class Item:
         self.gicon = gicon
         self.special = special
         self.is_dir = is_dir
-        self.is_desktop_entry = bool(path and path.endswith(".desktop"))
+        self.is_desktop_entry = bool(path and path.endswith(".desktop") and not is_dir)
         self.pixbuf = None
         self.x = self.y = 0
-        self.app = None
+        self.app = None                    # 믿을 수 있는 실행기일 때만
+        self.size = 0
+        self.mtime = 0
+        self.kind = ""                     # 항목 유형 (정렬용 설명)
+
+
+def pos_key(it):
+    """저장 파일의 키 — 파일 이름 (특별 항목은 key)"""
+    return it.key if it.special else os.path.basename(it.path)
+
+
+def order_key(it, by):
+    """정렬 순서 — 특별 항목(내 PC·홈·설치·휴지통) → 폴더 → 파일, 그 안에서 기준 (윈도우 탐색기처럼).
+    크기·날짜는 큰 것·새것부터, 폴더는 크기가 없으니 이름순."""
+    if it.special:
+        return (0, SPECIAL_ORDER.index(it.key) if it.key in SPECIAL_ORDER else 99, "")
+    name = GLib.utf8_collate_key_for_filename(it.name, -1)   # '파일 2' 가 '파일 10' 앞에
+    if by == "size":
+        first = 0 if it.is_dir else -it.size
+    elif by == "type":
+        first = GLib.utf8_collate_key(it.kind, -1)
+    elif by == "date":
+        first = -it.mtime
+    else:
+        first = 0
+    return (1 if it.is_dir else 2, first, name)
 
 
 def load_icon(gicon, names=None, size=ICON):
@@ -160,46 +327,140 @@ class DeskMenu(PanelPopup):
     """오른쪽 클릭 메뉴 — 누른 자리에 뜨는 레이어 창.
 
     GtkMenu 는 레이어셸 표면에서 z-순서가 꼬이므로 우리 팝업을 쓴다.
+    항목: None 은 구분선, (이름, 아이콘, 동작[, 표시]).
+      동작이 목록이면 하위 메뉴 — 줄에 마우스를 올리면 옆으로 펼친다 (하위 메뉴 창 하나를 다시 쓴다).
+      표시는 체크 칸의 글자 ("✓"·"●", 꺼져 있으면 "").
     """
 
-    def __init__(self):
+    def __init__(self, parent=None):
         super().__init__(dim=False)
         self.get_style_context().add_class("tray-menu")
         GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.BOTTOM, False)
         GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.RIGHT, False)
         GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.TOP, True)
         GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.LEFT, True)
+        if parent is not None:
+            # 하위 메뉴는 키보드를 가져가지 않는다 — Esc 는 부모가 받아 둘 다 닫는다
+            GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.NONE)
         self.list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        self.list.set_size_request(220, -1)
+        self.list.set_size_request(220 if parent is None else 180, -1)
         self.root.pack_start(self.list, True, True, 0)
+        self.parent_menu = parent
+        self.sub = DeskMenu(self) if parent is None else None
+        self._sub_row = None               # 하위 메뉴를 펼친 줄
+        self._switch = 0                   # 다른 줄로 옮겨 갈 때 잠깐 기다리는 타이머
+        self._at = (0, 0)                  # 이 창의 왼쪽 위 (여백)
+        self._screen = (1920, 1080)
 
-    def show_at(self, x, y, entries, screen_w, screen_h):
+    def _top(self):
+        return self.parent_menu or self
+
+    def _fill(self, entries):
         for c in self.list.get_children():
             self.list.remove(c)
+        marks = any(e is not None and len(e) > 3 for e in entries)
         for e in entries:
             if e is None:
                 sep = Gtk.Separator()
                 sep.get_style_context().add_class("menu-sep")
                 self.list.pack_start(sep, False, False, 0)
                 continue
-            label, icon, cb = e
+            label, icon, act = e[:3]
             b = Gtk.Button()
             b.get_style_context().add_class("menu-item")
             h = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            if marks:                                  # 체크 칸 — 꺼진 줄도 자리를 둬서 글자가 나란하게
+                t = Gtk.Label(label=(e[3] if len(e) > 3 else "") or "")
+                t.get_style_context().add_class("menu-check")
+                t.set_size_request(14, -1)
+                h.pack_start(t, False, False, 0)
             if icon:
                 img = Gtk.Image.new_from_icon_name(icon, Gtk.IconSize.MENU)
                 img.set_pixel_size(16)
                 h.pack_start(img, False, False, 0)
             h.pack_start(Gtk.Label(label=label, xalign=0), True, True, 0)
+            if isinstance(act, list):
+                h.pack_end(Gtk.Label(label="▸"), False, False, 0)
+                b.connect("clicked", lambda _b, s=act: self._open_sub(_b, s))
+                b.connect("enter-notify-event", lambda _b, _e, s=act: self._hover(_b, s))
+            else:
+                b.connect("clicked", lambda _b, f=act: (self._top().close(), f()))
+                b.connect("enter-notify-event", lambda _b, _e: self._hover(_b, None))
             b.add(h)
-            b.connect("clicked", lambda _b, f=cb: (self.close(), f()))
             self.list.pack_start(b, False, False, 0)
         self.list.show_all()
+
+    def show_at(self, x, y, entries, screen_w, screen_h):
+        self.close()
+        self._fill(entries)
         # 화면 밖으로 나가지 않게 대략 맞춘다
         w, h = 240, 20 + 36 * len([e for e in entries if e]) + 10 * entries.count(None)
-        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.LEFT, int(min(x, screen_w - w - 8)))
-        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.TOP, int(min(y, screen_h - h - 60)))
+        self._at = (int(min(x, screen_w - w - 8)), int(min(y, screen_h - h - 60)))
+        self._screen = (screen_w, screen_h)
+        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.LEFT, self._at[0])
+        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.TOP, self._at[1])
         self.open()
+
+    # ── 하위 메뉴 (옆으로 펼치기) ──
+    def _cancel_switch(self):
+        if self._switch:
+            GLib.source_remove(self._switch)
+            self._switch = 0
+
+    def _hover(self, row, entries):
+        """마우스를 올린 줄 — 하위 메뉴 줄이면 펼친다. 펼친 채 다른 줄로 가면 잠깐 뒤에 바꾼다
+        (하위 메뉴로 비스듬히 가는 길에 아래 줄을 스쳐도 닫히지 않게)"""
+        if self.sub is None:                           # 하위 메뉴 안 — 부모가 닫으려던 것을 멈춘다
+            self.parent_menu._cancel_switch()
+            return False
+        self._cancel_switch()
+        if self.sub.get_visible():
+            if row is not self._sub_row:
+                self._switch = GLib.timeout_add(250, self._switch_to, row, entries)
+        elif entries is not None:
+            self._open_sub(row, entries)
+        return False
+
+    def _switch_to(self, row, entries):
+        self._switch = 0
+        if entries is not None:
+            self._open_sub(row, entries)
+        else:
+            self.sub.close()
+            self._sub_row = None
+        return False
+
+    def _open_sub(self, row, entries):
+        self._cancel_switch()
+        sub = self.sub
+        if sub.get_visible() and row is self._sub_row:   # 이미 펼친 줄을 누름 — 깜빡이지 않게 그대로
+            return
+        sub.close()
+        sub._fill(entries)
+        sub.root.show_all()                            # 처음엔 숨어 있어 크기가 0 으로 잰다
+        nat = sub.get_preferred_size()[1]
+        W, H = self._screen
+        at_row = row.translate_coordinates(self, 0, 0) or (0, 0)
+        at_list = self.list.translate_coordinates(self, 0, 0) or (0, 0)
+        # 부모 메뉴 오른쪽에, 첫 줄이 마우스를 올린 줄과 나란하게. 오른쪽에 자리가 없으면 왼쪽에
+        x = self._at[0] + self.get_allocated_width() - 4
+        if x + nat.width > W - 4:
+            x = self._at[0] - nat.width + 4
+        y = self._at[1] + at_row[1] - at_list[1]
+        x, y = max(4, int(x)), max(4, int(min(y, H - nat.height - 60)))
+        sub._at, sub._screen = (x, y), self._screen
+        GtkLayerShell.set_margin(sub, GtkLayerShell.Edge.LEFT, x)
+        GtkLayerShell.set_margin(sub, GtkLayerShell.Edge.TOP, y)
+        # 바깥 클릭은 부모의 캐처가 받는다 (닫을 때 함께 닫는다) — 하위 메뉴는 캐처를 띄우지 않는다
+        sub.show_all()
+        self._sub_row = row
+
+    def close(self):
+        self._cancel_switch()
+        if self.sub is not None:
+            self.sub.close()
+            self._sub_row = None
+        super().close()
 
 
 class RenamePopup(PanelPopup):
@@ -250,6 +511,66 @@ class RenamePopup(PanelPopup):
         self.close()
 
 
+class TrustPopup(PanelPopup):
+    """믿을 수 없는 실행기(.desktop)를 열 때 묻는 창 — Thunar·GNOME 처럼.
+    받은 파일이 문서처럼 보이다가 클릭 한 번에 명령을 실행하지 못하게."""
+
+    def __init__(self):
+        super().__init__(dim=True)
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.BOTTOM, False)
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.RIGHT, False)
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.TOP, True)
+        GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.LEFT, True)
+        GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.EXCLUSIVE)
+        self.root.set_size_request(400, -1)
+        t = Gtk.Label(label="신뢰할 수 없는 실행기입니다", xalign=0)
+        t.get_style_context().add_class("pop-title")
+        self.root.pack_start(t, False, False, 0)
+        self.body = Gtk.Label(xalign=0)
+        self.body.set_line_wrap(True)
+        self.body.set_max_width_chars(52)
+        self.root.pack_start(self.body, False, False, 0)
+        self.cmd = Gtk.Label(xalign=0)
+        self.cmd.set_ellipsize(Pango.EllipsizeMode.END)
+        self.cmd.set_max_width_chars(52)
+        self.cmd.set_no_show_all(True)                 # 여러 개일 땐 숨긴다 (open 의 show_all 이 되살리지 않게)
+        self.cmd.get_style_context().add_class("pop-subtitle")
+        self.root.pack_start(self.cmd, False, False, 0)
+        btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.no = Gtk.Button(label="취소")
+        self.yes = Gtk.Button(label="신뢰하고 실행")
+        for b in (self.no, self.yes):
+            b.get_style_context().add_class("pop-btn")
+            btns.pack_end(b, False, False, 0)
+        self.no.connect("clicked", lambda *_: self.close())
+        self.yes.connect("clicked", lambda *_: self._yes())
+        self.root.pack_start(btns, False, False, 0)
+        self.cb = None
+
+    def ask(self, paths, cmd, cb, screen_w, screen_h):
+        self.cb = cb
+        names = [os.path.basename(p) for p in paths]
+        warn = "믿을 수 있는 곳에서 받은 것이 아니면 실행하지 마세요."
+        if len(names) == 1:
+            self.body.set_text(f"‘{names[0]}’\n\n프로그램을 실행하는 실행기 파일인데, 실행 권한이나 "
+                               f"신뢰 표시가 없습니다. {warn}")
+        else:
+            shown = ", ".join(names[:3]) + (f" 외 {len(names) - 3}개" if len(names) > 3 else "")
+            self.body.set_text(f"실행기 {len(names)}개: {shown}\n\n실행 권한이나 신뢰 표시가 없습니다. {warn}")
+        self.cmd.set_text(f"실행할 명령: {cmd}" if cmd else "")
+        self.cmd.set_visible(bool(cmd))
+        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.LEFT, max(8, (screen_w - 440) // 2))
+        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.TOP, max(8, screen_h // 3 - 90))
+        self.open()
+        self.no.grab_focus()                           # Enter 를 그냥 누르면 취소 쪽
+
+    def _yes(self):
+        cb, self.cb = self.cb, None
+        self.close()
+        if cb:
+            cb()
+
+
 # ───────────────────────────────────────────────────────────────
 class Desk(Gtk.Window):
     def __init__(self, monitor, primary):
@@ -258,9 +579,12 @@ class Desk(Gtk.Window):
         self.primary = primary
         self.items = []
         self.selected = set()
+        self.cursor = None                 # 화살표 키의 기준 아이콘 (key)
         self.hover = None
         self.band = None                   # 끌어서 선택하는 사각형 (x0,y0,x1,y1)
         self.press = None
+        self._drag = None                  # 아이콘을 끄는 중: 고른 것·누른 점
+        self._drag_uris = []
         self.wall_src = None               # 원본 픽스버프
         self.wall_path = None
         self.wall_cache = {}               # (w,h,mode) → cairo 표면
@@ -269,6 +593,19 @@ class Desk(Gtk.Window):
         self.accent = (0.224, 0.773, 0.733)
         self.menu = DeskMenu()
         self.rename = RenamePopup()
+        self.trust = TrustPopup()
+
+        # 아이콘 자리·보기 설정 (주 모니터만) — 기본은 지금까지와 같게: 자동 정렬 · 이름순 · 격자
+        self.auto = True                   # 보기 › 아이콘 자동 정렬
+        self.snap = True                   # 보기 › 아이콘을 격자에 맞춤
+        self.sort = "name"                 # 정렬 기준
+        self.pos = {}                      # 파일 이름(특별 항목은 key) → [열, 행] 또는 {"x", "y"}
+        self._fallback = set()             # 저장된 자리가 화면 밖·겹침이라 임시로 딴 칸에 둔 것 (key)
+        self._want = {}                    # 곧 생길 이름 → (x, y, 시각): 그 근처 빈 칸에 (새 폴더·끌어다 놓기)
+        self._grid = (1, 1)                # 지금 화면의 (열, 행)
+        self._save_src = 0
+        self._reserved = set()             # 복사·이동 중이라 곧 생길 이름
+        self._jobs = set()                 # 도는 cp/mv (끝날 때까지 붙잡아 둔다)
 
         make_translucent(self)
         GtkLayerShell.init_for_window(self)
@@ -293,10 +630,19 @@ class Desk(Gtk.Window):
         self.area.connect("leave-notify-event", lambda *_: self._set_hover(None))
         self.area.connect("key-press-event", self.on_key)
         self.area.connect("size-allocate", lambda *_: self.layout())
-        # 다른 창에서 끌어다 놓기
-        self.area.drag_dest_set(Gtk.DestDefaults.ALL, [], Gdk.DragAction.MOVE | Gdk.DragAction.COPY)
-        self.area.drag_dest_add_uri_targets()
-        self.area.connect("drag-data-received", self.on_drop)
+        if self.primary:
+            # 끌어다 놓기 — 다른 앱의 파일(uri) + 바탕화면 안에서 아이콘 자리 옮기기(우리 형식).
+            #   놓기(drop)는 직접 처리한다: GTK 기본 처리는 drag_finish 를 한 번 더 부르고,
+            #   옮기기면 원본 쪽에 지우라고(del) 한다
+            self.area.drag_dest_set(Gtk.DestDefaults.MOTION | Gtk.DestDefaults.HIGHLIGHT,
+                                    [Gtk.TargetEntry.new(ICONS_TARGET, Gtk.TargetFlags.SAME_WIDGET, 0)],
+                                    Gdk.DragAction.MOVE | Gdk.DragAction.COPY)
+            self.area.drag_dest_add_uri_targets()
+            self.area.connect("drag-motion", self.on_drag_motion)
+            self.area.connect("drag-drop", self.on_drag_drop)
+            self.area.connect("drag-data-received", self.on_drop)
+            self.area.connect("drag-data-get", self.on_drag_get)
+            self.area.connect("drag-end", self.on_drag_end)
         self.add(self.area)
 
         # 바탕화면 폴더가 바뀌면 다시 읽는다 — 사진 수백 장을 복사하면 변경 알림이 수천 번 오므로
@@ -311,6 +657,8 @@ class Desk(Gtk.Window):
         self.trash_mon = None
         self.connect("destroy", self._on_destroy)
 
+        if self.primary:
+            self._load_icons()
         self.reload_settings()
         if self.primary:
             self.ddir = desktop_dir()
@@ -326,6 +674,8 @@ class Desk(Gtk.Window):
     def _on_destroy(self, *_):
         """모니터를 뺐다 꽂을 때마다 새로 만들어진다 — 감시·타이머·팝업·큰 그림을 놓는다
         (안 놓으면 감시 콜백이 이 창을 붙잡고 있어 해제되지 않고 계속 쌓였다)"""
+        if self._save_src:                             # 미뤄 둔 자리 저장을 마저 한다
+            self._save()
         for mon in (self.monitor_file, self.trash_mon):
             if mon is not None:
                 mon.cancel()
@@ -334,7 +684,8 @@ class Desk(Gtk.Window):
             if src:
                 GLib.source_remove(src)
         self._pending = self._thumb_src = 0
-        for pop in (self.menu, self.rename):
+        self.menu.close()                              # 하위 메뉴 타이머도 멈춘다
+        for pop in (self.menu.sub, self.menu, self.rename, self.trust):
             pop.catcher.destroy()
             pop.destroy()
         self.wall_src = None
@@ -395,6 +746,54 @@ class Desk(Gtk.Window):
             return False
         return True
 
+    # ── 아이콘 자리 저장 ──────────────────────────────────
+    def _load_icons(self):
+        try:
+            with open(ICONS_CFG, encoding="utf-8") as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            d = {}
+        if not isinstance(d, dict):
+            d = {}
+        self.auto = d.get("auto_arrange", True) is not False
+        self.snap = d.get("align_to_grid", True) is not False
+        self.sort = d.get("sort_by") if d.get("sort_by") in dict(SORTS) else "name"
+        self.pos = {}
+        raw = d.get("positions")
+        for k, v in (raw.items() if isinstance(raw, dict) else ()):
+            if isinstance(v, list) and len(v) == 2 and all(type(n) is int for n in v):
+                self.pos[k] = [v[0], v[1]]
+            elif isinstance(v, dict) and all(type(v.get(n)) is int for n in ("x", "y")):
+                self.pos[k] = {"x": v["x"], "y": v["y"]}
+
+    def _save(self):
+        """자리·보기 설정을 저장 — 임시 파일에 쓰고 바꿔 끼운다 (쓰다 꺼져도 반쪽 파일이 남지 않게)"""
+        if self._save_src:
+            GLib.source_remove(self._save_src)
+            self._save_src = 0
+        # 없어진 파일의 자리는 버린다. 폴더를 못 읽는 때(떼어 낸 디스크 등)는 그대로 둔다
+        if os.path.isdir(self.ddir):
+            self.pos = {k: v for k, v in self.pos.items()
+                        if k.startswith("::") or os.path.lexists(os.path.join(self.ddir, k))}
+        data = {"auto_arrange": self.auto, "align_to_grid": self.snap, "sort_by": self.sort,
+                "positions": self.pos}
+        tmp = f"{ICONS_CFG}.{os.getpid()}.tmp"
+        try:
+            os.makedirs(os.path.dirname(ICONS_CFG), exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=1)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, ICONS_CFG)
+        except OSError as e:
+            dbg("아이콘 자리 저장 실패", e)
+        return False
+
+    def _save_later(self):
+        """새 항목의 자리 — 파일 수백 개를 복사하면 여러 번 오므로 모아서 한 번"""
+        if not self._save_src:
+            self._save_src = GLib.timeout_add(500, self._save)
+
     # ── 아이콘 목록 ───────────────────────────────────────
     def _refresh_once(self):
         self._pending = 0
@@ -449,39 +848,54 @@ class Desk(Gtk.Window):
 
         entries = []
         queue = []
+        recheck = False
         try:
             d = Gio.File.new_for_path(self.ddir)
-            en = d.enumerate_children("standard::*", Gio.FileQueryInfoFlags.NONE, None)
+            en = d.enumerate_children("standard::*,time::modified", Gio.FileQueryInfoFlags.NONE, None)
             for info in en:
                 if info.get_is_hidden() or info.get_is_backup():
                     continue
                 entries.append(info)
         except Exception as e:
             dbg("바탕화면 폴더 읽기 실패", e)
-        entries.sort(key=lambda i: (i.get_file_type() != Gio.FileType.DIRECTORY,
-                                    i.get_display_name().lower()))
         for info in entries:
             p = os.path.join(self.ddir, info.get_name())
+            ctype = info.get_content_type() or ""
             it = Item(p, info.get_display_name(), path=p,
                       uri=Gio.File.new_for_path(p).get_uri(), gicon=info.get_icon(),
                       is_dir=info.get_file_type() == Gio.FileType.DIRECTORY)
+            it.size = info.get_size()
+            it.mtime = info.get_attribute_uint64("time::modified")
+            it.kind = Gio.content_type_get_description(ctype) if ctype else ""
+            # 'X.DESKTOP' 도 실행기다 (GIO 는 내용 유형으로 알아보고, xdg-open 이 exo-open 에 넘기면 실행된다)
+            it.is_desktop_entry = not it.is_dir and (
+                p.lower().endswith(".desktop") or Gio.content_type_is_a(ctype, "application/x-desktop"))
             if it.is_desktop_entry:
-                try:
-                    app = Gio.DesktopAppInfo.new_from_filename(p)
-                    if app:
-                        it.app = app
-                        it.name = app.get_display_name() or it.name
-                        it.gicon = app.get_icon() or it.gicon
-                except Exception:
-                    pass
-            elif info.get_content_type() in IMAGE_TYPES:
+                if launcher_trusted(p):
+                    try:
+                        app = Gio.DesktopAppInfo.new_from_filename(p)
+                        if app:
+                            it.app = app
+                            it.name = app.get_display_name() or it.name
+                            it.gicon = app.get_icon() or it.gicon
+                    except Exception:
+                        pass
+                else:
+                    # 믿을 수 없는 실행기 — 파일 안의 Name·Icon 을 쓰지 않는다 (문서 행세를 못 하게).
+                    #   이름은 파일 이름 그대로('청구서.pdf.desktop'), 아이콘은 일반 실행기
+                    it.gicon = UNTRUSTED_ICON
+                    # 작업 표시줄은 바로 가기 파일을 쓴 다음에 신뢰 표시를 붙인다 — 막 생긴 것은 조금 뒤 다시 본다
+                    if 0 <= time.time() - it.mtime < 3:        # 미래 시각 파일로 끝없이 돌지 않게
+                        recheck = True
+            elif ctype in IMAGE_TYPES:
                 stamp = file_stamp(p)
                 got = self._thumbs.get(p)
                 if got is not None and got[0] == stamp:
                     it.pixbuf = got[1]                   # 이미 만든 썸네일
                 else:
-                    queue.append((it, info.get_content_type(), stamp))
+                    queue.append((it, ctype, stamp))
             items.append(it)
+        items.sort(key=lambda i: order_key(i, self.sort))
 
         for it in items:
             if it.pixbuf is None:
@@ -496,6 +910,8 @@ class Desk(Gtk.Window):
         if queue and not self._thumb_src:
             self._thumb_src = GLib.idle_add(self._thumb_step)
         self.layout()
+        if recheck:
+            self._refresh_later(1000)
 
     def _trash_count(self):
         try:
@@ -505,18 +921,158 @@ class Desk(Gtk.Window):
         except Exception:
             return 0
 
+    # ── 배치 ──────────────────────────────────────────────
     def layout(self):
-        """왼쪽 위부터 세로로 채우고, 넘치면 다음 줄 (윈도우 기본 배치)"""
+        """아이콘 자리를 정한다.
+        자동 정렬: 정렬 순서대로 왼쪽 위부터 세로로 채우고, 넘치면 다음 줄 (윈도우 기본 배치).
+        손 배치: 저장된 자리에. 새 항목은 첫 빈 칸(또는 바라는 자리 근처), 화면 밖·겹친 자리는 가까운 빈 칸."""
         if not self.primary:
             return
-        h = self.area.get_allocated_height() or 1080
-        usable = max(CELL_H, h - self.panel_h - 2 * MARGIN)
-        rows = max(1, int(usable // CELL_H))
-        for i, it in enumerate(self.items):
-            col, row = divmod(i, rows)
-            it.x = MARGIN + col * CELL_W
-            it.y = MARGIN + row * CELL_H
+        W, H = self._screen()
+        if W < CELL_W or H < CELL_H:
+            return            # 아직 크기를 받기 전 (1×1) — 가짜 크기로 자리를 정해 저장하면 안 된다
+        cols, rows = self._grid = grid_size(W, H, self.panel_h)
+        self._fallback = set()
+        if self.auto:
+            for i, it in enumerate(self.items):
+                it.x, it.y = cell_origin(*divmod(i, rows))
+            self.area.queue_draw()
+            return
+        maxx, maxy = W - CELL_W, H - self.panel_h - CELL_H
+        taken, cells, pixels, moved, fresh = set(), [], [], [], []
+        for it in self.items:
+            p = self.pos.get(pos_key(it))
+            if isinstance(p, list):
+                cells.append((it, p))
+            elif isinstance(p, dict):
+                pixels.append((it, p))
+            else:
+                fresh.append(it)
+        for it, (c, r) in cells:
+            if 0 <= c < cols and 0 <= r < rows and (c, r) not in taken:
+                taken.add((c, r))
+                it.x, it.y = cell_origin(c, r)
+            else:
+                moved.append((it, clamp_cell((c, r), cols, rows)))
+        for it, p in pixels:                           # 격자 밖 자리 — 겹쳐도 된다 (윈도우처럼)
+            if 0 <= p["x"] <= maxx and 0 <= p["y"] <= maxy:
+                it.x, it.y = p["x"], p["y"]
+                taken.add(cell_of(it.x, it.y))
+            else:
+                moved.append((it, clamp_cell(cell_of(p["x"], p["y"]), cols, rows)))
+        # 해상도·작업 표시줄 높이가 바뀌어 밖이 된 자리는 가까운 빈 칸에 — 저장은 하지 않는다
+        #   (로그인 직후 잠깐 다른 크기를 받았다가 돌아와도 원래 자리로)
+        for it, want in moved:
+            cell = nearest_free(want, taken, cols, rows)
+            taken.add(cell)
+            it.x, it.y = cell_origin(*cell)
+            self._fallback.add(it.key)
+        now = time.monotonic()
+        for it in fresh:                               # 처음 보는 항목 — 정렬 순서대로 첫 빈 칸
+            w = self._want.pop(pos_key(it), None)
+            if w and now - w[2] < 600:                 # 새 폴더를 만든 자리·끌어다 놓은 자리 근처
+                cell = nearest_free(clamp_cell(cell_of(w[0], w[1]), cols, rows), taken, cols, rows)
+            else:
+                cell = first_free(taken, rows)
+            taken.add(cell)
+            it.x, it.y = cell_origin(*cell)
+            self.pos[pos_key(it)] = list(cell)
+        if fresh:
+            self._save_later()
         self.area.queue_draw()
+
+    def _want_spot(self, name, x, y):
+        """name 이 생기면 (x, y)(아이콘 왼쪽 위) 근처 빈 칸에 둔다"""
+        now = time.monotonic()
+        self._want = {k: v for k, v in self._want.items() if now - v[2] < 600}
+        self._want[name] = (x, y, now)
+
+    def _snapshot(self):
+        """자동 정렬을 끌 때 — 지금 자리 그대로 굳힌다 (윈도우처럼)"""
+        self.pos = {pos_key(it): list(cell_of(it.x, it.y)) for it in self.items}
+        self._fallback = set()
+
+    def _pin_fallback(self):
+        """임시 자리에 있던 아이콘을 그 자리로 굳힌다 — 다른 아이콘을 옮긴 뒤
+        원래 칸이 비었다고 혼자 튀어 돌아가지 않게"""
+        for it in self.items:
+            if it.key in self._fallback:
+                self.pos[pos_key(it)] = list(cell_of(it.x, it.y))
+        self._fallback = set()
+
+    def _move_icons(self, moves):
+        """아이콘을 바탕화면 안의 새 자리로. moves = [(Item, 왼쪽 위 x, y)] — 앞의 것이 먼저 칸을 잡는다"""
+        if not moves:
+            return
+        if self.auto:                                  # 손으로 옮기면 자동 정렬이 꺼진다 (윈도우처럼)
+            self._snapshot()
+            self.auto = False
+        self._pin_fallback()
+        W, H = self._screen()
+        cols, rows = self._grid
+        moving = {it.key for it, _x, _y in moves}
+        if self.snap:
+            # 가장 가까운 칸, 차 있으면 가장 가까운 빈 칸
+            taken = {cell_of(i.x, i.y) for i in self.items if i.key not in moving}
+            for it, x, y in moves:
+                cell = nearest_free(clamp_cell(cell_of(x, y), cols, rows), taken, cols, rows)
+                taken.add(cell)
+                self.pos[pos_key(it)] = list(cell)
+        else:
+            # 자유 좌표 — 화면(작업 표시줄 위) 안으로만 제한, 겹쳐도 된다
+            maxx, maxy = max(0, W - CELL_W), max(0, H - self.panel_h - CELL_H)
+            for it, x, y in moves:
+                self.pos[pos_key(it)] = {"x": int(min(max(x, 0), maxx)), "y": int(min(max(y, 0), maxy))}
+        self._save()
+        self.layout()
+
+    def _snap_all(self):
+        """격자에 맞춤을 켤 때 — 칸 밖에 있던 아이콘을 가까운 빈 칸으로 (칸 위의 것은 그대로)"""
+        cols, rows = self._grid
+        taken, rest = set(), []
+        for it in self.items:
+            cell = cell_of(it.x, it.y)
+            if (it.x, it.y) == cell_origin(*cell) and cell not in taken:
+                taken.add(cell)
+                self.pos[pos_key(it)] = list(cell)
+            else:
+                rest.append(it)
+        for it in rest:
+            cell = nearest_free(clamp_cell(cell_of(it.x, it.y), cols, rows), taken, cols, rows)
+            taken.add(cell)
+            self.pos[pos_key(it)] = list(cell)
+        self._fallback = set()
+
+    def toggle_auto(self):
+        """보기 › 아이콘 자동 정렬"""
+        if self.auto:
+            self._snapshot()                           # 꺼도 아이콘은 지금 자리 그대로
+            self.auto = False
+        else:
+            self.auto = True
+            self.pos = {}
+            self._fallback = set()
+        self._save()
+        self.layout()
+
+    def toggle_snap(self):
+        """보기 › 아이콘을 격자에 맞춤"""
+        self.snap = not self.snap
+        if self.snap and not self.auto:
+            self._snap_all()
+        self._save()
+        self.layout()
+
+    def arrange_by(self, by):
+        """정렬 기준 — 자동 정렬이 꺼져 있어도 그 순서로 한 번 다시 늘어놓는다 (윈도우처럼)"""
+        self.sort = by
+        self.items.sort(key=lambda i: order_key(i, by))
+        if not self.auto:
+            rows = self._grid[1]
+            self.pos = {pos_key(it): list(divmod(i, rows)) for i, it in enumerate(self.items)}
+            self._fallback = set()
+        self._save()
+        self.layout()
 
     # ── 그리기 ────────────────────────────────────────────
     def _current_surface(self):
@@ -608,7 +1164,7 @@ class Desk(Gtk.Window):
             ix, iy = x + (CELL_W - pw) / 2, y + 8 + (ICON - ph) / 2
             Gdk.cairo_set_source_pixbuf(cr, it.pixbuf, ix, iy)
             cr.paint()
-            if it.is_desktop_entry:                    # 바로 가기 표시 (작은 화살표)
+            if it.app is not None:                     # 바로 가기 표시 (작은 화살표) — 믿는 실행기만
                 ax, ay = x + (CELL_W - ICON) / 2, y + 8 + ICON - 14
                 self._round(cr, ax, ay, 14, 14, 3)
                 cr.set_source_rgb(1, 1, 1)
@@ -641,7 +1197,7 @@ class Desk(Gtk.Window):
 
     # ── 입력 ──────────────────────────────────────────────
     def item_at(self, x, y):
-        for it in self.items:
+        for it in reversed(self.items):                # 겹치면 나중에 그린(위에 보이는) 것
             if it.x <= x < it.x + CELL_W and it.y <= y < it.y + CELL_H:
                 return it
         return None
@@ -689,6 +1245,7 @@ class Desk(Gtk.Window):
                     self.selected ^= {it.key}
                 elif it.key not in self.selected:
                     self.selected = {it.key}
+                self.cursor = it.key
                 self.press = {"x": ev.x, "y": ev.y, "item": it}
             else:
                 if not ctrl:
@@ -699,6 +1256,7 @@ class Desk(Gtk.Window):
             if it:
                 if it.key not in self.selected:
                     self.selected = {it.key}
+                self.cursor = it.key
                 self.area.queue_draw()
                 self._menu_item(ev)
             else:
@@ -734,67 +1292,254 @@ class Desk(Gtk.Window):
         elif k == Gdk.KEY_Escape:
             self.selected = set()
             self.area.queue_draw()
+        elif k in ARROWS:
+            self._arrow(*ARROWS[k], bool(ev.state & Gdk.ModifierType.SHIFT_MASK))
         else:
             return False
         return True
 
+    def _arrow(self, dx, dy, extend):
+        """화살표 — 그 방향의 가장 가까운 아이콘으로 (보이는 칸 배치 기준, 같은 줄·열을 먼저).
+        Shift 를 누르면 선택에 더한다. 끝에서는 멈춘다 (감아 돌지 않는다)."""
+        if not self.items:
+            return
+        cur = next((i for i in self.items if i.key == self.cursor and i.key in self.selected), None) \
+            or next((i for i in self.items if i.key in self.selected), None)
+        if cur is None:
+            nxt = min(self.items, key=lambda i: (i.x, i.y))    # 고른 게 없으면 왼쪽 위 첫 아이콘
+        else:
+            best = None
+            for it in self.items:
+                if it is cur:
+                    continue
+                ox, oy = it.x - cur.x, it.y - cur.y
+                along = ox * dx + oy * dy                     # 가려는 방향으로 얼마나
+                across = abs(oy) if dx else abs(ox)           # 옆으로 얼마나 비껴 있나
+                if along <= 0 or across * 1.2 >= along:       # 뒤쪽이나 대각선 너머는 아니다
+                    continue
+                score = along + 2 * across
+                if best is None or score < best[0]:
+                    best = (score, it)
+            if best is None:
+                return
+            nxt = best[1]
+        if extend:
+            self.selected.add(nxt.key)
+        else:
+            self.selected = {nxt.key}
+        self.cursor = nxt.key
+        self.area.queue_draw()
+
     # ── 끌어다 놓기 ───────────────────────────────────────
+    def _drag_image(self, items, px, py):
+        """끄는 동안 손가락을 따라다닐 그림 — 고른 아이콘들을 지금 배치 그대로 반투명하게 (윈도우처럼).
+        그림 안에서 누른 점을 핫스폿으로 둬서, 놓으면 그림이 보이던 자리에 아이콘이 선다 (_drop_icons)."""
+        x0, y0 = min(i.x for i in items), min(i.y for i in items)
+        w = int(max(i.x for i in items) - x0) + CELL_W
+        h = int(max(i.y for i in items) - y0) + CELL_H
+        surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
+        cr = cairo.Context(surf)
+        cr.translate(-x0, -y0)
+        cr.push_group()
+        for it in items:
+            self._draw_item(cr, it)
+        cr.pop_group_to_source()
+        cr.paint_with_alpha(0.7)
+        surf.set_device_offset(-(px - x0), -(py - y0))  # GTK 는 장치 오프셋의 반대를 핫스폿으로 쓴다
+        return surf
+
     def _start_drag(self, ev):
         self.press["dragging"] = True
-        uris = [it.uri for it in self.items if it.key in self.selected and not it.special and it.uri]
-        if not uris:
-            return
-        self._drag_uris = uris
-        tl = Gtk.TargetList.new([])
-        tl.add_uri_targets(0)
+        it0 = self.press["item"]
+        sel = [it for it in self.items if it.key in self.selected or it is it0]
+        px, py = self.press["x"], self.press["y"]
+        self._drag = {"keys": {it.key for it in sel}, "anchor": it0.key, "x": px, "y": py}
+        # 다른 앱(Thunar 등)에 놓으면 지금처럼 파일 끌기 — 특별 항목은 파일이 아니니 뺀다.
+        #   바탕화면 안에 놓으면 자리 옮기기 (우리 형식, 같은 위젯에서만)
+        self._drag_uris = [it.uri for it in sel if not it.special and it.uri]
+        tl = Gtk.TargetList.new([Gtk.TargetEntry.new(ICONS_TARGET, Gtk.TargetFlags.SAME_WIDGET, 0)])
+        if self._drag_uris:
+            tl.add_uri_targets(1)
         ctx = self.area.drag_begin_with_coordinates(tl, Gdk.DragAction.MOVE | Gdk.DragAction.COPY,
-                                                    1, ev, int(ev.x), int(ev.y))
-        it = self.press["item"]
-        if it and it.pixbuf:
-            Gtk.drag_set_icon_pixbuf(ctx, it.pixbuf, ICON // 2, ICON // 2)
-        if not getattr(self, "_drag_hooked", False):
-            self.area.connect("drag-data-get",
-                              lambda _w, _c, data, _i, _t: data.set_uris(self._drag_uris))
-            self._drag_hooked = True
+                                                    1, ev, int(px), int(py))
+        if ctx:
+            Gtk.drag_set_icon_surface(ctx, self._drag_image(sel, px, py))
+
+    def on_drag_get(self, _w, _ctx, data, info, _t):
+        if info == 1:
+            data.set_uris(self._drag_uris)
+
+    def on_drag_end(self, *_):
+        self._drag = None
+        self.press = None
+
+    def _own_drag(self, ctx):
+        return Gtk.drag_get_source_widget(ctx) == self.area
+
+    def on_drag_motion(self, _w, ctx, _x, _y, time_):
+        if self._own_drag(ctx):
+            Gdk.drag_status(ctx, Gdk.DragAction.MOVE, time_)   # 자리 옮기기 — 복사(+) 표시가 뜨지 않게
+            return True
+        return False
+
+    def on_drag_drop(self, w, ctx, x, y, time_):
+        if self._own_drag(ctx):
+            if self._drag:
+                self._drop_icons(x, y)
+            Gtk.drag_finish(ctx, True, False, time_)
+            return True
+        target = w.drag_dest_find_target(ctx, None)
+        try:
+            name = target.name() if target is not None else None
+        except Exception:
+            name = None
+        if not name or name in ("NONE", ICONS_TARGET):
+            Gtk.drag_finish(ctx, False, False, time_)
+            return True
+        w.drag_get_data(ctx, target, time_)           # → on_drop
+        return True
+
+    def _drop_icons(self, x, y):
+        """바탕화면 안에서 끌어 놓음 — 놓은 점과 누른 점의 차이만큼 옮긴다 (여러 개면 서로의 배치 그대로)"""
+        d = self._drag
+        dx, dy = x - d["x"], y - d["y"]
+        items = [it for it in self.items if it.key in d["keys"]]
+        if (dx, dy) == (0, 0) or (self.snap or self.auto) and all(
+                cell_of(it.x + dx, it.y + dy) == cell_of(it.x, it.y) for it in items):
+            return                                     # 제자리에 놓음 — 자동 정렬을 괜히 끄지 않는다
+        a = next((i for i in items if i.key == d["anchor"]), None)
+        ax, ay = (a.x, a.y) if a else (0, 0)
+        # 누른 아이콘이 먼저 칸을 잡고, 나머지는 그 가까운 것부터
+        items.sort(key=lambda i: (i.key != d["anchor"], abs(i.x - ax) + abs(i.y - ay)))
+        self._move_icons([(it, it.x + dx, it.y + dy) for it in items])
 
     def on_drop(self, _w, ctx, x, y, data, _info, time_):
-        uris = data.get_uris() or []
-        moved = 0
+        ok = self._receive(data.get_uris() or [], ctx.get_selected_action() == Gdk.DragAction.MOVE, x, y)
+        # 옮기기여도 원본 쪽에 지우라고(del) 하지 않는다 — 이동은 여기서 직접 한다
+        Gtk.drag_finish(ctx, ok, False, time_)
+
+    def _receive(self, uris, move, x, y):
+        """다른 앱에서 끌어 온 파일을 바탕화면 폴더로.
+        같은 파일 시스템 안의 이동은 rename 으로 바로. 복사·다른 디스크로의 이동·폴더는 cp/mv 를
+        뒤에서 돌린다 (큰 파일을 복사하는 동안 바탕화면이 멈추지 않게). 이름이 겹치면 '이름 (2)'."""
+        sx, sy = x - CELL_W / 2, y - 8 - ICON / 2      # 아이콘 가운데가 놓은 점에 오게
+        real_d = os.path.realpath(self.ddir)
+        here, took = [], False
+        verb = "옮기지" if move else "복사하지"
         for u in uris:
-            src = Gio.File.new_for_uri(u)
-            if src.get_path() and os.path.dirname(src.get_path()) == self.ddir:
-                continue                                   # 이미 바탕화면에 있는 것
-            dst = Gio.File.new_for_path(os.path.join(self.ddir, src.get_basename()))
-            try:
-                if ctx.get_selected_action() == Gdk.DragAction.COPY:
-                    src.copy(dst, Gio.FileCopyFlags.NONE, None, None, None)
-                else:
-                    src.move(dst, Gio.FileCopyFlags.NONE, None, None, None)
-                moved += 1
-            except Exception as e:
-                dbg("끌어다 놓기 실패", u, e)
-        Gtk.drag_finish(ctx, moved > 0, False, time_)
-        self.refresh()
+            f = Gio.File.new_for_uri(u)
+            src = f.get_path() if f.has_uri_scheme("file") else None
+            if not src:
+                continue                               # file:// 가 아닌 것(웹 주소 등)은 받지 않는다
+            src = os.path.normpath(src)
+            name = os.path.basename(src)
+            if os.path.realpath(os.path.dirname(src)) == real_d:
+                # 이미 바탕화면에 있는 것 (파일 관리자에서 바탕화면 폴더를 보다가 끌어 옴) — 자리만 옮긴다
+                it = next((i for i in self.items if i.path and os.path.basename(i.path) == name), None)
+                if it:
+                    here.append(it)
+                continue
+            is_dir = os.path.isdir(src) and not os.path.islink(src)
+            real_s = os.path.realpath(src)
+            if is_dir and (real_d == real_s or real_d.startswith(real_s + os.sep)):
+                notify(f"바탕 화면으로 {verb} 못했습니다",
+                       f"‘{name}’ 안에 바탕 화면 폴더가 있습니다 — 폴더를 자기 안으로 넣을 수 없습니다.")
+                continue
+            dst_name = free_name(name, is_dir, lambda n: n in self._reserved or
+                                 os.path.lexists(os.path.join(self.ddir, n)))
+            dst = os.path.join(self.ddir, dst_name)
+            self._want_spot(dst_name, sx, sy)
+            if move:
+                try:
+                    os.rename(src, dst)
+                    took = True
+                    continue
+                except OSError as e:
+                    if e.errno != errno.EXDEV:         # 다른 파일 시스템이면 아래 mv 로
+                        notify(f"바탕 화면으로 {verb} 못했습니다", f"‘{name}’\n{e.strerror}")
+                        continue
+            argv = ["mv", "-T", "--", src, dst] if move else ["cp", "-a", "-T", "--", src, dst]
+            took = self._run_job(argv, verb, dst_name) or took
+        if here:
+            # 격자면 놓은 칸 근처 빈 칸에 차례로, 자유 배치면 놓은 점부터 아래로
+            self._move_icons([(it, sx, sy if self.snap else sy + i * CELL_H) for i, it in enumerate(here)])
+            took = True
+        if took:
+            self._refresh_later(100)
+        return took
+
+    def _run_job(self, argv, verb, name):
+        try:
+            proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDOUT_SILENCE |
+                                      Gio.SubprocessFlags.STDERR_PIPE)
+        except GLib.Error as e:
+            notify(f"바탕 화면으로 {verb} 못했습니다", f"‘{name}’\n{e.message}")
+            return False
+        self._reserved.add(name)
+        self._jobs.add(proc)
+        proc.communicate_async(None, None, self._job_done, (verb, name))
+        return True
+
+    def _job_done(self, proc, res, data):
+        verb, name = data
+        self._jobs.discard(proc)
+        self._reserved.discard(name)
+        err = ""
+        try:
+            _ok, _out, eb = proc.communicate_finish(res)
+            err = eb.get_data().decode("utf-8", "replace") if eb else ""
+        except GLib.Error as e:
+            err = e.message
+        if not proc.get_successful():
+            lines = [ln.strip() for ln in err.splitlines() if ln.strip()]
+            notify(f"바탕 화면으로 {verb} 못했습니다", f"‘{name}’" + (f"\n{lines[-1]}" if lines else ""))
+        self._refresh_later(150)
 
     # ── 동작 ──────────────────────────────────────────────
+    def _launch(self, path):
+        try:
+            app = Gio.DesktopAppInfo.new_from_filename(path)
+            if app is not None:
+                app.launch([], None)
+                return True
+        except Exception as e:
+            dbg("앱 실행 실패", e)
+        return False
+
+    def _open_default(self, it_uri, it_path=None):
+        try:
+            Gio.AppInfo.launch_default_for_uri(it_uri, None)
+        except Exception:
+            run(["xdg-open", it_path or it_uri])
+
     def open_items(self, items):
+        doubt = []
         for it in items:
             if it.key == "::install":
                 run(["sekai-installer"])
                 continue
-            if it.app is not None:
-                try:
-                    it.app.launch([], None)
+            if it.is_desktop_entry:
+                # 열 때 다시 본다 — 목록을 읽은 뒤 권한·표시가 바뀌었을 수 있다
+                if not launcher_trusted(it.path):
+                    doubt.append(it.path)
                     continue
-                except Exception as e:
-                    dbg("앱 실행 실패", e)
+                if self._launch(it.path):
+                    continue
             if it.is_dir or it.special:
                 run([file_manager(), it.uri or it.path])
             else:
-                try:
-                    Gio.AppInfo.launch_default_for_uri(it.uri, None)
-                except Exception:
-                    run(["xdg-open", it.path or it.uri])
+                self._open_default(it.uri, it.path)
+        if doubt:
+            W, H = self._screen()
+            cmd = launcher_command(doubt[0]) if len(doubt) == 1 else ""
+            self.trust.ask(doubt, cmd, lambda: self._trust_and_open(doubt), W, H)
+
+    def _trust_and_open(self, paths):
+        for p in paths:
+            mark_trusted(p)
+            if not self._launch(p):
+                self._open_default(Gio.File.new_for_path(p).get_uri(), p)
+        self._refresh_later(100)                       # 이제 앱 이름·아이콘으로
 
     def trash_items(self, items):
         for it in items:
@@ -819,26 +1564,35 @@ class Desk(Gtk.Window):
                 os.rename(it.path, dst)
             except OSError as e:
                 return f"바꾸지 못했습니다: {e.strerror}"
+            old = os.path.basename(it.path)
+            if old in self.pos:                        # 자리도 새 이름으로
+                self.pos[name] = self.pos.pop(old)
+                self._save()
             self.selected = {dst}
+            self.cursor = dst
             return None
         self.rename.ask(it.x, it.y, os.path.basename(it.path), do, self._screen()[1])
 
-    def new_folder(self):
+    def new_folder(self, spot=None):
         base = "새 폴더"
         n, name = 1, base
         while os.path.exists(os.path.join(self.ddir, name)):
             n += 1
             name = f"{base} ({n})"
         os.makedirs(os.path.join(self.ddir, name))
+        if spot:
+            self._want_spot(name, *spot)
         GLib.timeout_add(250, lambda: (self._rename_new(name), False)[1])
 
-    def new_text(self):
+    def new_text(self, spot=None):
         base = "새 텍스트 문서"
         n, name = 1, base + ".txt"
         while os.path.exists(os.path.join(self.ddir, name)):
             n += 1
             name = f"{base} ({n}).txt"
         open(os.path.join(self.ddir, name), "w").close()
+        if spot:
+            self._want_spot(name, *spot)
         GLib.timeout_add(250, lambda: (self._rename_new(name), False)[1])
 
     def _rename_new(self, name):
@@ -846,6 +1600,7 @@ class Desk(Gtk.Window):
         it = next((i for i in self.items if i.path and os.path.basename(i.path) == name), None)
         if it:
             self.selected = {it.key}
+            self.cursor = it.key
             self.area.queue_draw()
             self.rename_item(it)
 
@@ -856,9 +1611,17 @@ class Desk(Gtk.Window):
         W, H = self._screen()
         entries = []
         if self.primary:
-            entries += [("새 폴더", "folder-new-symbolic", self.new_folder),
-                        ("새 텍스트 문서", "document-new-symbolic", self.new_text),
+            # 새로 만든 것은 누른 칸 근처에 (자동 정렬이 꺼져 있을 때 — 윈도우처럼)
+            spot = (ev.x - CELL_W / 2, ev.y - CELL_H / 2)
+            view = [("아이콘 자동 정렬", None, self.toggle_auto, "✓" if self.auto else ""),
+                    ("아이콘을 격자에 맞춤", None, self.toggle_snap, "✓" if self.snap else "")]
+            order = [(label, None, lambda by=by: self.arrange_by(by), "●" if by == self.sort else "")
+                     for by, label in SORTS]
+            entries += [("새 폴더", "folder-new-symbolic", lambda: self.new_folder(spot)),
+                        ("새 텍스트 문서", "document-new-symbolic", lambda: self.new_text(spot)),
                         None,
+                        ("보기", "view-grid-symbolic", view),
+                        ("정렬 기준", "view-sort-ascending-symbolic", order),
                         ("새로 고침", "view-refresh-symbolic", self.refresh),
                         ("여기서 터미널 열기", "utilities-terminal-symbolic",
                          lambda: run([settings().get("apps", {}).get("terminal") or "sekai-terminal"], cwd=self.ddir)),
