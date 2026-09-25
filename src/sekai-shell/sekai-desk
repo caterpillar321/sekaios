@@ -85,7 +85,7 @@ def hex_rgb(h, fb=(0.224, 0.773, 0.733)):
         return fb
 
 
-def desktop_dir():
+def desktop_dir(create=True):
     try:
         p = subprocess.run(["xdg-user-dir", "DESKTOP"], capture_output=True,
                            text=True, timeout=2).stdout.strip()
@@ -93,7 +93,8 @@ def desktop_dir():
         p = ""
     if not p or p == os.path.expanduser("~"):
         p = os.path.expanduser("~/Desktop")
-    os.makedirs(p, exist_ok=True)
+    if create:
+        os.makedirs(p, exist_ok=True)
     return p
 
 
@@ -660,30 +661,64 @@ class Desk(Gtk.Window):
         if self.primary:
             self._load_icons()
         self.reload_settings()
+        self.dirs_mon = None
+        self._dirs_src = 0
         if self.primary:
             self.ddir = desktop_dir()
-            self.monitor_file = Gio.File.new_for_path(self.ddir).monitor_directory(
-                Gio.FileMonitorFlags.WATCH_MOVES, None)
-            self.monitor_file.connect("changed", lambda *_: self._refresh_later(150))
+            self._watch_ddir()
+            # 사용자 폴더 이름이 바뀌면(언어를 바꿔 "표준 폴더 이름 업데이트" → ~/Desktop 이 ~/바탕화면) 따라간다
+            self.dirs_mon = Gio.File.new_for_path(os.path.join(
+                os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "user-dirs.dirs")
+            ).monitor_file(Gio.FileMonitorFlags.NONE, None)
+            self.dirs_mon.connect("changed", lambda *_: self._dirs_changed())
             # 휴지통 상태(비었나/찼나)에 따라 아이콘을 바꾼다
             self.trash_mon = Gio.File.new_for_uri("trash:///").monitor_directory(
                 Gio.FileMonitorFlags.NONE, None)
             self.trash_mon.connect("changed", lambda *_: self._refresh_later(300))
             self.refresh()
 
+    def _watch_ddir(self):
+        if self.monitor_file is not None:
+            self.monitor_file.cancel()
+        self.monitor_file = Gio.File.new_for_path(self.ddir).monitor_directory(
+            Gio.FileMonitorFlags.WATCH_MOVES, None)
+        self.monitor_file.connect("changed", lambda *_: self._refresh_later(150))
+
+    def _dirs_changed(self, tries=0):
+        """user-dirs.dirs 가 바뀌었다 — 바탕화면 폴더가 옮겨졌으면 그 폴더를 본다.
+        새 폴더는 우리가 만들지 않는다: 이름 바꾸기 도구가 옛 폴더를 옮기기 전에 빈 새 폴더가 있으면 옮기지 못한다.
+        새 폴더가 생길 때까지 잠깐 기다린다 (없으면 그대로 둔다)."""
+        if self._dirs_src:
+            GLib.source_remove(self._dirs_src)
+
+        def go():
+            self._dirs_src = 0
+            new = desktop_dir(create=False)
+            if new == self.ddir:
+                return False
+            if not os.path.isdir(new):
+                if tries < 10:
+                    self._dirs_changed(tries + 1)
+                return False
+            self.ddir = new
+            self._watch_ddir()
+            self.refresh()
+            return False
+        self._dirs_src = GLib.timeout_add(500, go)
+
     def _on_destroy(self, *_):
         """모니터를 뺐다 꽂을 때마다 새로 만들어진다 — 감시·타이머·팝업·큰 그림을 놓는다
         (안 놓으면 감시 콜백이 이 창을 붙잡고 있어 해제되지 않고 계속 쌓였다)"""
         if self._save_src:                             # 미뤄 둔 자리 저장을 마저 한다
             self._save()
-        for mon in (self.monitor_file, self.trash_mon):
+        for mon in (self.monitor_file, self.trash_mon, self.dirs_mon):
             if mon is not None:
                 mon.cancel()
-        self.monitor_file = self.trash_mon = None
-        for src in (self._pending, self._thumb_src):
+        self.monitor_file = self.trash_mon = self.dirs_mon = None
+        for src in (self._pending, self._thumb_src, self._dirs_src):
             if src:
                 GLib.source_remove(src)
-        self._pending = self._thumb_src = 0
+        self._pending = self._thumb_src = self._dirs_src = 0
         self.menu.close()                              # 하위 메뉴 타이머도 멈춘다
         for pop in (self.menu.sub, self.menu, self.rename, self.trust):
             pop.catcher.destroy()

@@ -3,7 +3,7 @@
 항목은 ~/.config/autostart 와 XDG_CONFIG_DIRS(/etc/xdg …)/autostart 의 .desktop 파일이다.
 같은 파일 이름이면 사용자 폴더 → 앞쪽 시스템 폴더 순으로 이긴다 (XDG 규칙 — 사용자가 Hidden=true 로 끈다).
 실행하는 것: 켜져 있고(Hidden·X-GNOME-Autostart-enabled), 지금 데스크톱에서 보이고(OnlyShowIn·NotShowIn),
-TryExec 가 있고, SekaiOS 세션이 직접 띄우는 것(MANAGED)이 아닌 항목.
+TryExec 가 있고, SekaiOS 세션이 직접 띄우는 것(MANAGED)·일부러 실행하지 않는 것(NEVER)이 아닌 항목.
 MANAGED 는 세션(hyprland.conf exec-once, x11/session)이 이미 띄운다 — 여기서 또 띄우면 두 개가 된다.
 작업 관리자는 MANAGED 와 NoDisplay=true 인 항목(시스템 구성 요소)은 목록에 보이지 않는다 (윈도우·GNOME 처럼).
 """
@@ -18,6 +18,13 @@ MANAGED = {
     "nm-applet.desktop",        # 네트워크 (--indicator 로, Wi-Fi 암호 요청)
     "lxpolkit.desktop",         # 관리자 암호 창
     "im-launch.desktop",        # 입력기 — 세션이 ibus 를 직접 띄운다
+}
+
+# SekaiOS 에서는 일부러 실행하지 않는 것
+NEVER = {
+    # "현재 언어로 표준 폴더 이름을 업데이트할까요?" — 예를 누르면 빈 새 폴더(~/바탕화면 …)를 만들고 그쪽을 쓰지만
+    #   안의 파일은 옮기지 않아, 바탕화면·문서가 비어 보였다. 폴더 이름은 계정을 만들 때(첫 설정의 언어) 정한다 (윈도우처럼)
+    "user-dirs-update-gtk.desktop",
 }
 
 
@@ -136,11 +143,12 @@ def scan():
             "icon": show.get("Icon", ""), "exec": show.get("Exec", ""),
             "enabled": enabled,
             "sys_enabled": entry_enabled(sd) if sd is not None else None,
-            "managed": f in MANAGED,
+            "managed": f in MANAGED or f in NEVER,
+            "never": f in NEVER,
             "nodisplay": _true(show.get("NoDisplay")),
             "here": here, "installed": inst,
             # 로그인할 때 실제로 실행되나
-            "runs": (enabled and here and inst and f not in MANAGED
+            "runs": (enabled and here and inst and f not in MANAGED and f not in NEVER
                      and show.get("Type", "Application") == "Application" and bool(show.get("Exec"))),
         })
     return items
