@@ -349,6 +349,9 @@ APP_ALIASES = {
     "xarchiver": ("압축", "압축 풀기", "zip"),
     "org.pulseaudio.pavucontrol": ("볼륨", "음량", "소리", "믹서"),
     "sekai-settings": ("제어판", "control panel", "환경 설정"),
+    # 컴퓨터 관리 — 윈도우에서 각각 따로 찾던 도구 이름으로도
+    "sekai-admin": ("컴퓨터 관리", "이벤트 뷰어", "서비스", "관리 도구", "로그 보기",
+                    "compmgmt.msc", "eventvwr", "services.msc"),
     "nm-connection-editor": ("네트워크 연결", "vpn", "고정 ip"),
     "im-config": ("입력기", "한글 입력"),
 }

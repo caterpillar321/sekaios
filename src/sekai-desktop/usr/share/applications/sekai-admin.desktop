@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Computer Management
+Name[ko]=컴퓨터 관리
+GenericName=System Administration
+GenericName[ko]=시스템 관리
+Comment=View event logs and manage services and devices
+Comment[ko]=이벤트 기록을 보고 서비스와 장치를 관리합니다
+Exec=sekai-admin
+Icon=preferences-system-services
+Terminal=false
+Categories=System;Settings;
+Keywords=컴퓨터 관리;이벤트 뷰어;이벤트 로그;로그;기록;오류;서비스;장치 관리자;관리 도구;computer management;event viewer;event log;logs;journal;journalctl;services;systemd;systemctl;device manager;administrative tools;compmgmt;eventvwr;services.msc;
+StartupNotify=true
+StartupWMClass=org.sekaios.Admin

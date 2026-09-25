@@ -218,7 +218,8 @@ def apply(req):
         f.write(hosts)
 
     # 계정 — 있는 그룹만 (없는 그룹이 하나라도 있으면 useradd 전체가 실패한다)
-    groups = [g for g in ("sudo", "audio", "video", "plugdev", "netdev", "cdrom", "dialout",
+    #   첫 계정은 관리자 — systemd-journal 도 함께 (이벤트 뷰어에서 시스템 기록을 바로 본다. sekai-users 와 같은 규칙)
+    groups = [g for g in ("sudo", "systemd-journal", "audio", "video", "plugdev", "netdev", "cdrom", "dialout",
                           "bluetooth", "lpadmin", "users") if _group(g)]
     if made and made != user and not reuse:
         # 다른 이름으로 다시 시도 — 지난번에 만들다 만 계정은 치운다 (OOBE 가 안 끝났으니 쓴 적 없음)

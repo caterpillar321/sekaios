@@ -5,8 +5,11 @@
 #    sekai-users add <사용자이름> <admin|standard>     (표시 이름·암호는 표준 입력 두 줄)
 #    sekai-users remove <사용자이름> <keep|delete>     (홈 폴더를 남길지)
 #    sekai-users admin <사용자이름> <on|off>
+#    sekai-users logs <사용자이름>                     (기록 읽기 그룹을 관리자 여부에 맞춘다)
 #
-#  설정 앱의 "가족 및 다른 사용자" 페이지가 부른다.
+#  설정 앱의 "가족 및 다른 사용자" 페이지가 부른다 (logs 는 컴퓨터 관리의 이벤트 뷰어).
+#  관리자(sudo)는 시스템 기록도 바로 볼 수 있게 systemd-journal 그룹에 함께 넣고, 관리자를 풀면 뺀다
+#  (윈도우처럼 관리자는 이벤트 뷰어의 시스템·보안 기록을 암호 없이 본다).
 #  관리자 권한으로 도는 프로그램이라 인자는 엄격히 검사한다.
 #  결과: 성공하면 종료 코드 0, 실패하면 표준 출력에 사람이 읽을 이유 한 줄.
 # ═══════════════════════════════════════════════════════════════
@@ -21,6 +24,9 @@ USER_RE = re.compile(r"^[a-z][a-z0-9_-]{0,30}$")
 RESERVED = {"root", "daemon", "bin", "sys", "sync", "games", "man", "lp", "mail", "news", "uucp",
             "proxy", "www-data", "backup", "list", "irc", "nobody", "admin", "_greetd", "sekai-oobe"}
 GROUPS = ("audio", "video", "plugdev", "netdev", "cdrom", "dialout", "bluetooth", "users")
+JOURNAL = "systemd-journal"         # 시스템 기록(journald)을 읽는 그룹 — 관리자만
+# 관리자에게 함께 주는 그룹 — 시스템 기록 읽기(이벤트 뷰어), 프린터 추가·제거(CUPS 의 SystemGroup)
+ADMIN_EXTRA = (JOURNAL, "lpadmin")
 ENV = dict(os.environ, LC_ALL="C.UTF-8", PATH="/usr/sbin:/usr/bin:/sbin:/bin")
 DISPLAYS = "/var/lib/sekai/displays"
 
@@ -86,6 +92,7 @@ def add(name, kind):
     groups = [g for g in GROUPS if have_group(g)]
     if kind == "admin":
         groups.append("sudo")
+        groups += [g for g in ADMIN_EXTRA if have_group(g)]
     rc, out = run(["useradd", "-m", "-s", "/bin/bash", "-c", full or name, "-G", ",".join(groups), name])
     if rc != 0:
         fail("계정을 만들지 못했습니다")
@@ -148,6 +155,34 @@ def admin(name, on):
         rc, out = run(["usermod", "-aG", "sudo", name])
     if rc != 0:
         fail("권한을 바꾸지 못했습니다")
+    sync_logs(name)
+
+
+def sync_logs(name):
+    """관리자 전용 그룹(ADMIN_EXTRA — 기록 읽기·프린터 관리)을 관리자 여부에 맞춘다 — 다음 로그인부터 적용된다"""
+    ok = True
+    is_admin = name in admins()
+    for g in ADMIN_EXTRA:
+        if not have_group(g):
+            continue
+        member = name in grp.getgrnam(g).gr_mem
+        rc = 0
+        if is_admin and not member:
+            rc, _out = run(["usermod", "-aG", g, name])
+        elif not is_admin and member:
+            rc, _out = run(["gpasswd", "-d", name, g])
+        ok = ok and rc == 0
+    return ok
+
+
+def logs(name):
+    human_user(name)
+    if not have_group(JOURNAL):
+        fail("이 시스템에는 기록 읽기 그룹이 없습니다")
+    if not sync_logs(name):
+        fail("권한을 바꾸지 못했습니다")
+    if name not in admins():
+        fail("관리자 계정만 시스템 기록을 볼 수 있습니다")
 
 
 def main():
@@ -160,8 +195,10 @@ def main():
         remove(a[1], a[2])
     elif len(a) == 3 and a[0] == "admin" and a[2] in ("on", "off"):
         admin(a[1], a[2])
+    elif len(a) == 2 and a[0] == "logs":
+        logs(a[1])
     else:
-        fail("사용법: sekai-users add|remove|admin …", 2)
+        fail("사용법: sekai-users add|remove|admin|logs …", 2)
     print("OK", flush=True)
 
 

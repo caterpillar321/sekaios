@@ -24,6 +24,7 @@ echo "==> 스테이징"
 install -Dm755 "$SRC/sekai-panel"     "$STAGE/usr/bin/sekai-panel"
 install -Dm755 "$SRC/sekai-settings"  "$STAGE/usr/bin/sekai-settings"
 install -Dm755 "$SRC/sekai-taskmgr"   "$STAGE/usr/bin/sekai-taskmgr"
+install -Dm755 "$SRC/sekai-admin"     "$STAGE/usr/bin/sekai-admin"
 install -Dm755 "$SRC/sekai-wallpaper" "$STAGE/usr/bin/sekai-wallpaper"
 install -Dm755 "$SRC/sekai-desk"      "$STAGE/usr/bin/sekai-desk"
 install -Dm755 "$SRC/sekai-lock"      "$STAGE/usr/bin/sekai-lock"
@@ -54,6 +55,10 @@ mkdir -p "$DIST/sekaishell" "$DIST/sekaisettings/pages"
 for f in "$SRC/sekaishell"/*.py;          do install -Dm644 "$f" "$DIST/sekaishell/$(basename "$f")"; done
 for f in "$SRC/sekaisettings"/*.py;       do install -Dm644 "$f" "$DIST/sekaisettings/$(basename "$f")"; done
 for f in "$SRC/sekaisettings/pages"/*.py; do install -Dm644 "$f" "$DIST/sekaisettings/pages/$(basename "$f")"; done
+# 컴퓨터 관리 (sekai-admin)
+mkdir -p "$DIST/sekaiadmin/pages"
+for f in "$SRC/sekaiadmin"/*.py;        do install -Dm644 "$f" "$DIST/sekaiadmin/$(basename "$f")"; done
+for f in "$SRC/sekaiadmin/pages"/*.py;  do install -Dm644 "$f" "$DIST/sekaiadmin/pages/$(basename "$f")"; done
 
 # settings.css 는 패키지 옆이 아니라 /usr/share 에 있으므로 app.py 의 폴백 경로가 찾는다
 
@@ -99,7 +104,7 @@ Depends: python3, python3-gi, python3-gi-cairo, gir1.2-gtk-3.0,
  gir1.2-gtklayershell-0.1, hyprland, kitty, foot, fuzzel,
  adwaita-icon-theme, papirus-icon-theme, swaybg, swayidle,
  gir1.2-gtksessionlock-0.1, libgtk-session-lock0, python3-pampy,
- libglib2.0-bin, sekai-winshot
+ libglib2.0-bin, sekai-winshot, gir1.2-gudev-1.0
 Recommends: wireplumber, pavucontrol, swaylock,
  network-manager-gnome
 Description: SekaiOS desktop shell
@@ -151,6 +156,14 @@ if [ "$1" = "configure" ]; then
     systemctl enable sekai-bootmode.path >/dev/null 2>&1 || true
     [ -d /run/systemd/system ] && systemctl start sekai-bootmode.path >/dev/null 2>&1 || true
     systemctl set-default graphical.target >/dev/null 2>&1 || true
+    # 관리자(sudo)는 시스템 기록(이벤트 뷰어)·프린터 관리(CUPS)도 — 새 계정은 sekai-users 가 넣는다,
+    #   이미 있는 관리자는 여기서 (다음 로그인부터)
+    for g in systemd-journal lpadmin; do
+        getent group "$g" >/dev/null || continue
+        for u in $(getent group sudo | cut -d: -f4 | tr , ' '); do
+            usermod -aG "$g" "$u" >/dev/null 2>&1 || true
+        done
+    done
     # 로그인 화면 해상도 공유 폴더 (usr/lib/tmpfiles.d/sekai.conf)
     systemd-tmpfiles --create /usr/lib/tmpfiles.d/sekai.conf >/dev/null 2>&1 \
         || install -d -m 1777 /var/lib/sekai/displays

@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""SekaiOS 컴퓨터 관리 (이벤트 뷰어 · 서비스 · 장치 관리자)."""
+import os
+import sys
+
+# 소스 트리에서 바로 실행하는 경우를 위해 스크립트 옆 디렉터리를 경로에 넣는다
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from sekaiadmin.app import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())
