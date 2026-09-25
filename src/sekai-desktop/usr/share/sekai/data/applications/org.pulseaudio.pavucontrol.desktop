@@ -1,0 +1,6 @@
+[Desktop Entry]
+# SekaiOS: 시작 메뉴·검색에서 숨긴다 — 볼륨 믹서·장치 선택은 설정 › 소리에 있다
+Type=Application
+Name=Volume Control
+Exec=pavucontrol
+NoDisplay=true

@@ -1,0 +1,6 @@
+[Desktop Entry]
+# SekaiOS: 시작 메뉴·검색에서 숨긴다 — 입력기는 설정 › 시간 및 언어에서 고른다
+Type=Application
+Name=IBus Preferences
+Exec=ibus-setup
+NoDisplay=true

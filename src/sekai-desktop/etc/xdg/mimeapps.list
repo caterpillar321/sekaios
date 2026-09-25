@@ -1,0 +1,84 @@
+# SekaiOS 기본 앱 — 사용자가 "항상 이 앱으로 열기"를 고르면 ~/.config/mimeapps.list 가 이긴다.
+#   데스크톱 이름과 상관없이 두 세션(Hyprland·기본 화면 모드) 모두 읽는다 (XDG_CONFIG_DIRS 의 /etc/xdg).
+#   목록은 각 앱 .desktop 의 MimeType 과 같다 — 앱에 형식을 더하면 여기에도 더한다.
+[Default Applications]
+inode/directory=sekai-files.desktop
+# 압축 파일 → 파일 탐색기의 압축 풀기
+application/zip=sekai-files-extract.desktop
+application/x-zip=sekai-files-extract.desktop
+application/x-zip-compressed=sekai-files-extract.desktop
+application/x-tar=sekai-files-extract.desktop
+application/x-gtar=sekai-files-extract.desktop
+application/x-compressed-tar=sekai-files-extract.desktop
+application/x-bzip-compressed-tar=sekai-files-extract.desktop
+application/x-bzip2-compressed-tar=sekai-files-extract.desktop
+application/x-xz-compressed-tar=sekai-files-extract.desktop
+application/x-tarz=sekai-files-extract.desktop
+application/gzip=sekai-files-extract.desktop
+application/x-gzip=sekai-files-extract.desktop
+application/x-bzip=sekai-files-extract.desktop
+application/x-bzip2=sekai-files-extract.desktop
+application/x-xz=sekai-files-extract.desktop
+application/x-lzma=sekai-files-extract.desktop
+application/x-7z-compressed=sekai-files-extract.desktop
+application/vnd.rar=sekai-files-extract.desktop
+application/x-rar=sekai-files-extract.desktop
+application/x-rar-compressed=sekai-files-extract.desktop
+application/vnd.ms-cab-compressed=sekai-files-extract.desktop
+application/x-zstd-compressed-tar=sekai-files-extract.desktop
+application/x-lzma-compressed-tar=sekai-files-extract.desktop
+application/x-lz4-compressed-tar=sekai-files-extract.desktop
+application/x-lzip-compressed-tar=sekai-files-extract.desktop
+application/x-cpio=sekai-files-extract.desktop
+application/x-xar=sekai-files-extract.desktop
+application/x-lha=sekai-files-extract.desktop
+application/x-lzh-compressed=sekai-files-extract.desktop
+application/zstd=sekai-files-extract.desktop
+# 텍스트 → 메모장
+text/plain=sekai-notepad.desktop
+text/x-log=sekai-notepad.desktop
+text/markdown=sekai-notepad.desktop
+text/x-readme=sekai-notepad.desktop
+application/x-shellscript=sekai-notepad.desktop
+text/x-python=sekai-notepad.desktop
+text/x-csrc=sekai-notepad.desktop
+text/x-chdr=sekai-notepad.desktop
+text/x-c++src=sekai-notepad.desktop
+text/css=sekai-notepad.desktop
+application/json=sekai-notepad.desktop
+application/xml=sekai-notepad.desktop
+text/x-ini=sekai-notepad.desktop
+text/csv=sekai-notepad.desktop
+# 그림 → 사진
+image/jpeg=sekai-photos.desktop
+image/pjpeg=sekai-photos.desktop
+image/png=sekai-photos.desktop
+image/apng=sekai-photos.desktop
+image/gif=sekai-photos.desktop
+image/bmp=sekai-photos.desktop
+image/x-bmp=sekai-photos.desktop
+image/x-ms-bmp=sekai-photos.desktop
+image/webp=sekai-photos.desktop
+image/tiff=sekai-photos.desktop
+image/svg+xml=sekai-photos.desktop
+image/svg+xml-compressed=sekai-photos.desktop
+image/x-icon=sekai-photos.desktop
+image/vnd.microsoft.icon=sekai-photos.desktop
+image/avif=sekai-photos.desktop
+image/heif=sekai-photos.desktop
+image/heic=sekai-photos.desktop
+image/jxl=sekai-photos.desktop
+image/x-tga=sekai-photos.desktop
+image/x-portable-pixmap=sekai-photos.desktop
+image/x-portable-graymap=sekai-photos.desktop
+image/x-portable-bitmap=sekai-photos.desktop
+image/x-portable-anymap=sekai-photos.desktop
+image/x-xpixmap=sekai-photos.desktop
+image/x-xbitmap=sekai-photos.desktop
+image/x-icns=sekai-photos.desktop
+# PDF → 크로미움에 들어 있는 PDF 보기 (윈도우가 Edge 로 여는 것처럼)
+application/pdf=chromium.desktop
+
+[Added Associations]
+# 데비안 chromium.desktop 은 PDF 를 적어 두지 않아 연결을 더한다
+application/pdf=chromium.desktop;

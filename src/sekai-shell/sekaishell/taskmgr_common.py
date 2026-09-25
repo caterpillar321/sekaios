@@ -243,7 +243,7 @@ def cmp_num(a, b):
 
 # ── 동작 ─────────────────────────────────────────────────────
 def open_location(path):
-    """파일 관리자에서 그 파일을 골라 보여 준다 (FileManager1.ShowItems — Thunar 가 제공).
+    """파일 관리자에서 그 파일을 골라 보여 준다 (FileManager1.ShowItems — 파일 탐색기가 제공).
     안 되면 담긴 폴더를 연다."""
     if not path:
         return

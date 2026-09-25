@@ -25,6 +25,10 @@ install -Dm755 "$SRC/sekai-panel"     "$STAGE/usr/bin/sekai-panel"
 install -Dm755 "$SRC/sekai-settings"  "$STAGE/usr/bin/sekai-settings"
 install -Dm755 "$SRC/sekai-taskmgr"   "$STAGE/usr/bin/sekai-taskmgr"
 install -Dm755 "$SRC/sekai-admin"     "$STAGE/usr/bin/sekai-admin"
+install -Dm755 "$SRC/sekai-files"     "$STAGE/usr/bin/sekai-files"
+install -Dm755 "$SRC/sekai-notepad"   "$STAGE/usr/bin/sekai-notepad"
+install -Dm755 "$SRC/sekai-calc"      "$STAGE/usr/bin/sekai-calc"
+install -Dm755 "$SRC/sekai-photos"    "$STAGE/usr/bin/sekai-photos"
 install -Dm755 "$SRC/sekai-wallpaper" "$STAGE/usr/bin/sekai-wallpaper"
 install -Dm755 "$SRC/sekai-desk"      "$STAGE/usr/bin/sekai-desk"
 install -Dm755 "$SRC/sekai-lock"      "$STAGE/usr/bin/sekai-lock"
@@ -38,6 +42,9 @@ install -Dm755 "$SRC/sekai-greeter-session" "$STAGE/usr/bin/sekai-greeter-sessio
 install -Dm644 "$SRC/lib/hw-env.sh"   "$STAGE/usr/lib/sekai/hw-env.sh"
 install -Dm755 "$SRC/lib/keep-running" "$STAGE/usr/lib/sekai/keep-running"
 install -Dm755 "$SRC/lib/autostart"    "$STAGE/usr/lib/sekai/autostart"
+install -Dm755 "$SRC/lib/automount"    "$STAGE/usr/lib/sekai/automount"
+install -Dm755 "$SRC/lib/polkit-agent" "$STAGE/usr/lib/sekai/polkit-agent"
+install -Dm755 "$SRC/lib/nm-agent"     "$STAGE/usr/lib/sekai/nm-agent"
 install -Dm755 "$SRC/sekai-terminal"  "$STAGE/usr/bin/sekai-terminal"
 # 기본 화면 모드 (X11) — 그래픽 드라이버가 없을 때
 for f in "$SRC"/lib/x11/*; do
@@ -59,6 +66,11 @@ for f in "$SRC/sekaisettings/pages"/*.py; do install -Dm644 "$f" "$DIST/sekaiset
 mkdir -p "$DIST/sekaiadmin/pages"
 for f in "$SRC/sekaiadmin"/*.py;        do install -Dm644 "$f" "$DIST/sekaiadmin/$(basename "$f")"; done
 for f in "$SRC/sekaiadmin/pages"/*.py;  do install -Dm644 "$f" "$DIST/sekaiadmin/pages/$(basename "$f")"; done
+# 파일 탐색기 (sekai-files) · 메모장 (sekai-notepad) · 계산기 (sekai-calc) · 사진 (sekai-photos)
+for pkg in sekaifiles sekainotepad sekaicalc sekaiphotos; do
+    mkdir -p "$DIST/$pkg"
+    for f in "$SRC/$pkg"/*.py; do install -Dm644 "$f" "$DIST/$pkg/$(basename "$f")"; done
+done
 
 # settings.css 는 패키지 옆이 아니라 /usr/share 에 있으므로 app.py 의 폴백 경로가 찾는다
 
@@ -104,8 +116,9 @@ Depends: python3, python3-gi, python3-gi-cairo, gir1.2-gtk-3.0,
  gir1.2-gtklayershell-0.1, hyprland, kitty, foot, fuzzel,
  adwaita-icon-theme, papirus-icon-theme, swaybg, swayidle,
  gir1.2-gtksessionlock-0.1, libgtk-session-lock0, python3-pampy,
- libglib2.0-bin, sekai-winshot, gir1.2-gudev-1.0
-Recommends: wireplumber, pavucontrol, swaylock,
+ libglib2.0-bin, sekai-winshot, gir1.2-gudev-1.0, pulseaudio-utils,
+ gir1.2-gtksource-4, gir1.2-polkit-1.0
+Recommends: wireplumber, swaylock,
  network-manager-gnome
 Description: SekaiOS desktop shell
  Panel, taskbar, start menu and the system settings app for
@@ -205,6 +218,13 @@ if [ "$1" = "configure" ]; then
         fi
     done
     rmdir /usr/share/sekai/grub 2>/dev/null || true
+    # "폴더에 표시"(org.freedesktop.FileManager1)는 파일 탐색기(sekai-files)가 맡는다. 예전 설치본에
+    #   Thunar 가 남아 있으면 같은 이름을 서비스 파일 둘이 주장해 어느 쪽이 뜰지 모른다 → Thunar 것을
+    #   옆 이름으로 옮겨 둔다 (dpkg-divert — Thunar 가 업데이트돼도 그 파일은 옮긴 이름으로 깔린다)
+    t=/usr/share/dbus-1/services/org.xfce.Thunar.FileManager1.service
+    if ! dpkg-divert --listpackage "$t" 2>/dev/null | grep -qx sekai-desktop; then
+        dpkg-divert --package sekai-desktop --rename --quiet --divert "$t.sekai-off" --add "$t" || true
+    fi
 fi
 if [ "$1" = "configure" ] || [ "$1" = "triggered" ]; then
     # 부팅 메뉴(shim + GRUB)를 이 패키지 기준으로 다시 쓴다 — 설치된 디스크일 때만.
@@ -247,6 +267,8 @@ if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
         fi
     done
     [ -e /etc/grub.d/09_sekaios ] && chmod 644 /etc/grub.d/09_sekaios
+    dpkg-divert --package sekai-desktop --rename --quiet \
+        --remove /usr/share/dbus-1/services/org.xfce.Thunar.FileManager1.service 2>/dev/null || true
     # 설치된 디스크면 부팅 메뉴를 다시 쓴다 (없어진 테마·항목을 가리키지 않게)
     if [ -f /boot/grub/grub.cfg ] && command -v update-grub >/dev/null; then
         update-grub >/dev/null 2>&1 || true
@@ -280,14 +302,14 @@ Depends: sekai-shell (= ${FULL}),
  xserver-xorg-core, xserver-xorg-video-fbdev, xserver-xorg-input-libinput, xserver-xorg-legacy,
  xinit, x11-xserver-utils, xfwm4, xfconf, sxhkd, xcape, xsecurelock, xss-lock, maim, slop, xclip,
  xdotool, xterm, gir1.2-wnck-3.0,
- wl-clipboard, cliphist, lxpolkit, libnotify-bin, wayland-utils,
+ wl-clipboard, cliphist, libnotify-bin, wayland-utils,
  pipewire, pipewire-audio, pipewire-pulse, wireplumber,
  network-manager, network-manager-gnome, network-manager-l10n, systemd-resolved,
  wpasupplicant, wireless-regdb, iw, ntfs-3g, exfatprogs,
  bluez, wlsunset,
- cups, avahi-daemon, libnss-mdns, ipp-usb, system-config-printer,
- tumbler, gvfs, gvfs-backends,
- qt6-wayland, xdg-user-dirs, xdg-user-dirs-gtk,
+ cups, cups-client, cups-ipp-utils, avahi-daemon, libnss-mdns, ipp-usb,
+ gvfs, gvfs-backends, udisks2, libarchive-tools,
+ qt6-wayland, xdg-user-dirs,
  fonts-pretendard, fonts-dejavu, fonts-jetbrains-mono, fonts-nanum,
  fonts-noto-color-emoji, fonts-symbola,
  papirus-icon-theme, adwaita-icon-theme,
@@ -298,8 +320,9 @@ Depends: sekai-shell (= ${FULL}),
  libgl1-mesa-dri, libegl-mesa0, mesa-utils
 Recommends: htop, tmux, tree, ncdu, vim, nano, git, curl, wget,
  bash-completion, less, man-db,
- chromium, thunar, thunar-volman, mousepad, ristretto, evince, xarchiver, galculator,
- pavucontrol, cups-pk-helper
+ chromium, cups-pk-helper,
+ webp-pixbuf-loader, heif-gdk-pixbuf, libavif-gdk-pixbuf,
+ poppler-utils
 Conflicts: fnott
 Description: SekaiOS desktop (metapackage)
  Pulls in everything that makes up the SekaiOS desktop: the Hyprland

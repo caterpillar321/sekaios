@@ -1,0 +1,6 @@
+[Desktop Entry]
+# SekaiOS: 시작 메뉴·검색·연결 프로그램에서 숨긴다 — XFCE 파일 관리자의 부속
+Type=Application
+Name=Bulk Rename
+Exec=thunar --bulk-rename %F
+NoDisplay=true

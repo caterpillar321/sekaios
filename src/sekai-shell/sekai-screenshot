@@ -31,7 +31,7 @@ if [ -z "${WAYLAND_DISPLAY:-}" ] || [ "${XDG_SESSION_TYPE:-}" = x11 ]; then
           "스크린샷을 찍었습니다" "클립보드에 복사했고 스크린샷 폴더에 저장했습니다." 2>/dev/null)
       case "$act" in
           open|default) xdg-open "$file" ;;
-          folder) thunar "$dir" 2>/dev/null || xdg-open "$dir" ;;
+          folder) sekai-files --select "$file" 2>/dev/null || xdg-open "$dir" ;;
       esac ) >/dev/null 2>&1 &
     exit 0
 fi
@@ -75,6 +75,6 @@ wl-copy --type image/png < "$file" >/dev/null 2>&1
         "스크린샷을 찍었습니다" "클립보드에 복사했고 스크린샷 폴더에 저장했습니다." 2>/dev/null)
     case "$act" in
         open|default) xdg-open "$file" ;;
-        folder) thunar "$dir" 2>/dev/null || xdg-open "$dir" ;;
+        folder) sekai-files --select "$file" 2>/dev/null || xdg-open "$dir" ;;
     esac
 ) >/dev/null 2>&1 &

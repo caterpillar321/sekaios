@@ -1,0 +1,6 @@
+[Desktop Entry]
+# SekaiOS: 시작 메뉴·검색·연결 프로그램에서 숨긴다 — PDF 는 크로미움의 PDF 보기로 연다
+Type=Application
+Name=Document Viewer
+Exec=evince %U
+NoDisplay=true

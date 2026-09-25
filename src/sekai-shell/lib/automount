@@ -1,0 +1,330 @@
+#!/usr/bin/python3
+"""SekaiOS — 이동식 드라이브 자동 연결 (thunar-volman 대신).
+
+세션에 하나만 돈다 (세션 버스 이름 org.sekaios.Automount — 이미 누가 가졌으면 조용히 끝난다).
+hyprland.conf 의 exec-once · x11/session 이 로그인할 때 띄운다.
+
+- 로그인할 때 이미 꽂혀 있던 이동식 드라이브는 조용히 연결(마운트)만 한다
+- 새로 꽂으면 연결하고 알림: "USB 드라이브" / "<이름>이(가) 연결되었습니다." [폴더 열기] → sekai-files <마운트 경로>
+- 암호화된 드라이브(LUKS·BitLocker)는 암호를 묻지 않는다: "암호화된 드라이브가 연결되었습니다.
+  파일 탐색기에서 열 수 있습니다." [폴더 열기] → sekai-files computer:/// (내 PC 에서 열면 탐색기가 암호를 묻는다)
+- 내장 디스크·루프 장치·설치 USB(라이브 매체가 든 디스크)는 건드리지 않는다 — Gio 의 should_automount 에
+  더해 드라이브가 이동식(removable·media-removable)인지 본다
+- 꺼내기·연결 해제는 할 일 없음 (탐색기가 스스로 화면을 고친다)
+- 연결 실패는 기록에 한 줄만: ~/.local/state/sekai/automount.log (로그인마다 새로)
+"""
+import os
+import re
+import sys
+import time
+
+import gi
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib  # noqa: E402
+
+try:
+    gi.require_version("GUdev", "1.0")
+    from gi.repository import GUdev  # noqa: E402
+except (ValueError, ImportError):
+    GUdev = None
+
+BUS_NAME = "org.sekaios.Automount"
+LOG = os.path.expanduser("~/.local/state/sekai/automount.log")
+APP_NAME = "파일 탐색기"
+N_BUS, N_PATH, N_IFACE = "org.freedesktop.Notifications", "/org/freedesktop/Notifications", \
+    "org.freedesktop.Notifications"
+EXPIRED = 1                     # NotificationClosed 사유 — 토스트만 사라지고 알림 센터에는 남아 있다
+LIVE_MEDIA = ("/run/live/medium", "/lib/live/mount/medium", "/run/initramfs/live", "/cdrom")
+
+
+def log(msg):
+    try:
+        os.makedirs(os.path.dirname(LOG), exist_ok=True)
+        with open(LOG, "a", encoding="utf-8") as f:
+            f.write(time.strftime("%H:%M:%S ") + msg + "\n")
+    except OSError:
+        pass
+
+
+def josa_i(word):
+    """이/가 — 한글·숫자로 끝나지 않으면 "이(가)" """
+    last = next((c for c in reversed(word or "") if not c.isspace() and c not in ")]}'\""), "")
+    if "가" <= last <= "힣":
+        return "이" if (ord(last) - 0xAC00) % 28 else "가"
+    if last and last in "0123456789":
+        return "이" if last in "013678" else "가"
+    return "이(가)"
+
+
+# ── 장치 ─────────────────────────────────────────────────────
+def _unescape(s):
+    return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), s)
+
+
+def _mounts():
+    """{마운트 지점: 장치(실제 경로)}"""
+    out = {}
+    try:
+        with open("/proc/self/mounts", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 2 and parts[0].startswith("/dev/"):
+                    out[_unescape(parts[1])] = os.path.realpath(parts[0])
+    except OSError:
+        pass
+    return out
+
+
+def _disk_of(dev):
+    """/dev/sdb1 → sdb (파티션이면 그 디스크, 아니면 자기)"""
+    name = os.path.basename(os.path.realpath(dev or ""))
+    if not name:
+        return ""
+    sysp = os.path.realpath(f"/sys/class/block/{name}")
+    if os.path.exists(os.path.join(sysp, "partition")):
+        return os.path.basename(os.path.dirname(sysp))
+    return name
+
+
+def _live_disks():
+    """라이브(설치) 매체가 든 디스크들 — 그 디스크의 다른 파티션도 건드리지 않는다"""
+    m = _mounts()
+    return {_disk_of(m[p]) for p in LIVE_MEDIA if p in m}
+
+
+def _encrypted(volume):
+    """LUKS·BitLocker — udev 가 알려 준다 (ID_FS_USAGE=crypto)"""
+    dev = volume.get_identifier(Gio.VOLUME_IDENTIFIER_KIND_UNIX_DEVICE)
+    if not dev or GUdev is None:
+        return False
+    try:
+        d = GUdev.Client.new([]).query_by_device_file(dev)
+    except Exception:
+        return False
+    return d is not None and (d.get_property("ID_FS_USAGE") == "crypto" or
+                              (d.get_property("ID_FS_TYPE") or "") in ("crypto_LUKS", "BitLocker"))
+
+
+def _eligible(volume):
+    """자동으로 연결해도 되는 이동식 드라이브인가"""
+    try:
+        if not volume.can_mount() or not volume.should_automount():
+            return False
+        drive = volume.get_drive()
+        if drive is None or not (drive.is_removable() or drive.is_media_removable()):
+            return False            # 내장 디스크·루프 장치·네트워크
+        dev = volume.get_identifier(Gio.VOLUME_IDENTIFIER_KIND_UNIX_DEVICE)
+        if dev:
+            real = os.path.realpath(dev)
+            if real in _mounts().values():
+                return False        # 이미 다른 곳에 연결돼 있다 (라이브 매체 등)
+            if _disk_of(real) in _live_disks():
+                return False
+        return True
+    except Exception as e:
+        log(f"검사 실패: {e}")
+        return False
+
+
+def _label(volume):
+    return volume.get_name() or "이동식 드라이브"
+
+
+def _kind(volume):
+    """알림 제목 — USB 드라이브 · 메모리 카드 · CD/DVD 드라이브"""
+    names = []
+    for obj in (volume, volume.get_drive()):
+        icon = obj.get_icon() if obj is not None else None
+        if isinstance(icon, Gio.ThemedIcon):
+            names += icon.get_names()
+    s = " ".join(names)
+    if "optical" in s:
+        return "CD/DVD 드라이브"
+    if "flash" in s or "sdmmc" in s or "media-memory" in s:
+        return "메모리 카드"
+    return "USB 드라이브"
+
+
+def _icon_name(volume):
+    icon = volume.get_icon()
+    if isinstance(icon, Gio.ThemedIcon):
+        for n in icon.get_names():
+            if not n.endswith("-symbolic"):
+                return n
+    return "drive-removable-media"
+
+
+class _Quiet(Gio.MountOperation):
+    """암호·질문을 띄우지 않는 연결 — 암호가 필요하면 그만두고 표시만 해 둔다"""
+
+    def __init__(self):
+        super().__init__()
+        self.wanted_password = False
+        self.connect("ask-password", self._password)
+        self.connect("ask-question", self._question)
+
+    def _password(self, op, *_):
+        self.wanted_password = True
+        op.reply(Gio.MountOperationResult.ABORTED)
+
+    def _question(self, op, *_):
+        op.reply(Gio.MountOperationResult.ABORTED)
+
+
+# ── 알림 ─────────────────────────────────────────────────────
+class Notifier:
+    def __init__(self, bus):
+        self.bus = bus
+        self.pending = {}                    # 알림 번호 → 열 곳
+        if bus is not None:
+            bus.signal_subscribe(None, N_IFACE, "ActionInvoked", N_PATH, None, Gio.DBusSignalFlags.NONE,
+                                 self._action)
+            bus.signal_subscribe(None, N_IFACE, "NotificationClosed", N_PATH, None, Gio.DBusSignalFlags.NONE,
+                                 self._closed)
+
+    def send(self, summary, body, icon, target):
+        if self.bus is None:
+            return
+        hints = {"desktop-entry": GLib.Variant("s", "sekai-files"), "urgency": GLib.Variant("y", 1)}
+        params = GLib.Variant("(susssasa{sv}i)", (APP_NAME, 0, icon, summary, body,
+                                                   ["default", "폴더 열기", "open", "폴더 열기"], hints, -1))
+
+        def sent(conn, res):
+            try:
+                nid = conn.call_finish(res).unpack()[0]
+            except GLib.Error as e:
+                log(f"알림을 보내지 못함: {e.message}")
+                return
+            self.pending[nid] = target
+            while len(self.pending) > 50:
+                self.pending.pop(next(iter(self.pending)))
+        self.bus.call(N_BUS, N_PATH, N_IFACE, "Notify", params, GLib.VariantType("(u)"),
+                      Gio.DBusCallFlags.NONE, 5000, None, sent)
+
+    def _action(self, _conn, _sender, _path, _iface, _sig, params):
+        nid, key = params.unpack()
+        target = self.pending.get(nid)
+        if target is not None and key in ("default", "open"):
+            open_files(target)
+
+    def _closed(self, _conn, _sender, _path, _iface, _sig, params):
+        nid, reason = params.unpack()
+        if reason != EXPIRED:                # 시간이 지나 토스트만 사라진 것은 센터에서 누를 수 있다
+            self.pending.pop(nid, None)
+
+
+def open_files(target):
+    try:
+        Gio.Subprocess.new(["sekai-files", target], Gio.SubprocessFlags.NONE)
+    except GLib.Error as e:
+        log(f"탐색기를 열지 못함: {e.message}")
+        try:
+            uri = target if "://" in target else Gio.File.new_for_path(target).get_uri()
+            Gio.AppInfo.launch_default_for_uri(uri, None)
+        except GLib.Error:
+            pass
+
+
+# ── 연결 ─────────────────────────────────────────────────────
+class Automount:
+    def __init__(self, bus):
+        self.notifier = Notifier(bus)
+        self.vm = Gio.VolumeMonitor.get()
+        self.busy = set()
+        for v in self.vm.get_volumes():
+            if v.get_mount() is None and _eligible(v) and not _encrypted(v):
+                self.mount(v, announce=False)
+        self.vm.connect("volume-added", self._added)
+
+    def _added(self, _vm, v):
+        # 이미 연결돼 있으면 알림만 (다른 프로그램이 먼저 연결했을 때)
+        m = v.get_mount()
+        if m is not None:
+            drive = v.get_drive()
+            if drive is not None and (drive.is_removable() or drive.is_media_removable()) and v.should_automount():
+                self._announce(v, m)
+            return
+        if not _eligible(v):
+            return
+        if _encrypted(v):
+            self._announce_locked(v)
+            return
+        self.mount(v, announce=True)
+
+    def mount(self, v, announce):
+        key = v.get_identifier(Gio.VOLUME_IDENTIFIER_KIND_UNIX_DEVICE) or v.get_uuid() or v.get_name()
+        if key in self.busy:
+            return
+        self.busy.add(key)
+        op = _Quiet()
+
+        def done(vol, res):
+            self.busy.discard(key)
+            try:
+                vol.mount_finish(res)
+            except GLib.Error as e:
+                if op.wanted_password:
+                    if announce:
+                        self._announce_locked(vol)
+                    return
+                if not e.matches(Gio.io_error_quark(), Gio.IOErrorEnum.FAILED_HANDLED):
+                    log(f"연결 실패 {_label(vol)} ({key}): {e.message}")
+                return
+            m = vol.get_mount()
+            log(f"연결 {_label(vol)} → {m.get_root().get_path() if m else '?'}")
+            if announce and m is not None:
+                self._announce(vol, m)
+        v.mount(Gio.MountMountFlags.NONE, op, None, done)
+
+    def _announce(self, v, m):
+        root = m.get_root()
+        target = root.get_path() or root.get_uri()
+        name = _label(v)
+        self.notifier.send(_kind(v), f"{name}{josa_i(name)} 연결되었습니다.", _icon_name(v), target)
+
+    def _announce_locked(self, v):
+        self.notifier.send(_kind(v), "암호화된 드라이브가 연결되었습니다. 파일 탐색기에서 열 수 있습니다.",
+                           _icon_name(v), "computer:///")
+
+
+def _own_name():
+    """세션 버스 이름을 가진다 — (버스, 가졌나). 버스가 없으면 (None, True): 알림 없이 연결만"""
+    try:
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    except GLib.Error as e:
+        log(f"세션 버스 없음: {e.message}")
+        return None, True
+    try:
+        r = bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "RequestName",
+                          GLib.Variant("(su)", (BUS_NAME, 4)),          # 4 = DO_NOT_QUEUE
+                          GLib.VariantType("(u)"), Gio.DBusCallFlags.NONE, 5000, None)
+        return bus, r.unpack()[0] in (1, 4)                              # 1 = 주인, 4 = 이미 내 것
+    except GLib.Error as e:
+        log(f"이름을 얻지 못함: {e.message}")
+        return bus, True
+
+
+def main():
+    bus, mine = _own_name()
+    if not mine:
+        return 0                            # 이미 도는 중
+    try:
+        os.remove(LOG)                      # 이번 로그인 것만 남긴다
+    except OSError:
+        pass
+    loop = GLib.MainLoop()
+    Automount(bus)
+    try:
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, 15, lambda: (loop.quit(), False)[1])
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, 2, lambda: (loop.quit(), False)[1])
+    except AttributeError:
+        pass
+    if bus is not None:
+        # 세션이 끝나 버스가 끊기면 같이 끝난다
+        bus.connect("closed", lambda *_: loop.quit())
+    loop.run()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

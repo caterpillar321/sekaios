@@ -8,7 +8,13 @@
 #  이 스크립트가 끝나면 X 가 닫히고 로그인 화면으로 돌아간다 (로그아웃).
 # ═══════════════════════════════════════════════════════════════
 export XDG_SESSION_TYPE=x11
-export XDG_CURRENT_DESKTOP=SekaiOS:XFCE
+# XFCE 를 붙이지 않는다 — 붙이면 xdg-open 이 XFCE 방식(exo-open)으로 XFCE 의 기본 앱(Thunar 등)을 연다.
+#   창 관리자만 xfwm4 일 뿐 데스크톱은 SekaiOS 다
+export XDG_CURRENT_DESKTOP=SekaiOS
+# Hyprland 세션(hyprland.conf env)과 같은 SekaiOS 설정·데이터 계층 — 없으면 이 모드에서만
+#   메뉴에서 숨긴 항목(다른 DE 의 설정 창 등, /usr/share/sekai/data/applications)이 다시 보였다
+export XDG_CONFIG_DIRS=/etc/xdg/sekai:/etc/xdg
+export XDG_DATA_DIRS=/usr/share/sekai/data:/usr/local/share:/usr/share
 unset WAYLAND_DISPLAY
 export GDK_BACKEND=x11
 export QT_QPA_PLATFORM=xcb
@@ -18,7 +24,7 @@ export SEKAI_SESSION_PID=$$
 X=/usr/lib/sekai/x11
 
 dbus-update-activation-environment --systemd DISPLAY XAUTHORITY XDG_SESSION_TYPE \
-    XDG_CURRENT_DESKTOP GDK_BACKEND GTK_IM_MODULE QT_IM_MODULE XMODIFIERS 2>/dev/null
+    XDG_CURRENT_DESKTOP GDK_BACKEND GTK_IM_MODULE QT_IM_MODULE XMODIFIERS XDG_CONFIG_DIRS XDG_DATA_DIRS 2>/dev/null
 
 xsetroot -cursor_name left_ptr -solid '#151517' 2>/dev/null
 xset s off 2>/dev/null
@@ -36,8 +42,10 @@ xcape -e 'Super_L=Control_L|Escape' >/dev/null 2>&1 &
 sekai-idle >/dev/null 2>&1 &
 /usr/lib/sekai/keep-running sekai-desk >/dev/null 2>&1 &
 /usr/lib/sekai/keep-running sekai-panel >/dev/null 2>&1 &
-lxpolkit >/dev/null 2>&1 &
-nm-applet --indicator >/dev/null 2>&1 &
+/usr/lib/sekai/keep-running /usr/lib/sekai/polkit-agent >/dev/null 2>&1 &
+/usr/lib/sekai/keep-running /usr/lib/sekai/nm-agent >/dev/null 2>&1 &
+nm-applet --indicator --no-agent >/dev/null 2>&1 &
+/usr/lib/sekai/keep-running /usr/lib/sekai/automount >/dev/null 2>&1 &
 
 # 왜 기본 화면 모드인지 알려 주기
 ( sleep 6

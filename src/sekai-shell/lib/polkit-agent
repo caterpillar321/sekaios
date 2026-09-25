@@ -1,0 +1,1038 @@
+#!/usr/bin/env python3
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 관리자 권한 확인 — polkit 인증 에이전트 ("사용자 계정 컨트롤")
+#
+#  lxpolkit 을 대신한다. 앱이 관리자 권한을 요청하면(pkexec, systemd·udisks·NetworkManager 의
+#  권한 확인) polkitd 가 이 세션의 에이전트에게 "물어봐 달라"고 부른다. 그때 윈도우의 사용자 계정 컨트롤처럼
+#  화면을 어둡게 덮고 가운데에 카드를 띄운다.
+#
+#  구조
+#    · org.freedesktop.PolicyKit1.AuthenticationAgent 를 Gio 로 직접 내보낸다 (시스템 버스).
+#      PolkitAgent.Listener 를 파이썬에서 상속하면 가상 함수(vfunc) 연결이 불안정해서 쓰지 않는다.
+#      BeginAuthentication 은 답을 미뤄 두었다가(invocation 을 쥐고) 사용자가 끝내면 답한다.
+#    · 암호 확인은 PolkitAgent.Session — 루트 권한 도우미(polkit-agent-helper-1)가 PAM 으로 확인하고
+#      polkitd 에 직접 알린다. 우리는 암호를 넘겨줄 뿐, 암호가 맞는지 스스로 판단하지 않는다.
+#    · polkitd 가 다시 시작되면(버스 이름이 새로 생기면) 다시 등록한다.
+#    · 요청이 겹치면 줄을 세워 하나씩 띄운다. CancelAuthentication 이 오면 그 창을 닫는다.
+#    · 같은 세션에 다른 에이전트가 이미 있으면 한 줄 남기고 2 로 끝난다 (keep-running 이 나중에 다시 해 본다).
+#
+#  실행: /usr/lib/sekai/polkit-agent      (세션이 띄운다 — hyprland.conf, x11/session)
+#  SEKAI_DEBUG=1 이면 받은 요청을 표준 오류로 자세히 남긴다 (암호는 남기지 않는다).
+# ═══════════════════════════════════════════════════════════════
+import grp
+import os
+import pwd
+import re
+import shlex
+import shutil
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+for _d in (HERE, os.path.dirname(HERE)):              # 개발 트리(src/sekai-shell/lib)에서도 돌게
+    if os.path.isdir(os.path.join(_d, "sekaishell")):
+        sys.path.insert(0, _d)
+        break
+
+import gi  # noqa: E402
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+gi.require_version("Polkit", "1.0")
+gi.require_version("PolkitAgent", "1.0")
+from gi.repository import Gdk, Gio, GLib, Gtk, Polkit, PolkitAgent  # noqa: E402
+
+from sekaishell import authui  # noqa: E402
+
+DEBUG = os.environ.get("SEKAI_DEBUG") == "1"
+
+PK_NAME = "org.freedesktop.PolicyKit1"
+PK_PATH = "/org/freedesktop/PolicyKit1/Authority"
+PK_IFACE = "org.freedesktop.PolicyKit1.Authority"
+AGENT_PATH = "/org/sekaios/PolicyKit1/AuthenticationAgent"
+ERR_CANCELLED = "org.freedesktop.PolicyKit1.Error.Cancelled"
+ERR_FAILED = "org.freedesktop.PolicyKit1.Error.Failed"
+
+XML = """
+<node>
+  <interface name="org.freedesktop.PolicyKit1.AuthenticationAgent">
+    <method name="BeginAuthentication">
+      <arg type="s" name="action_id" direction="in"/>
+      <arg type="s" name="message" direction="in"/>
+      <arg type="s" name="icon_name" direction="in"/>
+      <arg type="a{ss}" name="details" direction="in"/>
+      <arg type="s" name="cookie" direction="in"/>
+      <arg type="a(sa{sv})" name="identities" direction="in"/>
+    </method>
+    <method name="CancelAuthentication">
+      <arg type="s" name="cookie" direction="in"/>
+    </method>
+  </interface>
+</node>
+"""
+
+
+def log(*a):
+    print("[polkit-agent]", *a, file=sys.stderr, flush=True)
+
+
+def dbg(*a):
+    if DEBUG:
+        log(*a)
+
+
+# ═══ 무엇을 하려는지 — 한국어 문장 ════════════════════════════════
+# 작업 ID(정확히) 또는 접두어 → (문장, 아이콘 후보). 긴 접두어가 먼저 맞는다.
+#   정책 파일에 한국어 메시지가 없어 polkit 이 영어로 보내는 것들 (Debian 의 polkit 은 한국어 번역이 없다)
+ACTIONS = {
+    # systemd — 서비스
+    "org.freedesktop.systemd1.manage-units": ("서비스를 시작하거나 중지하려고 합니다", ["preferences-system-services", "system-run"]),
+    "org.freedesktop.systemd1.manage-unit-files": ("서비스를 사용하거나 사용하지 않도록 설정하려고 합니다", ["preferences-system-services", "system-run"]),
+    "org.freedesktop.systemd1.reload-daemon": ("서비스 관리자 설정을 다시 읽으려고 합니다", ["preferences-system-services"]),
+    "org.freedesktop.systemd1.set-environment": ("서비스 관리자의 환경 변수를 바꾸려고 합니다", ["preferences-system-services"]),
+    "org.freedesktop.systemd1.bypass-dump-ratelimit": ("시스템 진단 기록을 만들려고 합니다", ["utilities-system-monitor"]),
+    "org.freedesktop.systemd1.": ("시스템 서비스를 관리하려고 합니다", ["preferences-system-services"]),
+    # logind — 전원·세션
+    "org.freedesktop.login1.reboot": ("컴퓨터를 다시 시작하려고 합니다", ["system-reboot"]),
+    "org.freedesktop.login1.power-off": ("컴퓨터를 끄려고 합니다", ["system-shutdown"]),
+    "org.freedesktop.login1.halt": ("컴퓨터를 끄려고 합니다", ["system-shutdown"]),
+    "org.freedesktop.login1.suspend": ("컴퓨터를 절전 모드로 전환하려고 합니다", ["system-suspend"]),
+    "org.freedesktop.login1.hibernate": ("컴퓨터를 최대 절전 모드로 전환하려고 합니다", ["system-hibernate", "system-suspend"]),
+    "org.freedesktop.login1.inhibit-": ("시스템 종료나 절전을 잠시 막으려고 합니다", ["system-shutdown"]),
+    "org.freedesktop.login1.set-user-linger": ("로그아웃한 뒤에도 사용자 프로그램이 계속 실행되게 하려고 합니다", ["system-users"]),
+    "org.freedesktop.login1.set-self-linger": ("로그아웃한 뒤에도 내 프로그램이 계속 실행되게 하려고 합니다", ["system-users"]),
+    "org.freedesktop.login1.set-reboot-to-firmware-setup": ("다음 시작 때 펌웨어(UEFI) 설정으로 들어가게 하려고 합니다", ["system-reboot"]),
+    "org.freedesktop.login1.set-reboot-to-boot-loader": ("다음 시작 때 부팅 메뉴를 표시하려고 합니다", ["system-reboot"]),
+    "org.freedesktop.login1.set-reboot-parameter": ("다시 시작 방법을 설정하려고 합니다", ["system-reboot"]),
+    "org.freedesktop.login1.set-wall-message": ("모든 사용자에게 보낼 알림 메시지를 설정하려고 합니다", ["dialog-information"]),
+    "org.freedesktop.login1.attach-device": ("장치를 이 좌석에 연결하려고 합니다", ["computer"]),
+    "org.freedesktop.login1.flush-devices": ("좌석에 연결한 장치 설정을 초기화하려고 합니다", ["computer"]),
+    "org.freedesktop.login1.chvt": ("다른 가상 콘솔로 전환하려고 합니다", ["utilities-terminal"]),
+    "org.freedesktop.login1.lock-sessions": ("모든 사용자 세션을 잠그려고 합니다", ["system-lock-screen"]),
+    "org.freedesktop.login1.manage": ("다른 사용자의 세션을 관리하려고 합니다", ["system-users"]),
+    "org.freedesktop.login1.": ("로그인·전원 설정을 바꾸려고 합니다", ["system-shutdown"]),
+    # udisks2 — 드라이브
+    "org.freedesktop.udisks2.filesystem-mount": ("드라이브를 연결하려고 합니다", ["drive-harddisk"]),
+    "org.freedesktop.udisks2.filesystem-unmount-others": ("다른 사용자가 연결한 드라이브를 분리하려고 합니다", ["drive-harddisk"]),
+    "org.freedesktop.udisks2.filesystem-fstab": ("드라이브 연결 설정(fstab)을 바꾸려고 합니다", ["drive-harddisk"]),
+    "org.freedesktop.udisks2.filesystem-take-ownership": ("드라이브의 파일 소유권을 가져오려고 합니다", ["drive-harddisk"]),
+    "org.freedesktop.udisks2.encrypted-unlock": ("암호화된 드라이브의 잠금을 해제하려고 합니다", ["drive-harddisk-encrypted", "drive-harddisk"]),
+    "org.freedesktop.udisks2.encrypted-lock-others": ("다른 사용자가 연 암호화 드라이브를 잠그려고 합니다", ["drive-harddisk-encrypted", "drive-harddisk"]),
+    "org.freedesktop.udisks2.encrypted-change-passphrase": ("암호화된 드라이브의 암호를 바꾸려고 합니다", ["drive-harddisk-encrypted", "drive-harddisk"]),
+    "org.freedesktop.udisks2.encrypted-": ("암호화된 드라이브를 관리하려고 합니다", ["drive-harddisk-encrypted", "drive-harddisk"]),
+    "org.freedesktop.udisks2.modify-device": ("드라이브를 포맷하거나 파티션을 바꾸려고 합니다", ["drive-harddisk"]),
+    "org.freedesktop.udisks2.modify-system-configuration": ("드라이브 시스템 설정을 바꾸려고 합니다", ["drive-harddisk"]),
+    "org.freedesktop.udisks2.loop-": ("디스크 이미지를 연결하려고 합니다", ["media-optical", "drive-harddisk"]),
+    "org.freedesktop.udisks2.power-off-drive": ("드라이브를 안전하게 제거하려고 합니다", ["drive-removable-media", "drive-harddisk"]),
+    "org.freedesktop.udisks2.eject-media": ("미디어를 꺼내려고 합니다", ["media-eject", "drive-optical"]),
+    "org.freedesktop.udisks2.rescan": ("드라이브를 다시 검색하려고 합니다", ["drive-harddisk"]),
+    "org.freedesktop.udisks2.ata-": ("드라이브의 하드웨어 설정을 바꾸려고 합니다", ["drive-harddisk"]),
+    "org.freedesktop.udisks2.open-device": ("드라이브를 직접 열려고 합니다", ["drive-harddisk"]),
+    "org.freedesktop.udisks2.manage-swapspace": ("페이징 파일(스왑)을 관리하려고 합니다", ["drive-harddisk"]),
+    "org.freedesktop.udisks2.manage-md-raid": ("RAID 드라이브를 관리하려고 합니다", ["drive-harddisk"]),
+    "org.freedesktop.udisks2.cancel-job": ("다른 사용자의 드라이브 작업을 취소하려고 합니다", ["drive-harddisk"]),
+    "org.freedesktop.udisks2.read-system-configuration-secrets": ("드라이브 설정에 저장된 암호를 읽으려고 합니다", ["drive-harddisk"]),
+    "org.freedesktop.udisks2.": ("드라이브를 관리하려고 합니다", ["drive-harddisk"]),
+    # NetworkManager
+    "org.freedesktop.NetworkManager.settings.modify.system": ("모든 사용자의 네트워크 연결 설정을 바꾸려고 합니다", ["network-workgroup", "network-wired"]),
+    "org.freedesktop.NetworkManager.settings.modify.own": ("네트워크 연결 설정을 바꾸려고 합니다", ["network-workgroup", "network-wired"]),
+    "org.freedesktop.NetworkManager.settings.modify.hostname": ("컴퓨터 이름을 바꾸려고 합니다", ["computer"]),
+    "org.freedesktop.NetworkManager.settings.modify.global-dns": ("전체 DNS 설정을 바꾸려고 합니다", ["network-workgroup"]),
+    "org.freedesktop.NetworkManager.network-control": ("네트워크 연결을 켜거나 끄려고 합니다", ["network-workgroup", "network-wired"]),
+    "org.freedesktop.NetworkManager.enable-disable-wifi": ("Wi-Fi를 켜거나 끄려고 합니다", ["network-wireless"]),
+    "org.freedesktop.NetworkManager.enable-disable-wwan": ("모바일 데이터를 켜거나 끄려고 합니다", ["network-cellular", "network-wireless"]),
+    "org.freedesktop.NetworkManager.enable-disable-network": ("네트워크를 켜거나 끄려고 합니다", ["network-workgroup"]),
+    "org.freedesktop.NetworkManager.enable-disable-connectivity-checking": ("인터넷 연결 확인 기능을 켜거나 끄려고 합니다", ["network-workgroup"]),
+    "org.freedesktop.NetworkManager.enable-disable-statistics": ("네트워크 사용량 통계를 켜거나 끄려고 합니다", ["network-workgroup"]),
+    "org.freedesktop.NetworkManager.wifi.share": ("Wi-Fi로 이 컴퓨터의 연결을 공유하려고 합니다 (모바일 핫스팟)", ["network-wireless"]),
+    "org.freedesktop.NetworkManager.wifi.scan": ("Wi-Fi 네트워크를 검색하려고 합니다", ["network-wireless"]),
+    "org.freedesktop.NetworkManager.sleep-wake": ("네트워크를 절전 상태로 바꾸려고 합니다", ["network-workgroup"]),
+    "org.freedesktop.NetworkManager.reload": ("네트워크 설정을 다시 읽으려고 합니다", ["network-workgroup"]),
+    "org.freedesktop.NetworkManager.checkpoint-rollback": ("네트워크 설정을 이전 상태로 되돌리려고 합니다", ["network-workgroup"]),
+    "org.freedesktop.NetworkManager.": ("네트워크 설정을 바꾸려고 합니다", ["network-workgroup", "network-wired"]),
+    "org.freedesktop.network1.": ("네트워크 설정을 바꾸려고 합니다", ["network-workgroup"]),
+    "org.freedesktop.resolve1.": ("DNS 설정을 바꾸려고 합니다", ["network-workgroup"]),
+    "org.freedesktop.ModemManager1.": ("모바일 광대역 모뎀을 제어하려고 합니다", ["network-cellular", "modem"]),
+    # PackageKit·apt — 소프트웨어
+    "org.freedesktop.packagekit.package-install-untrusted": ("서명이 확인되지 않은 소프트웨어를 설치하려고 합니다", ["system-software-install"]),
+    "org.freedesktop.packagekit.package-install": ("소프트웨어를 설치하려고 합니다", ["system-software-install"]),
+    "org.freedesktop.packagekit.package-reinstall": ("소프트웨어를 다시 설치하려고 합니다", ["system-software-install"]),
+    "org.freedesktop.packagekit.package-downgrade": ("소프트웨어를 이전 버전으로 되돌리려고 합니다", ["system-software-install"]),
+    "org.freedesktop.packagekit.package-remove": ("소프트웨어를 제거하려고 합니다", ["system-software-install"]),
+    "org.freedesktop.packagekit.system-update": ("시스템을 업데이트하려고 합니다", ["system-software-update"]),
+    "org.freedesktop.packagekit.trigger-offline-update": ("다시 시작할 때 업데이트를 설치하도록 예약하려고 합니다", ["system-software-update"]),
+    "org.freedesktop.packagekit.trigger-offline-upgrade": ("다시 시작할 때 새 버전으로 업그레이드하도록 예약하려고 합니다", ["system-software-update"]),
+    "org.freedesktop.packagekit.upgrade-system": ("운영 체제를 새 버전으로 업그레이드하려고 합니다", ["system-software-update"]),
+    "org.freedesktop.packagekit.system-sources-configure": ("소프트웨어 원본을 바꾸려고 합니다", ["system-software-update"]),
+    "org.freedesktop.packagekit.system-sources-refresh": ("소프트웨어 목록을 새로 고치려고 합니다", ["system-software-update"]),
+    "org.freedesktop.packagekit.repair-system": ("손상된 소프트웨어 설치를 복구하려고 합니다", ["system-software-update"]),
+    "org.freedesktop.packagekit.package-eula-accept": ("소프트웨어 사용권 계약에 동의하려고 합니다", ["system-software-install"]),
+    "org.freedesktop.packagekit.system-network-proxy-configure": ("소프트웨어를 받을 때 쓸 프록시를 설정하려고 합니다", ["system-software-update"]),
+    "org.freedesktop.packagekit.cancel-foreign": ("다른 사용자의 소프트웨어 작업을 취소하려고 합니다", ["system-software-update"]),
+    "org.freedesktop.packagekit.": ("소프트웨어를 설치하거나 바꾸려고 합니다", ["system-software-install"]),
+    "org.debian.apt.": ("소프트웨어를 설치하거나 바꾸려고 합니다", ["system-software-install"]),
+    "org.freedesktop.Flatpak.": ("Flatpak 앱을 설치하거나 바꾸려고 합니다", ["system-software-install"]),
+    "org.freedesktop.fwupd.": ("장치 펌웨어를 업데이트하려고 합니다", ["system-software-update"]),
+    # 시스템 설정
+    "org.freedesktop.hostname1.get-product-uuid": ("컴퓨터의 고유 번호(UUID)를 읽으려고 합니다", ["computer"]),
+    "org.freedesktop.hostname1.get-hardware-serial": ("컴퓨터의 일련 번호를 읽으려고 합니다", ["computer"]),
+    "org.freedesktop.hostname1.set-machine-info": ("컴퓨터 정보를 바꾸려고 합니다", ["computer"]),
+    "org.freedesktop.hostname1.": ("컴퓨터 이름을 바꾸려고 합니다", ["computer"]),
+    "org.freedesktop.timedate1.set-timezone": ("표준 시간대를 바꾸려고 합니다", ["preferences-system-time"]),
+    "org.freedesktop.timedate1.set-ntp": ("자동으로 시간 설정을 켜거나 끄려고 합니다", ["preferences-system-time"]),
+    "org.freedesktop.timedate1.set-local-rtc": ("하드웨어 시계 설정을 바꾸려고 합니다", ["preferences-system-time"]),
+    "org.freedesktop.timedate1.": ("시스템 날짜와 시간을 바꾸려고 합니다", ["preferences-system-time"]),
+    "org.freedesktop.timesync1.": ("시간 서버 설정을 바꾸려고 합니다", ["preferences-system-time"]),
+    "org.freedesktop.locale1.set-keyboard": ("시스템 키보드 레이아웃을 바꾸려고 합니다", ["preferences-desktop-keyboard"]),
+    "org.freedesktop.locale1.": ("시스템 언어와 지역 설정을 바꾸려고 합니다", ["preferences-desktop-locale"]),
+    "org.freedesktop.accounts.change-own-password": ("내 암호를 바꾸려고 합니다", ["dialog-password"]),
+    "org.freedesktop.accounts.change-own-user-data": ("내 계정 정보를 바꾸려고 합니다", ["system-users"]),
+    "org.freedesktop.accounts.set-login-screen": ("로그인 화면 설정을 바꾸려고 합니다", ["system-users"]),
+    "org.freedesktop.accounts.": ("사용자 계정을 관리하려고 합니다", ["system-users"]),
+    "org.freedesktop.home1.": ("사용자 홈 폴더를 관리하려고 합니다", ["system-users"]),
+    "org.freedesktop.machine1.": ("가상 머신이나 컨테이너를 관리하려고 합니다", ["computer"]),
+    "org.freedesktop.import1.": ("가상 머신이나 컨테이너 이미지를 가져오려고 합니다", ["computer"]),
+    "org.freedesktop.portable1.": ("휴대용 서비스를 관리하려고 합니다", ["preferences-system-services"]),
+    "org.freedesktop.RealtimeKit1.": ("프로그램에 실시간 우선순위를 주려고 합니다", ["utilities-system-monitor"]),
+    "org.freedesktop.color-manager.": ("색 프로필 설정을 바꾸려고 합니다", ["preferences-color"]),
+    "org.freedesktop.policykit.lockdown": ("작업의 권한 설정을 잠그거나 풀려고 합니다", ["security-high"]),
+    "net.reactivated.fprint.device.enroll": ("지문을 등록하려고 합니다", ["fingerprint", "dialog-password"]),
+    "net.reactivated.fprint.": ("지문 인식 장치를 쓰려고 합니다", ["fingerprint", "dialog-password"]),
+    "org.bluez.": ("Bluetooth 설정을 바꾸려고 합니다", ["bluetooth"]),
+    # 인쇄
+    "org.opensuse.cupspkhelper.mechanism.job-cancel-another-owner": ("다른 사용자의 인쇄 작업을 취소하려고 합니다", ["printer"]),
+    "org.opensuse.cupspkhelper.mechanism.job-edit-another-owner": ("다른 사용자의 인쇄 작업을 바꾸려고 합니다", ["printer"]),
+    "org.opensuse.cupspkhelper.mechanism.server-settings": ("인쇄 서버 설정을 바꾸려고 합니다", ["printer"]),
+    "org.opensuse.cupspkhelper.mechanism.devices-get": ("연결된 프린터를 찾으려고 합니다", ["printer"]),
+    "org.opensuse.cupspkhelper.mechanism.": ("프린터 설정을 바꾸려고 합니다", ["printer"]),
+    "org.fedoraproject.config.printing.": ("프린터를 설정하려고 합니다", ["printer"]),
+    "org.freedesktop.cups.": ("프린터 설정을 바꾸려고 합니다", ["printer"]),
+}
+GENERIC = "이 작업을 하려면 관리자 권한이 필요합니다"
+EXEC_ACTION = "org.freedesktop.policykit.exec"
+
+
+# systemd 는 메시지에 서비스 이름과 동작을 넣어 보낸다 — 영어("…to start 'ssh.service'.")든
+#   한국어 번역("인증은 'ssh.service'을 시작하는데 필요합니다.")이든 알아보고 "ssh.service 서비스를 시작하려고 합니다"로
+UNIT_VERBS = [
+    (r"\breload-or-restart\b|\btry-restart\b|\brestart\b|다시\s*시작|재시작", "{u}를 다시 시작하려고 합니다"),
+    (r"\breload\b|다시\s*(읽|불러)", "{u}의 설정을 다시 읽으려고 합니다"),
+    (r"\bstop\b|중지|정지|멈추", "{u}를 중지하려고 합니다"),
+    (r"\bstart\b|시작", "{u}를 시작하려고 합니다"),
+    (r"\bkill\b|강제", "{u}를 강제로 끝내려고 합니다"),
+    (r"\breset\b|초기화", "{u}의 오류 상태를 지우려고 합니다"),
+    (r"\bfreeze\b", "{u}를 일시 중지하려고 합니다"),
+    (r"\bthaw\b", "{u}를 다시 실행하려고 합니다"),
+]
+
+
+def unit_text(message):
+    m = re.search(r"['‘`\"]([\w@.:\\-]+\.(service|socket|timer|target|mount|path|scope|slice|swap|automount|device))['’\"]",
+                  message or "")
+    if not m:
+        return None
+    unit = m.group(1)
+    rest = (message[:m.start()] + " " + message[m.end():]).lower()
+    for pat, verb in UNIT_VERBS:
+        if re.search(pat, rest):
+            what = "서비스" if unit.endswith(".service") else "구성 요소"
+            return verb.format(u=f"{unit} {what}")
+    return None
+
+
+def action_text(action_id, message):
+    """(문장, 아이콘 후보) — 우리 정책(org.sekaios.*)은 정책에 적어 둔 한국어 메시지를 그대로"""
+    if action_id.startswith("org.sekaios.") and message:
+        return message, []
+    if action_id == "org.freedesktop.systemd1.manage-units":
+        t = unit_text(message)
+        if t:
+            return t, ["preferences-system-services", "system-run"]
+    # 가장 길게 맞는 항목 — "…login1.reboot-multiple-sessions" 는 "…login1." 보다 "…login1.reboot" 에,
+    #   "…wifi.share.protected" 는 "…wifi.share" 에 맞아야 한다
+    best = ""
+    for k in ACTIONS:
+        if k.endswith((".", "-")):
+            ok = action_id.startswith(k)
+        else:
+            ok = action_id == k or action_id.startswith((k + "-", k + "."))
+        if ok and len(k) > len(best):
+            best = k
+    hit = ACTIONS.get(best) if best else None
+    if hit is not None:
+        return hit
+    if authui.is_korean(message):
+        return message, []
+    return GENERIC, []
+
+
+# ═══ PAM·polkit 이 보내는 영어 안내 → 한국어 ═════════════════════════
+PAM_TEXTS = [
+    (r"account is locked due to (\d+) failed logins", lambda m: f"로그인에 {m.group(1)}번 실패해서 계정이 잠겼습니다."),
+    (r"\((\d+) minutes? left to unlock\)", lambda m: f"{m.group(1)}분 뒤에 다시 시도할 수 있습니다."),
+    (r"account.*(is )?locked", lambda m: "계정이 잠겨 있습니다. 잠시 뒤 다시 시도하세요."),
+    (r"account has expired", lambda m: "계정이 만료되었습니다. 관리자에게 문의하세요."),
+    (r"password has expired|required to change your password", lambda m: "암호가 만료되었습니다. 먼저 암호를 바꾸세요."),
+    (r"password will expire in (\d+) days?", lambda m: f"암호가 {m.group(1)}일 뒤에 만료됩니다."),
+    (r"access denied|permission denied|not allowed", lambda m: "이 계정으로는 인증할 수 없습니다."),
+    (r"authentication (failure|failed)", lambda m: "암호가 올바르지 않습니다. 다시 입력하세요."),
+    (r"(place|put) your (.+?) on", lambda m: "지문 인식 장치에 손가락을 올려 주세요."),
+    (r"swipe your (.+?) (across|on)", lambda m: "지문 인식 장치에 손가락을 문질러 주세요."),
+    (r"failed to match fingerprint|no match", lambda m: "지문이 일치하지 않습니다. 다시 시도하세요."),
+    (r"finger.*(too short|not centered|remove)", lambda m: "손가락을 다시 올려 주세요."),
+    (r"verification timed out|timed out", lambda m: "시간이 초과되었습니다. 다시 시도하세요."),
+    (r"(verification|security) code|one[- ]time|otp|token", lambda m: "인증 코드를 입력하세요."),
+    (r"^\s*(password|passwort|암호|비밀번호)\s*:?\s*$", lambda m: ""),
+]
+
+
+def pam_text(text):
+    """영어 안내를 알아보면 한국어로 (한국어면 그대로, 모르면 None — 영어를 사용자에게 보이지 않는다)"""
+    t = (text or "").strip()
+    if not t:
+        return ""
+    if authui.is_korean(t):
+        return t
+    for pat, fn in PAM_TEXTS:
+        m = re.search(pat, t, re.I)
+        if m:
+            return fn(m)
+    return None
+
+
+def is_password_prompt(prompt):
+    return bool(re.match(r"^\s*(password|passwort|암호|비밀번호)\s*(for \S+)?\s*:?\s*$", prompt or "", re.I))
+
+
+# ═══ 누가 요청했나 ═══════════════════════════════════════════════
+# 스스로는 "앱"이 아닌 중간 프로그램 — 부모로 올라가 실제 앱을 찾는다 (sekai-admin → systemctl → polkit)
+HELPERS = {"sh", "dash", "bash", "zsh", "env", "sudo", "pkexec", "systemctl", "busctl", "gdbus", "dbus-send",
+           "nmcli", "udisksctl", "timedatectl", "hostnamectl", "localectl", "loginctl", "timeout", "setsid",
+           "xargs", "nohup", "keep-running", "flock"}
+INTERP = re.compile(r"^(python[\d.]*|perl|ruby|node|sh|bash|dash|gjs|lua[\d.]*)$")
+STD_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+
+def _read(path, binary=False):
+    try:
+        with open(path, "rb" if binary else "r") as f:
+            return f.read()
+    except OSError:
+        return b"" if binary else ""
+
+
+def proc_argv(pid):
+    return [a.decode("utf-8", "replace") for a in _read(f"/proc/{pid}/cmdline", True).split(b"\0") if a]
+
+
+def proc_info(pid):
+    """pid → (보일 이름 후보, 실행 파일 경로, 부모 pid). 없으면 None"""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return None
+    if pid <= 1:
+        return None
+    argv = proc_argv(pid)
+    comm = _read(f"/proc/{pid}/comm").strip()
+    if not argv and not comm:
+        return None
+    ppid = 0
+    for line in _read(f"/proc/{pid}/status").splitlines():
+        if line.startswith("PPid:"):
+            try:
+                ppid = int(line.split()[1])
+            except (IndexError, ValueError):
+                pass
+            break
+    path = argv[0] if argv else comm
+    # 파이썬·셸 스크립트면 스크립트 파일이 앱이다 (python3 /usr/bin/sekai-settings).
+    #   "sh -c '…'" 처럼 명령을 글로 받은 것은 그대로 (sh → 도우미로 보고 부모로 올라간다)
+    if argv and INTERP.match(os.path.basename(argv[0])):
+        for a in argv[1:]:
+            if a == "-c":
+                break
+            if a.startswith("-"):
+                continue
+            if os.path.isfile(a):
+                path = a
+            break
+    return os.path.basename(path) or comm, path, ppid
+
+
+def pkexec_target(details, message):
+    """pkexec 가 실행하려는 것 → (프로그램 경로, 명령줄, 실행할 사용자) 또는 None.
+    polkitd 는 pkexec 가 넘긴 세부 사항(program·command_line)을 에이전트에 전하지 않는다 (요청한 쪽이 꾸밀 수 있어서).
+    그래서 요청한 프로세스(polkit.caller-pid = pkexec)의 명령줄을 직접 읽는다."""
+    argv = proc_argv(details.get("polkit.caller-pid") or 0)
+    if not argv or os.path.basename(argv[0]) != "pkexec":
+        return None
+    user, i = "root", 1
+    while i < len(argv):
+        a = argv[i]
+        if a in ("--user", "-u") and i + 1 < len(argv):
+            user, i = argv[i + 1], i + 2
+        elif a.startswith("--user="):
+            user, i = a.split("=", 1)[1], i + 1
+        elif a in ("--disable-internal-agent", "--keep-cwd"):
+            i += 1
+        elif a == "--":
+            i += 1
+            break
+        else:
+            break
+    rest = argv[i:]
+    if not rest:                                   # 인자 없는 pkexec — 관리자 셸
+        try:
+            rest = [pwd.getpwnam(user).pw_shell or "/bin/sh"]
+        except KeyError:
+            rest = ["/bin/sh"]
+    prog = rest[0]
+    # polkit 메시지에는 pkexec 가 찾은 절대 경로가 들어 있다 ("…run `/usr/bin/touch …' as …")
+    m = re.search(r"`(/\S+)", message or "")
+    if m and os.path.basename(m.group(1)) == os.path.basename(prog):
+        prog = m.group(1)
+    elif not os.path.isabs(prog):
+        prog = shutil.which(prog, path=STD_PATH) or prog
+    return prog, " ".join(shlex.quote(a) for a in [prog] + rest[1:]), user
+
+
+_apps = None
+
+
+def app_for(name, path=""):
+    """실행 파일 이름 → (앱 이름, 아이콘 후보). .desktop 항목에서 찾는다 (없으면 파일 이름 그대로)"""
+    global _apps
+    if _apps is None:
+        _apps = {}
+        try:
+            for app in Gio.AppInfo.get_all():
+                exe = app.get_executable() or ""
+                if not exe:
+                    continue
+                gi_ = app.get_icon()
+                ic = gi_.to_string() if gi_ is not None else ""
+                for key in {exe, os.path.basename(exe)}:
+                    _apps.setdefault(key, (app.get_name() or os.path.basename(exe), ic))
+        except Exception as e:                         # .desktop 가 깨져 있어도 창은 떠야 한다
+            dbg("앱 목록을 읽지 못함", e)
+    hit = _apps.get(path) or _apps.get(name)
+    if hit is None:
+        try:
+            d = Gio.DesktopAppInfo.new(name + ".desktop")
+        except TypeError:
+            d = None
+        if d is not None:
+            gi_ = d.get_icon()
+            hit = (d.get_name() or name, gi_.to_string() if gi_ is not None else "")
+    if hit is not None:
+        return hit[0], [hit[1], name, "application-x-executable"]
+    return name, [name, "application-x-executable"]
+
+
+def requester(details):
+    """details 의 polkit.subject-pid 로 요청한 앱을 찾는다 → (앱 이름, 아이콘 후보, 자세히 글) 또는 None"""
+    pid = details.get("polkit.subject-pid") or details.get("polkit.caller-pid")
+    info = proc_info(pid)
+    if info is None:
+        return None
+    first = info
+    seen = 0
+    while info is not None and info[0] in HELPERS and seen < 5:
+        up = proc_info(info[2])
+        if up is None:
+            break
+        info = up
+        seen += 1
+    name, path, _pp = info
+    detail = f"{name} (pid {pid})" if first is info else f"{name} → {first[0]} (pid {pid})"
+    if name in HELPERS:
+        # 앱까지 올라가지 못했다 (떨어져 나온 "sh -c …" 따위) — 셸 이름을 앱처럼 보이지 않는다
+        return None, [], detail
+    title, icons = app_for(name, path)
+    return title, icons, detail
+
+
+# ═══ 계정 ══════════════════════════════════════════════════════
+def expand_identities(identities):
+    """polkit 이 준 신원(unix-user / unix-group) → uid 목록 (중복 없이, 받은 순서대로)"""
+    uids = []
+
+    def add(u):
+        if u not in uids:
+            uids.append(u)
+    for kind, props in identities:
+        try:
+            if kind == "unix-user":
+                add(int(props.get("uid")))
+            elif kind == "unix-group":
+                gid = int(props.get("gid"))
+                try:
+                    g = grp.getgrgid(gid)
+                except KeyError:
+                    continue
+                for name in g.gr_mem:
+                    try:
+                        add(pwd.getpwnam(name).pw_uid)
+                    except KeyError:
+                        pass
+                for p in pwd.getpwall():                # 이 그룹이 기본 그룹인 계정도
+                    if p.pw_gid == gid:
+                        add(p.pw_uid)
+        except (TypeError, ValueError):
+            continue
+    return uids
+
+
+def is_admin_uid(uid):
+    if uid == 0:
+        return True
+    try:
+        name = pwd.getpwuid(uid).pw_name
+        g = grp.getgrnam("sudo")
+        return name in g.gr_mem or pwd.getpwuid(uid).pw_gid == g.gr_gid
+    except KeyError:
+        return False
+
+
+# ═══ 요청 하나 ═══════════════════════════════════════════════════
+class Request:
+    def __init__(self, inv, action_id, message, icon_name, details, cookie, identities):
+        self.inv = inv
+        self.action_id = action_id
+        self.message = message
+        self.icon_name = icon_name
+        self.details = dict(details)
+        self.cookie = cookie
+        self.identities = identities
+        self.dialog = None
+        self.answered = False
+
+    def reply(self, ok):
+        """polkitd 에 답한다 (한 번만). ok=False 면 '취소됨' — pkexec 는 "Request dismissed" 로 끝난다"""
+        if self.answered:
+            return
+        self.answered = True
+        try:
+            if ok:
+                self.inv.return_value(None)
+            else:
+                self.inv.return_dbus_error(ERR_CANCELLED, "사용자가 인증을 취소했습니다")
+        except Exception as e:                          # polkitd 가 이미 사라졌다
+            dbg("답을 보내지 못함", e)
+
+
+# ═══ 사용자 계정 컨트롤 창 ═════════════════════════════════════════
+class UacDialog:
+    def __init__(self, agent, req):
+        self.ui = authui
+        self.agent = agent
+        self.req = req
+        self.session = None
+        self.prompt_ready = False      # 도우미가 암호를 기다리는 중
+        self.pending = None            # 도우미가 묻기 전에 "예"를 눌렀을 때의 암호
+        self.responded = False         # 이 세션에 암호를 넘겼나
+        self.errors = []               # 이 세션에서 받은 오류 안내 (한국어로 바꾼 것)
+        self.busy = False
+        self.closed = False
+        self.fails = 0
+        authui.load_style()
+
+        me = os.getuid()
+        uids = expand_identities(req.identities)
+        if me in uids:
+            uids = [me]                               # 내가 관리자 — 내 암호로 (다른 계정을 고를 까닭이 없다)
+            self.mode = "self"
+        else:
+            if len(uids) > 1 and 0 in uids:
+                uids = [u for u in uids if u != 0]    # root 는 그것밖에 없을 때만
+            self.mode = "admin"
+        self.accounts = [authui.account(u) for u in uids] or [authui.account(0)]
+        self.uid = self.accounts[0]["uid"]
+
+        self.dims = authui.DimSet(self._attention) if authui.use_layer() else None
+        self.win = authui.CardWindow("sekai-uac", "사용자 계정 컨트롤", exclusive=True, width=512)
+        self._build()
+        self.win.connect("key-press-event", self._key)
+        self.win.connect("delete-event", lambda *_: (self.answer(False), True)[1])
+        self.win.show_all()
+        self.entry.grab_focus()
+        self.start_session()
+
+    # ── 모양 ──
+    def _build(self):
+        ui = self.ui
+        req = self.req
+        d = req.details
+        card = self.win.card
+        card.pack_start(ui.head_strip("사용자 계정 컨트롤"), False, False, 0)
+        body = ui.body_box(14)
+        card.pack_start(body, False, False, 0)
+
+        who = requester(d)
+        rows = []
+        # pkexec 로 프로그램을 관리자 권한으로 실행하려는 것 — 우리 도우미(org.sekaios.*)는 정책의 한국어 설명으로
+        run = pkexec_target(d, req.message)
+        if run is not None and req.action_id.startswith("org.sekaios.") and req.action_id != EXEC_ACTION:
+            rows += [("프로그램 위치", run[0]), ("명령줄", run[1])]      # 모양은 정책의 설명으로, 실행할 것은 자세히에
+            run = None
+        if run is not None:
+            prog, cmdline, target = run
+            try:
+                p = pwd.getpwnam(target)
+                shown = (p.pw_gecos or "").split(",")[0].strip() or target
+            except KeyError:
+                p, shown = None, target
+            if target == "root" or (p is not None and p.pw_uid == 0):
+                q = "이 앱이 관리자 권한으로 실행되도록 허용하시겠어요?"
+            else:
+                q = f"이 앱이 다른 사용자({shown}) 권한으로 실행되도록 허용하시겠어요?"
+            name, icons = app_for(os.path.basename(prog), prog)
+            title, sub = name, prog
+            self.publisher = ui.label("게시자: 확인하는 중…", "auth-sub")
+            self._find_package(prog)
+            rows += [("프로그램 위치", prog), ("명령줄", cmdline), ("실행할 사용자", shown)]
+            if req.action_id != EXEC_ACTION:
+                sentence, _ic = action_text(req.action_id, req.message)
+                if sentence != GENERIC:
+                    rows.append(("하려는 일", sentence))
+        else:
+            sentence, icons = action_text(req.action_id, req.message)
+            icons = list(icons) + [req.icon_name, "dialog-password", "security-high"]
+            self.publisher = None
+            if who is not None and who[0]:
+                q = "이 앱이 디바이스를 변경할 수 있도록 허용하시겠어요?"
+                title, sub = who[0], sentence
+                icons = who[1] + icons
+            else:
+                q = "이 작업을 허용하시겠어요?"
+                title, sub = sentence, None
+        body.pack_start(ui.label(q, "auth-question"), False, False, 0)
+
+        app = Gtk.Box(spacing=14)
+        app.set_margin_top(2)
+        app.pack_start(ui.icon(icons, 40), False, False, 0)
+        col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        col.set_valign(Gtk.Align.CENTER)
+        col.pack_start(ui.label(title, "auth-appname"), False, False, 0)
+        if sub:
+            col.pack_start(ui.label(sub, "auth-sub"), False, False, 0)
+        if self.publisher is not None:
+            col.pack_start(self.publisher, False, False, 0)
+        app.pack_start(col, True, True, 0)
+        body.pack_start(app, False, False, 0)
+
+        # 자세한 내용 — 작업 ID·요청한 프로그램·원래 메시지·그 밖의 세부 사항
+        if who is not None:
+            rows.append(("요청한 프로그램", who[2]))
+        rows += [("작업", req.action_id), ("원본 메시지", req.message)]
+        # 요즘 polkitd 는 pid 두 개만 보낸다 — 그 밖의 것이 오면 그대로 보여 준다
+        skip = {"polkit.message", "polkit.gettext_domain", "polkit.subject-pid", "polkit.caller-pid"}
+        rows += [(k, v) for k, v in sorted(req.details.items()) if k not in skip]
+        self.more = Gtk.Revealer()
+        self.more.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
+        self.more.set_transition_duration(120)
+        frame = Gtk.Box()
+        frame.get_style_context().add_class("auth-details")
+        frame.pack_start(ui.details_grid(rows), True, True, 0)
+        self.more.add(frame)
+        self.more_btn = Gtk.Button(label="자세한 내용 표시")
+        self.more_btn.get_style_context().add_class("auth-link")
+        self.more_btn.set_halign(Gtk.Align.START)
+        self.more_btn.connect("clicked", self._toggle_more)
+        mbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        mbox.pack_start(self.more_btn, False, False, 0)
+        frame.set_margin_top(6)
+        mbox.pack_start(self.more, False, False, 0)
+        body.pack_start(mbox, False, False, 0)
+
+        # 계정과 암호
+        if self.mode == "self":
+            tip = "계속하려면 암호를 입력하세요."
+        elif len(self.accounts) > 1:
+            tip = "계속하려면 관리자 계정을 선택하고 암호를 입력하세요."
+        else:
+            tip = "계속하려면 관리자 암호를 입력하세요."
+        self.tip = ui.label(tip, "auth-text")
+        body.pack_start(self.tip, False, False, 0)
+
+        self.list = Gtk.ListBox()
+        self.list.get_style_context().add_class("auth-accounts")
+        if len(self.accounts) == 1:
+            self.list.get_style_context().add_class("single")
+            self.list.set_selection_mode(Gtk.SelectionMode.NONE)
+        for a in self.accounts:
+            row = Gtk.ListBoxRow()
+            row.uid = a["uid"]
+            if a["uid"] == 0:
+                sub = "root · 시스템 관리자"
+            else:
+                sub = a["name"] + (" · 관리자" if is_admin_uid(a["uid"]) else "")
+            row.add(ui.account_tile(a, sub))
+            row.set_can_focus(len(self.accounts) > 1)
+            self.list.add(row)
+        if len(self.accounts) > 1:
+            self.list.select_row(self.list.get_row_at_index(0))
+            self.list.connect("row-selected", self._picked)
+            self.list.connect("row-activated", lambda *_: self.entry.grab_focus())
+        body.pack_start(self.list, False, False, 0)
+
+        self.prompt = ui.label("", "auth-text")        # 암호가 아닌 물음(인증 코드 등)일 때만
+        self.prompt.set_no_show_all(True)
+        body.pack_start(self.prompt, False, False, 0)
+        self.entry = ui.PasswordEntry("암호")
+        self.field = ui.BusyField(self.entry)
+        body.pack_start(self.field, False, False, 0)
+        self.caps = ui.CapsWarning(self.entry)
+        body.pack_start(self.caps, False, False, 0)
+        self.msg = ui.Message()
+        body.pack_start(self.msg, False, False, 0)
+
+        foot, self.yes, self.no = ui.foot_buttons("예", "아니요")
+        self.yes.connect("clicked", lambda *_: self.submit())
+        self.no.connect("clicked", lambda *_: self.answer(False))
+        card.pack_start(foot, False, False, 0)
+        self.win.set_default(self.yes)
+
+    def _toggle_more(self, *_):
+        on = not self.more.get_reveal_child()
+        self.more.set_reveal_child(on)
+        self.more_btn.set_label("자세한 내용 숨기기" if on else "자세한 내용 표시")
+        self.entry.grab_focus_without_selecting()          # 암호를 치던 중이면 그대로 이어서
+
+    def _find_package(self, prog):
+        """이 프로그램을 설치한 패키지 (dpkg-query -S) — 기다리지 않고 따로 돌린다"""
+        try:
+            p = Gio.Subprocess.new(["dpkg-query", "-S", prog],
+                                   Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE)
+        except GLib.Error:
+            self._set_publisher(None)
+            return
+
+        def done(proc, res):
+            try:
+                _ok, out, _err = proc.communicate_utf8_finish(res)
+            except GLib.Error:
+                out = ""
+            pkg = None
+            for line in (out or "").splitlines():
+                if ":" in line and not line.startswith("diversion"):
+                    pkg = line.split(":", 1)[0].split(",")[0].strip()
+                    break
+            if not self.closed:
+                self._set_publisher(pkg)
+        p.communicate_utf8_async(None, None, done)
+
+    def _set_publisher(self, pkg):
+        if self.publisher is None:
+            return
+        if pkg:
+            self.publisher.set_text(authui.keep_words(f"게시자: {pkg} 패키지 (이 컴퓨터에 설치됨)"))
+        else:
+            self.publisher.set_text(authui.keep_words("게시자: 알 수 없음 — 패키지로 설치된 파일이 아닙니다"))
+            self.publisher.get_style_context().add_class("auth-unknown")
+
+    def _attention(self):
+        self.win.attention()
+        self.entry.grab_focus()
+
+    def _key(self, _w, ev):
+        if ev.keyval == Gdk.KEY_Escape:
+            self.answer(False)
+            return True
+        return False
+
+    def _picked(self, _l, row):
+        if row is None or row.uid == self.uid or self.closed:
+            return
+        self.uid = row.uid
+        self.entry.clear()
+        self.msg.show_text("")
+        self.pending = None
+        if self.busy:
+            self.set_busy(False)
+        self.start_session()
+        self.entry.grab_focus()
+
+    def set_busy(self, on):
+        self.busy = on
+        self.field.set_busy(on)
+        for w in (self.yes, self.list):
+            w.set_sensitive(not on)
+        if not on:
+            self.entry.grab_focus()
+
+    # ── PolkitAgent 세션 (암호 확인) ──
+    def start_session(self):
+        self.stop_session()
+        self.prompt_ready = False
+        self.responded = False
+        self.errors = []
+        try:
+            s = PolkitAgent.Session.new(Polkit.UnixUser.new(self.uid), self.req.cookie)
+        except Exception as e:
+            log("인증 세션을 만들지 못함:", e)
+            self.msg.show_text("인증을 시작할 수 없습니다.")
+            return
+        s.connect("request", self._on_request)
+        s.connect("show-error", self._on_show, "error")
+        s.connect("show-info", self._on_show, "info")
+        s.connect("completed", self._on_completed)
+        self.session = s
+        dbg("세션 시작 uid", self.uid)
+        s.initiate()
+
+    def stop_session(self):
+        s, self.session = self.session, None
+        if s is not None:
+            try:
+                s.cancel()             # completed(False) 가 오지만 self.session 이 아니므로 무시된다
+            except Exception:
+                pass
+
+    def _on_request(self, s, prompt, echo_on):
+        if s is not self.session or self.closed:
+            return
+        dbg("도우미가 묻는다:", repr(prompt), "echo" if echo_on else "")
+        self.prompt_ready = True
+        if is_password_prompt(prompt):
+            self.prompt.hide()
+            self.entry.set_placeholder_text("암호")
+        else:
+            t = pam_text(prompt)
+            self.prompt.set_text(authui.keep_words(t or "인증 정보를 입력하세요."))
+            self.prompt.show()
+            self.entry.set_placeholder_text(t or "")
+        self.entry.secret = not echo_on
+        self.entry.set_visibility(bool(echo_on))
+        if self.pending is not None:
+            pw, self.pending = self.pending, None
+            self._respond(pw)
+
+    def _respond(self, pw):
+        self.prompt_ready = False
+        self.responded = True
+        self.session.response(pw)
+
+    def _on_show(self, s, text, kind):
+        if s is not self.session or self.closed:
+            return
+        dbg("도우미 안내:", kind, repr(text))
+        t = pam_text(text)
+        if t is None:                  # 모르는 영어 문구 — 사용자에게는 일반 문구로 (원문은 기록에)
+            log("알 수 없는 인증 안내:", text)
+            t = "인증 중에 문제가 생겼습니다." if kind == "error" else ""
+        if not t:
+            return
+        if kind == "error":
+            self.errors.append(t)
+        self.msg.show_text(t, "error" if kind == "error" else "info")
+
+    def _on_completed(self, s, gained):
+        if s is not self.session or self.closed:
+            return
+        self.session = None
+        dbg("세션 끝:", "성공" if gained else "실패")
+        if gained:
+            self.answer(True)
+            return
+        self.set_busy(False)
+        self.entry.clear()
+        if self.responded:
+            self.fails += 1
+            text = self.errors[-1] if self.errors else "암호가 올바르지 않습니다. 다시 입력하세요."
+            self.msg.show_text(text)
+            self.start_session()      # 다음 시도를 미리 준비 (도우미가 다시 암호를 기다린다)
+        else:
+            # 암호를 넘기기도 전에 끝났다 (계정 잠김·도우미 오류) — 곧바로 다시 시작하면 끝없이 돈다.
+            #   다음에 "예"를 누를 때 새로 시작한다
+            self.msg.show_text(self.errors[-1] if self.errors else "이 계정으로 인증할 수 없습니다.")
+
+    # ── 예 / 아니요 ──
+    def submit(self):
+        if self.busy or self.closed:
+            return
+        pw = self.entry.get_text()
+        self.msg.show_text("")
+        self.set_busy(True)
+        if self.session is None:
+            self.pending = pw
+            self.start_session()
+        elif self.prompt_ready:
+            self._respond(pw)
+        else:
+            self.pending = pw          # 도우미가 아직 준비 중 — 물어 오면 곧바로 넘긴다
+
+    def answer(self, ok):
+        if self.closed:
+            return
+        dbg("사용자 답:", "예(인증됨)" if ok else "아니요")
+        self.close()
+        self.agent.finished(self.req, ok)
+
+    def close(self):
+        """창을 닫는다 (polkitd 에 답하는 것은 부르는 쪽)"""
+        if self.closed:
+            return
+        self.closed = True
+        self.pending = None
+        self.stop_session()
+        self.win.destroy()
+        if self.dims is not None:
+            self.dims.destroy()
+
+
+# ═══ 에이전트 ════════════════════════════════════════════════════
+class Agent:
+    def __init__(self):
+        self.conn = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        self.pk_owner = None           # polkitd 의 고유 버스 이름 — 이 이름에서 온 요청만 받는다
+        self.registered = False
+        self.queue = []                # 기다리는 요청 (앞이 먼저)
+        self.current = None
+        self.exit_code = 0
+        info = Gio.DBusNodeInfo.new_for_xml(XML)
+        self.conn.register_object(AGENT_PATH, info.interfaces[0], self._on_call, None, None)
+        Gio.bus_watch_name_on_connection(self.conn, PK_NAME, Gio.BusNameWatcherFlags.NONE,
+                                         self._pk_appeared, self._pk_vanished)
+
+    # ── 등록 ──
+    def _session_id(self):
+        """이 에이전트가 맡을 로그인 세션 (logind 세션 ID)"""
+        sid = os.environ.get("XDG_SESSION_ID")
+        if sid:
+            return sid
+        # 세션 ID 를 물려받지 못했다 — logind 에 이 프로세스의 세션을 묻는다 (시작할 때 한 번)
+        try:
+            s = Polkit.UnixSession.new_for_process_sync(os.getpid(), None)
+            return s.get_session_id() if s is not None else None
+        except GLib.Error as e:
+            log("로그인 세션을 찾지 못했습니다:", e.message)
+            return None
+
+    def _locale(self):
+        for k in ("LC_ALL", "LC_MESSAGES", "LANG"):
+            v = os.environ.get(k)
+            if v:
+                return v
+        return "ko_KR.UTF-8"
+
+    def _pk_appeared(self, _conn, _name, owner):
+        self.pk_owner = owner
+        sid = self._session_id()
+        if not sid:
+            self.quit(1)
+            return
+        subject = ("unix-session", {"session-id": GLib.Variant("s", sid)})
+        params = GLib.Variant("((sa{sv})ss)", (subject, self._locale(), AGENT_PATH))
+        dbg("polkitd 에 등록:", params)
+        self.conn.call(PK_NAME, PK_PATH, PK_IFACE, "RegisterAuthenticationAgent", params, None,
+                       Gio.DBusCallFlags.NONE, -1, None, self._registered)
+
+    def _registered(self, conn, res):
+        try:
+            conn.call_finish(res)
+        except GLib.Error as e:
+            msg = Gio.DBusError.get_remote_error(e) or ""
+            text = e.message
+            if "already exists" in text:
+                log("이 세션에는 이미 다른 인증 에이전트가 있습니다 — 끝냅니다.")
+                self.quit(2)
+                return
+            log("polkitd 에 등록하지 못했습니다:", msg, text)
+            self.quit(1)
+            return
+        self.registered = True
+        log("등록했습니다")
+
+    def quit(self, code):
+        """GLib 콜백 안에서 sys.exit 하면 PyGObject 가 삼킨다 — 메인 루프를 끝내고 main() 에서 끝낸다"""
+        self.exit_code = code
+        Gtk.main_quit()
+
+    def _pk_vanished(self, _conn, _name):
+        # polkitd 가 멈췄다 — 쥐고 있던 요청은 쓸모가 없다. 다시 뜨면 _pk_appeared 에서 다시 등록한다
+        if self.pk_owner is not None:
+            log("polkitd 가 사라졌습니다 — 다시 뜨면 다시 등록합니다")
+        self.pk_owner = None
+        self.registered = False
+        for r in [self.current] + self.queue if self.current else list(self.queue):
+            if r.dialog is not None:
+                r.dialog.close()
+            r.reply(False)
+        self.current = None
+        self.queue = []
+
+    # ── polkitd 가 부르는 것 ──
+    def _on_call(self, _conn, sender, _path, _iface, method, params, inv):
+        if self.pk_owner is None or sender != self.pk_owner:
+            # 다른 프로그램이 가짜 요청으로 관리자 암호를 받아 내려는 것을 막는다
+            log("polkitd 가 아닌 곳의 요청을 거절:", sender, method)
+            inv.return_dbus_error("org.freedesktop.DBus.Error.AccessDenied", "polkitd 만 부를 수 있습니다")
+            return
+        if method == "BeginAuthentication":
+            action_id, message, icon_name, details, cookie, identities = params.unpack()
+            dbg("요청:", action_id, "|", message, "|", icon_name, "|", details, "|", identities)
+            req = Request(inv, action_id, message, icon_name, details, cookie, identities)
+            self.queue.append(req)
+            if self.current is None:
+                self._next()
+        elif method == "CancelAuthentication":
+            (cookie,) = params.unpack()
+            dbg("취소:", cookie)
+            self.cancel(cookie)
+            inv.return_value(None)
+        else:
+            inv.return_dbus_error("org.freedesktop.DBus.Error.UnknownMethod", method)
+
+    def cancel(self, cookie):
+        """요청한 쪽(pkexec 등)이 그만두었다 — 떠 있는 창이면 닫고, 기다리는 것이면 빼낸다"""
+        cur = self.current
+        if cur is not None and cur.cookie == cookie:
+            if cur.dialog is not None:
+                cur.dialog.close()
+            self.finished(cur, False)
+            return
+        for r in list(self.queue):
+            if r.cookie == cookie:
+                self.queue.remove(r)
+                r.reply(False)
+
+    def _next(self):
+        global _apps
+        if self.current is not None or not self.queue:
+            return False
+        _apps = None                   # 앱 목록(.desktop)을 새로 — 그 사이 설치한 앱도 이름·아이콘으로 보이게
+        req = self.queue.pop(0)
+        self.current = req
+        try:
+            req.dialog = UacDialog(self, req)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            log("창을 띄우지 못했습니다:", e)
+            self.finished(req, False)
+        return False
+
+    def finished(self, req, ok):
+        req.reply(ok)
+        if self.current is req:
+            self.current = None
+            req.dialog = None
+            # 다음 요청은 창이 사라지는 효과가 끝난 뒤에
+            GLib.timeout_add(180, self._next)
+
+
+def main():
+    if not Gtk.init_check(sys.argv)[0]:
+        log("화면에 연결할 수 없습니다")
+        sys.exit(1)
+    try:
+        agent = Agent()
+    except GLib.Error as e:
+        log("시스템 버스에 연결할 수 없습니다:", e.message)
+        sys.exit(1)
+    Gtk.main()
+    sys.exit(agent.exit_code)
+
+
+if __name__ == "__main__":
+    main()

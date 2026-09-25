@@ -16,7 +16,7 @@ from ..widgets import Page, button, combo, entry, icon_image, info, row
 TERMINALS = [("sekai-terminal", "SekaiOS 터미널 (자동)"), ("kitty", "Kitty"), ("foot", "Foot"), ("xterm", "XTerm")]
 BROWSERS = [("chromium", "Chromium"), ("google-chrome", "Google Chrome"),
             ("firefox-esr", "Firefox ESR")]
-FILERS = [("thunar", "Thunar"), ("pcmanfm", "PCManFM")]
+FILERS = [("sekai-files", "파일 탐색기"), ("thunar", "Thunar"), ("pcmanfm", "PCManFM")]
 
 def _name_keys():
     lang = (os.environ.get("LC_ALL") or os.environ.get("LANG") or "").split(".")[0]

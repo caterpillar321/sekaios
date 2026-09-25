@@ -1,0 +1,6 @@
+[Desktop Entry]
+# SekaiOS: 시작 메뉴·검색에서 숨긴다 — 기본 화면 모드의 창 관리자(xfwm4) 설정 — 설정은 SekaiOS 설정 앱이 한다
+Type=Application
+Name=Window Manager
+Exec=xfwm4-tweaks-settings
+NoDisplay=true

@@ -12,6 +12,12 @@ export XDG_CURRENT_DESKTOP=Hyprland
 export XDG_SESSION_TYPE=wayland
 export XDG_SESSION_DESKTOP=Hyprland
 
+# 관리 명령(sbin)도 이름만으로 찾게 — 데비안은 일반 사용자 PATH 에 /usr/sbin 을 넣지 않아, 설정 앱이
+#   lpadmin·lpinfo(프린터) 같은 명령을 못 찾고 "인쇄 기능이 설치되어 있지 않습니다"라고 했다.
+#   권한은 그대로다 (실행은 되지만 root 가 필요한 일은 여전히 pkexec 를 거친다). 기본 화면 모드도 이 스크립트를 거친다
+case ":$PATH:" in *:/usr/sbin:*) ;; *) PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin" ;; esac
+export PATH
+
 # ── 언어 ────────────────────────────────────────────────
 # 시스템 기본(/etc/default/locale)은 영어로 둔다. 텍스트 콘솔은 글자를 512개까지만
 # 그릴 수 있어 한글이 깨지기 때문. 그래픽 세션에서만 사용자가 고른 언어를 쓴다.

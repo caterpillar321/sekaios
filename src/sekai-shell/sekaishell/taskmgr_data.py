@@ -31,7 +31,7 @@ CORE_NAMES = {
     "Hyprland", "hyprland", "Xwayland", "Xorg", "X", "xinit", "xfwm4", "sxhkd", "xcape",
     "sekai-session", "sekai-panel", "sekai-desk", "sekai-idle", "sekai-lock", "keep-running",
     "sekai-greeter", "sekai-greeter-session", "greetd", "systemd", "dbus-daemon", "dbus-broker",
-    "lxpolkit",
+    "lxpolkit", "polkit-agent", "nm-agent", "automount",
 }
 
 

@@ -1,0 +1,6 @@
+[Desktop Entry]
+# SekaiOS: 시작 메뉴·검색에서 숨긴다 — SekaiOS 작업 관리자(sekai-taskmgr)가 있다. 예전 이미지에 들어 있던 XFCE 것
+Type=Application
+Name=Task Manager
+Exec=xfce4-taskmanager
+NoDisplay=true

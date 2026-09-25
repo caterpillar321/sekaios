@@ -5,6 +5,17 @@
 #    sekai-printers add <이름> <URI> <설명|""> <default|keep>
 #                                         드라이버 없이(IPP Everywhere) 프린터를 추가한다.
 #                                         default 면 시스템 기본 프린터로도 정한다
+#    sekai-printers add-driver <이름> <장치 URI> <드라이버> <설명|""> <위치|""> <shared|private> <default|keep>
+#                                         고른 드라이버로 프린터를 추가한다 (드라이버가 필요한 옛 프린터,
+#                                         IP 주소로 추가하는 프린터)
+#    sekai-printers modify <이름> [info=<설명>] [location=<위치>] [shared=yes|no]
+#                                         프린터 속성 (이름으로 보이는 설명·위치·공유)
+#    sekai-printers options <이름> <옵션=값>…
+#                                         기본 인쇄 설정 (용지 크기·양면·색…) — 이 PC 의 모든 사용자
+#    sekai-printers driver <이름> <드라이버>
+#                                         드라이버를 바꾼다
+#    sekai-printers devices               연결된 프린터 장치 목록 (lpinfo -l -v 출력 그대로)
+#    sekai-printers drivers               설치된 드라이버 목록 (lpinfo -l -m 출력 그대로)
 #    sekai-printers remove <이름>         프린터를 지운다
 #    sekai-printers default <이름>        시스템 기본 프린터로 정한다
 #    sekai-printers cancel <작업번호>…    인쇄 작업을 취소한다 (다른 사용자의 것도)
@@ -15,8 +26,10 @@
 #  설정 앱의 "프린터" 페이지가 부른다. CUPS 관리 권한(root·lpadmin 그룹)이 있는 사용자는
 #  페이지가 CUPS 명령을 직접 쓰고, 없는 사용자만 이 도우미를 거친다.
 #  관리자 권한으로 도는 프로그램이라 인자는 위 형식만 받고 엄격히 검사한다
-#  (옵션처럼 보이는 값·제어 문자·아무 명령이나 넘길 수 없게).
+#  (옵션처럼 보이는 값·제어 문자·아무 명령이나 넘길 수 없게). 인쇄 옵션은 그 프린터가 실제로 가진
+#  옵션·값(lpoptions -l)만, 장치 주소는 설치된 CUPS 백엔드의 것만 받는다.
 #  결과: 성공하면 종료 코드 0 과 "OK", 실패하면 표준 출력에 사람이 읽을 이유 한 줄.
+#    devices · drivers 는 성공하면 lpinfo 의 출력을 그대로 (OK 없이).
 # ═══════════════════════════════════════════════════════════════
 import os
 import re
@@ -32,7 +45,19 @@ NEW_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 NAME_RE = re.compile(r"[^\s/\\?'\"#@,\x00-\x1f\x7f-][^\s/\\?'\"#@,\x00-\x1f\x7f]{0,126}")
 # 드라이버 없이 쓸 수 있는 연결만 (cupsd 의 IPP Everywhere 가 받는 것)
 URI_RE = re.compile(r"(ipps?|dnssd)://[A-Za-z0-9._~%!$&'()*+,;=:@\[\]-]+(/[\x21-\x7e]*)?")
+# 드라이버와 함께 추가하는 장치 주소 — 스킴은 아래 백엔드 폴더에 실제로 있는 것만 (usb, socket, lpd, ipp,
+#   dnssd, hp …). 공백·제어 문자 없이 인쇄 가능한 ASCII 만
+DEV_URI_RE = re.compile(r"([a-z][a-z0-9+.-]{0,31}):[\x21-\x7e]{1,1000}")
+BACKENDS = "/usr/lib/cups/backend"
+# 드라이버 이름(ppd-name) — lpinfo -m 의 첫 칸 (everywhere, drv:///…, gutenprint.5.3://…, lsb/usr/…,
+#   foomatic:…, hplip:…, driverless:ipp://…). 영문·숫자로 시작해야 옵션·절대 경로로 읽히지 않는다.
+#   cupsd(cups-driverd)가 한 번 더 검사한다
+DRIVER_RE = re.compile(r"[A-Za-z0-9][\x21-\x7e]{0,511}")
+# 인쇄 옵션 이름·값 — PPD 키워드 (A4, DuplexNoTumble, 600x600dpi, Tray1 …)
+OPT_KEY_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+OPT_VAL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.+-]{0,63}")
 PRINTERS_CONF = ("/etc/cups/printers.conf", "/etc/cups/classes.conf")
+LPINFO_SECS = 8                         # 장치 찾기 — 네트워크 백엔드(snmp·dnssd)가 대답을 기다리는 시간
 
 
 def fail(msg, code=1):
@@ -50,6 +75,17 @@ def run(cmd):
     return r.returncode, (r.stderr.strip() or r.stdout.strip())
 
 
+def run_out(cmd, timeout=180):
+    """(종료 코드, 표준 출력, 표준 오류) — 출력이 필요한 명령 (lpinfo · lpoptions · cupsctl)"""
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, env=ENV, timeout=timeout)
+    except FileNotFoundError:
+        return 127, "", f"{cmd[0]} 이(가) 없습니다"
+    except subprocess.TimeoutExpired:
+        return 124, "", "시간이 초과되었습니다"
+    return r.returncode, r.stdout, r.stderr.strip()
+
+
 def reason(text, fallback):
     """CUPS 명령의 오류 → 마지막 줄 ("lpadmin: " 따위 앞머리는 뗀다)"""
     lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
@@ -61,6 +97,26 @@ def reason(text, fallback):
 def check_name(name, new=False):
     if not (NEW_NAME_RE if new else NAME_RE).fullmatch(name) or len(name.encode()) > 127:
         fail("프린터 이름이 올바르지 않습니다")
+
+
+def check_text(text, what):
+    """설명·위치 — IPP text(127): 127 바이트까지, 제어 문자 없이. what 은 조사까지 ("설명이" · "위치가")"""
+    if len(text.encode()) > 127 or re.search(r"[\x00-\x1f\x7f]", text):
+        fail(f"프린터 {what} 올바르지 않습니다")
+
+
+def check_device_uri(uri):
+    m = DEV_URI_RE.fullmatch(uri)
+    scheme = m.group(1) if m else ""
+    # file: 은 CUPS 가 기본으로 막는 것 — 아무 파일에나 쓰게 되니 받지 않는다
+    if not m or scheme == "file" or not os.path.isfile(os.path.join(BACKENDS, scheme)):
+        fail("프린터 주소가 올바르지 않습니다")
+
+
+def check_driver(drv):
+    # 경로를 거슬러 올라가는 이름(../)은 받지 않는다
+    if not DRIVER_RE.fullmatch(drv) or re.search(r"(^|/)\.\.(/|$)", drv):
+        fail("드라이버 이름이 올바르지 않습니다")
 
 
 def queues():
@@ -91,12 +147,33 @@ def exists(name):
     return False
 
 
+def must_exist(name):
+    check_name(name)
+    if not exists(name):
+        fail("없는 프린터입니다")
+
+
+def parse_options(text):
+    """lpoptions -l 출력 → {옵션: {값…}}. 한 줄: '키/설명: 값 *기본값 값…'.
+    설명에 : 가 들어갈 수 있어 마지막 : 로 가른다 (PPD 키워드에는 : 가 없다).
+    Custom.WIDTHxHEIGHT 같은 사용자 지정 값은 뺀다 (크기를 따로 받아야 한다)"""
+    table = {}
+    for line in text.splitlines():
+        head, sep, tail = line.rpartition(":")
+        if not sep:
+            continue
+        key = head.split("/", 1)[0].strip()
+        if not OPT_KEY_RE.fullmatch(key):
+            continue
+        table[key] = {c.lstrip("*") for c in tail.split() if not c.lstrip("*").startswith("Custom.")}
+    return table
+
+
 def add(name, uri, info, make_default):
     check_name(name, new=True)
     if len(uri) > 1000 or not URI_RE.fullmatch(uri):
         fail("프린터 주소가 올바르지 않습니다")
-    if len(info) > 127 or re.search(r"[\x00-\x1f\x7f]", info):
-        fail("프린터 설명이 올바르지 않습니다")
+    check_text(info, "설명이")
     if exists(name):
         # 있는 프린터를 -p 로 부르면 그 설정(주소)이 바뀐다 — 추가만 한다
         fail("같은 이름의 프린터가 이미 있습니다")
@@ -112,6 +189,106 @@ def add(name, uri, info, make_default):
         fail(reason(out, "프린터를 추가하지 못했습니다"))
     if make_default:
         run(["lpadmin", "-d", name])          # 기본값은 덤 — 실패해도 추가는 된 것
+
+
+def share_on():
+    """프린터 공유가 실제로 되려면 인쇄 서비스 자체가 공유를 켜야 한다 (cupsctl --share-printers:
+    다른 컴퓨터의 접속을 받고 네트워크에 알린다). 이미 켜져 있으면 건드리지 않는다 — 설정을 쓰면
+    인쇄 서비스가 설정을 다시 읽는다"""
+    rc, out, _err = run_out(["cupsctl"], timeout=30)
+    if rc == 0 and re.search(r"^_share_printers=1\s*$", out, re.M):
+        return
+    run(["cupsctl", "--share-printers"])      # 실패해도 프린터 설정은 된 것
+
+
+def add_driver(name, uri, driver, info, location, shared, make_default):
+    check_name(name, new=True)
+    check_device_uri(uri)
+    check_driver(driver)
+    check_text(info, "설명이")
+    check_text(location, "위치가")
+    if exists(name):
+        fail("같은 이름의 프린터가 이미 있습니다")
+    cmd = ["lpadmin", "-p", name, "-v", uri, "-m", driver,
+           "-o", "printer-is-shared=" + ("true" if shared else "false")]
+    if info:
+        cmd += ["-D", info]
+    if location:
+        cmd += ["-L", location]
+    rc, out = run(cmd + ["-E"])
+    if rc != 0:
+        if exists(name):
+            run(["lpadmin", "-x", name])
+        fail(reason(out, "프린터를 추가하지 못했습니다"))
+    if shared:
+        share_on()
+    if make_default:
+        run(["lpadmin", "-d", name])
+
+
+def modify(name, pairs):
+    must_exist(name)
+    cmd = ["lpadmin", "-p", name]
+    seen, shared = set(), None
+    for p in pairs:
+        key, sep, val = p.partition("=")
+        if not sep or key in seen or key not in ("info", "location", "shared"):
+            fail("바꿀 속성이 올바르지 않습니다")
+        seen.add(key)
+        if key == "info":
+            check_text(val, "설명이")
+            cmd += ["-D", val]
+        elif key == "location":
+            check_text(val, "위치가")
+            cmd += ["-L", val]
+        else:
+            if val not in ("yes", "no"):
+                fail("바꿀 속성이 올바르지 않습니다")
+            shared = val == "yes"
+            cmd += ["-o", "printer-is-shared=" + ("true" if shared else "false")]
+    rc, out = run(cmd)
+    if rc != 0:
+        fail(reason(out, "프린터 속성을 바꾸지 못했습니다"))
+    if shared:
+        share_on()
+
+
+def set_options(name, pairs):
+    must_exist(name)
+    rc, out, err = run_out(["lpoptions", "-p", name, "-l"], timeout=60)
+    table = parse_options(out) if rc == 0 else {}
+    if not table:
+        fail(reason(err, "이 프린터의 인쇄 설정을 읽지 못했습니다"))
+    cmd, seen = ["lpadmin", "-p", name], set()
+    for p in pairs:
+        key, sep, val = p.partition("=")
+        # 그 프린터에 실제로 있는 옵션·값만 — 다른 lpadmin -o 속성(printer-op-policy 등)을 이 길로 바꿀 수 없게
+        if (not sep or key in seen or not OPT_KEY_RE.fullmatch(key) or not OPT_VAL_RE.fullmatch(val)
+                or key.lower().startswith(("printer-", "port-monitor", "job-")) or val not in table.get(key, ())):
+            fail("인쇄 설정 값이 올바르지 않습니다")
+        seen.add(key)
+        cmd += ["-o", f"{key}={val}"]
+    rc, out = run(cmd)
+    if rc != 0:
+        fail(reason(out, "인쇄 설정을 저장하지 못했습니다"))
+
+
+def change_driver(name, driver):
+    must_exist(name)
+    check_driver(driver)
+    rc, out = run(["lpadmin", "-p", name, "-m", driver])
+    if rc != 0:
+        fail(reason(out, "드라이버를 바꾸지 못했습니다"))
+
+
+def lpinfo(args, fallback):
+    """lpinfo 의 출력을 그대로 내보내고 끝낸다 (OK 없이)"""
+    rc, out, err = run_out(["lpinfo", "-l"] + args, timeout=180)
+    if rc != 0:
+        fail(reason(err or out, fallback))
+    sys.stdout.write(out)
+    sys.stdout.flush()
+    sys.exit(0)
 
 
 def simple(cmds, fallback):
@@ -135,6 +312,19 @@ def main():
     a = sys.argv[1:]
     if len(a) == 5 and a[0] == "add" and a[4] in ("default", "keep"):
         add(a[1], a[2], a[3], a[4] == "default")
+    elif len(a) == 8 and a[0] == "add-driver" and a[6] in ("shared", "private") and a[7] in ("default", "keep"):
+        add_driver(a[1], a[2], a[3], a[4], a[5], a[6] == "shared", a[7] == "default")
+    elif 3 <= len(a) <= 5 and a[0] == "modify":
+        modify(a[1], a[2:])
+    elif 3 <= len(a) <= 52 and a[0] == "options":
+        set_options(a[1], a[2:])
+    elif len(a) == 3 and a[0] == "driver":
+        change_driver(a[1], a[2])
+    elif a == ["devices"]:
+        # --timeout 은 -v 앞에 와야 먹는다
+        lpinfo(["--timeout", str(LPINFO_SECS), "-v"], "프린터 장치를 찾지 못했습니다")
+    elif a == ["drivers"]:
+        lpinfo(["-m"], "드라이버 목록을 읽지 못했습니다")
     elif len(a) == 2 and a[0] in ("remove", "default", "resume", "pause"):
         check_name(a[1])
         if a[0] == "remove":
@@ -150,7 +340,8 @@ def main():
     elif a == ["service-on"]:
         service_on()
     else:
-        fail("사용법: sekai-printers add|remove|default|cancel|resume|pause|service-on …", 2)
+        fail("사용법: sekai-printers add|add-driver|modify|options|driver|devices|drivers|remove|default|"
+             "cancel|resume|pause|service-on …", 2)
     print("OK", flush=True)
 
 

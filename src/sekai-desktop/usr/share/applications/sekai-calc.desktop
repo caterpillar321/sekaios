@@ -1,0 +1,21 @@
+[Desktop Entry]
+Type=Application
+Name=Calculator
+Name[ko]=계산기
+GenericName=Calculator
+GenericName[ko]=계산기
+Comment=Perform standard and scientific calculations
+Comment[ko]=표준 계산과 공학용 계산을 합니다
+Exec=sekai-calc
+Icon=accessories-calculator
+Terminal=false
+Categories=Utility;Calculator;GTK;
+Keywords=계산기;계산;공학용;표준;수학;더하기;calculator;calc;scientific;math;arithmetic;
+StartupNotify=true
+StartupWMClass=org.sekaios.Calculator
+Actions=scientific;
+
+[Desktop Action scientific]
+Name=Scientific
+Name[ko]=공학용
+Exec=sekai-calc --scientific

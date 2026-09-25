@@ -1,79 +1,16 @@
-"""소리 · 키보드 · 마우스."""
-import re
+"""키보드 · 마우스.
 
+소리는 pages/sound.py (설정 › 소리) — 예전엔 여기서 wpctl 로 출력 장치·볼륨만 만지고 나머지는 pavucontrol 에 맡겼다.
+"""
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GLib  # noqa: E402
+from gi.repository import Gtk  # noqa: E402
 
-from ..util import run, spawn
-from ..widgets import (Page, button, combo, info, row, slider, spin, switch)
+from ..widgets import Page, button, combo, row, slider, switch
 
 LAYOUTS = [("us", "영어 (미국)"), ("kr", "한국어"), ("jp", "일본어"),
            ("de", "독일어"), ("fr", "프랑스어"), ("es", "스페인어"),
            ("ru", "러시아어"), ("cn", "중국어")]
-
-
-# ── 소리 ────────────────────────────────────────────────────
-def _sinks():
-    """wpctl status 에서 출력 장치 목록을 뽑는다."""
-    out = run(["wpctl", "status"])
-    sinks, cur = [], None
-    sect = None
-    for line in out.splitlines():
-        if "Sinks:" in line:
-            sect = "sink"
-            continue
-        if sect == "sink":
-            if re.match(r"^\s*[├└│]?\s*$", line) or "Sources:" in line \
-                    or "Filters" in line or "Streams" in line:
-                if "Sources:" in line or "Filters" in line or "Streams" in line:
-                    break
-                continue
-            m = re.search(r"(\*?)\s*(\d+)\.\s+(.+?)\s*\[", line)
-            if m:
-                star, sid, name = m.groups()
-                sinks.append((sid, name.strip()))
-                if star:
-                    cur = sid
-    return sinks, cur
-
-
-def _volume():
-    out = run(["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"])
-    parts = out.split()
-    vol = float(parts[1]) * 100 if len(parts) > 1 else 0.0
-    return round(vol), ("MUTED" in out)
-
-
-def build_sound(store):
-    p = Page("소리", "출력 장치와 볼륨을 조정합니다.")
-    vol, muted = _volume()
-
-    s = p.section("출력")
-    sinks, cur = _sinks()
-    if sinks:
-        row(s, "출력 장치", "소리가 나갈 곳",
-            icon=["audio-speakers", "audio-card"],
-            control=combo(sinks, cur,
-                          lambda v: run(["wpctl", "set-default", str(v)])))
-    else:
-        p.add_widget(_notice("오디오 장치를 찾지 못했습니다. "
-                             "wireplumber 가 실행 중인지 확인하세요."))
-
-    vslider = slider(vol, 0, 100, 1,
-                     lambda v: run(["wpctl", "set-volume",
-                                    "@DEFAULT_AUDIO_SINK@", f"{int(v)}%"]))
-    row(s, "볼륨", None, icon=["audio-volume-high"], control=vslider)
-    row(s, "음소거", None,
-        control=switch(muted, lambda v: run(["wpctl", "set-mute",
-                                             "@DEFAULT_AUDIO_SINK@",
-                                             "1" if v else "0"])))
-
-    s = p.section("도구")
-    row(s, "고급 소리 설정", "장치별 볼륨, 입력, 프로파일",
-        icon=["multimedia-volume-control", "pavucontrol"],
-        control=button("pavucontrol 열기", lambda: spawn("pavucontrol")))
-    return p
 
 
 def edited_entry(text, on_change, width=20, placeholder=None):
@@ -167,18 +104,7 @@ def build_input(store):
     return p
 
 
-def _notice(text):
-    l = Gtk.Label(label=text, xalign=0)
-    l.get_style_context().add_class("notice")
-    l.set_line_wrap(True)
-    return l
-
-
 PAGES = [
-    {"id": "sound", "title": "소리",
-     "icon": ["audio-volume-high", "multimedia-volume-control",
-              "audio-volume-high-symbolic"],
-     "build": build_sound},
     {"id": "input", "title": "키보드 및 마우스",
      "icon": ["input-keyboard", "preferences-desktop-peripherals",
               "input-keyboard-symbolic"],

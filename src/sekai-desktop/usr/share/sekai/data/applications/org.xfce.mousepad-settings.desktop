@@ -1,0 +1,6 @@
+[Desktop Entry]
+# SekaiOS: 시작 메뉴·검색에서 숨긴다 — 편집기 자체 설정 창 (앱 안에서 연다)
+Type=Application
+Name=Mousepad Settings
+Exec=mousepad --preferences
+NoDisplay=true

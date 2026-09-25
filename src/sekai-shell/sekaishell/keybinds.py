@@ -2,7 +2,7 @@
 
   /usr/share/sekai/hypr/hyprland.conf
       #: 앱 실행                                       ← 그 아래 줄들의 묶음 이름 (설정 › 단축키)
-      bindd = $mainMod, E, 파일 탐색기, exec, thunar   ← 설명(d)이 화면에 보이는 이름
+      bindd = $mainMod, E, 파일 탐색기, exec, sekai-files   ← 설명(d)이 화면에 보이는 이름
   사용자가 바꾼 것만 settings.json 의 "keybinds" 에:
       "changed": {"SUPER+E": "SUPER+w", "SUPER+N": ""}   기본 키 조합(= 항목 이름) → 새 조합, "" = 끔
       "custom":  [{"name": "브라우저", "command": "chromium", "key": "SUPER+b"}]

@@ -1,0 +1,6 @@
+[Desktop Entry]
+# SekaiOS: 시작 메뉴·검색에서 숨긴다 — 이동식 드라이브 자동 연결은 SekaiOS 가 직접 한다
+Type=Application
+Name=Removable Drives and Media
+Exec=thunar-volman-settings
+NoDisplay=true

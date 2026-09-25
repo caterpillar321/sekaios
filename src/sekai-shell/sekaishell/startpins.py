@@ -6,6 +6,8 @@
 import json
 import os
 
+from .pins import replaced_id
+
 PIN_FILE = os.path.expanduser("~/.config/sekai/start-pins.json")
 
 
@@ -15,7 +17,12 @@ def load(defaults):
         with open(PIN_FILE, encoding="utf-8") as f:
             v = json.load(f)
         if isinstance(v, list):
-            return [str(x).lower() for x in v if x]
+            out = []
+            for x in v:
+                aid = replaced_id(str(x)).lower() if x else ""
+                if aid and aid not in out:
+                    out.append(aid)
+            return out
     except FileNotFoundError:
         return list(defaults)
     except (OSError, ValueError):

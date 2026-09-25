@@ -351,3 +351,26 @@ button.prn-back {
 }
 button.prn-back:hover { background: @hover; }
 label.prn-name { font-size: 20px; font-weight: 700; color: @fg; }
+
+/* 소리 — 입력 테스트 막대, 장치 고르기 라디오 단추 (강조색) */
+levelbar.snd-meter trough { background: @hover; border: none; border-radius: 999px; min-height: 6px; padding: 0; }
+levelbar.snd-meter block.filled { background: @accent; border: none; border-radius: 999px; }
+levelbar.snd-meter block.empty { background: transparent; border: none; }
+radio:checked { background: @accent; border-color: @accent; color: @on_accent; }
+
+/* 프린터 — 드라이버 고르기 (제조업체 · 모델 목록) */
+scrolledwindow.prn-list-box { border: 1px solid @line; border-radius: 6px; background: @card; }
+treeview.prn-list { background: @card; color: @fg; }
+treeview.prn-list:selected { background: @accent; color: @on_accent; }
+treeview.prn-list header button {
+    background: @card; border: none; border-bottom: 1px solid @line;
+    border-radius: 0; padding: 6px 10px; box-shadow: none;
+}
+treeview.prn-list header button label { color: @text2; font-size: 12px; font-weight: 600; }
+
+/* 네트워크 — 연결 속성 */
+label.net-error { color: mix(#e0453a, @fg, 0.25); }
+box.net-head { margin: 4px 0 18px 0; }
+button.net-back { background: transparent; border-color: transparent; border-radius: 6px; padding: 8px; }
+button.net-back:hover { background: @hover; }
+label.net-name { font-size: 20px; font-weight: 700; color: @fg; }

@@ -2,7 +2,9 @@
 <!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
 <!-- SekaiOS 프린터 도우미 — 설정 앱의 "프린터" 페이지가 pkexec 로 부른다.
-     CUPS 관리 권한(lpadmin 그룹)이 없는 사용자만 여기로 온다 (있으면 CUPS 명령을 직접 쓴다) -->
+     CUPS 관리 권한(lpadmin 그룹)이 없는 사용자만 여기로 온다 (있으면 CUPS 명령을 직접 쓴다).
+     프린터 추가(드라이버 없이 · 드라이버와 함께) · 제거 · 속성 · 기본 인쇄 설정 · 드라이버 변경 · 장치 찾기 ·
+     작업 취소 · 인쇄 서비스 켜기. 인자는 도우미가 엄격히 검사한다 -->
 <policyconfig>
   <vendor>SekaiOS</vendor>
   <action id="org.sekaios.printers">

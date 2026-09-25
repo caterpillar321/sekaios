@@ -1,0 +1,6 @@
+[Desktop Entry]
+# SekaiOS: 시작 메뉴·검색에서 숨긴다 — IP·DNS·VPN·숨겨진 네트워크는 설정 › 네트워크에 있다
+Type=Application
+Name=Advanced Network Configuration
+Exec=nm-connection-editor
+NoDisplay=true

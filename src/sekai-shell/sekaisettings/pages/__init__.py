@@ -13,8 +13,10 @@ from . import (about, display, graphics, personalize, devices, network,  # noqa:
 from . import bluetooth  # noqa: F401
 from . import printers  # noqa: F401
 from . import multitasking, shortcuts  # noqa: F401
+from . import sound  # noqa: F401
 
-MODULES = [about, display, graphics, personalize, multitasking, devices, shortcuts, bluetooth, printers, network,
+# 윈도우 11 의 시스템 순서처럼 디스플레이 다음에 소리
+MODULES = [about, display, graphics, sound, personalize, multitasking, devices, shortcuts, bluetooth, printers, network,
            notifications, locale, apps, users, update]
 
 

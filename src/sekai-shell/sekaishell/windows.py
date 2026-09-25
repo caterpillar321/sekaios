@@ -28,7 +28,7 @@ STATE = os.path.expanduser("~/.local/state/sekai/windows.json")
 MIN_W, MIN_H = 320, 200
 SNAP_GAP = 0               # 스냅한 창은 화면 끝과 서로에게 딱 붙인다 (윈도우 11)
 # 크기를 기억하지 않을 창 — 크기가 스스로 정해지는 것들
-SKIP_CLASSES = {"", "lxpolkit", "polkit-gnome-authentication-agent-1", "pinentry",
+SKIP_CLASSES = {"", "lxpolkit", "polkit-gnome-authentication-agent-1", "polkit-agent", "nm-agent", "pinentry",
                 "org.freedesktop.impl.portal.desktop.gtk", "xdg-desktop-portal-gtk",
                 "sekai-settings-shot"}
 

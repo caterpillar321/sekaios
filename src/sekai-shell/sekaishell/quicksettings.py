@@ -8,6 +8,8 @@
   🔋 85%  충전 중                ⚙
 
 › 를 누르면 같은 팝업 안에서 세부 보기 (Wi-Fi 네트워크 · 블루투스 장치 · 출력 장치).
+  회사·학교(802.1X) 네트워크와 숨겨진 네트워크는 설정 앱의 Wi-Fi 연결 창(sekaisettings.pages.network.WifiDialog)을
+  이 패널 안에서 띄운다 — 다른 데스크톱의 nm-applet 에 맡기지 않는다.
 작업 표시줄 아이콘에 필요한 네트워크 상태는 NetworkManager 의 속성 바뀜 신호로 받는다 (묻기를 되풀이하지 않는다).
 나머지 조회(nmcli·wpctl·brightnessctl)는 팝업이 열려 있는 동안만, 기다리지 않고 —
 run 은 패널의 run_limited(argv, done, secs, capture).
@@ -549,9 +551,11 @@ NEED_PW = "need-password"
 
 
 def _nmcli(argv, timeout):
-    """(작업 스레드) nmcli 실행 → None(성공) 또는 오류 한 줄"""
+    """(작업 스레드) nmcli 실행 → None(성공) 또는 오류 한 줄.
+    오류 문구로 "암호가 필요함"을 알아보므로 영어(C.UTF-8)로 — 한국어 번역이 깔려 있으면 문구가 바뀐다"""
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
+                           env=dict(os.environ, LC_ALL="C.UTF-8", LANG="C.UTF-8"))
     except subprocess.TimeoutExpired:
         return "시간이 초과되었습니다"
     except OSError as e:
@@ -564,6 +568,16 @@ def _nmcli(argv, timeout):
 
 def _secrets_error(err):
     return "Secrets were required" in err or "802-11-wireless-security" in err or "802.1X" in err
+
+
+def is_enterprise(sec):
+    """회사·학교 네트워크 (WPA2/WPA3-Enterprise, 802.1X) — 암호 하나가 아니라 계정으로 로그인한다"""
+    return "802.1X" in (sec or "").upper()
+
+
+def needs_key(sec):
+    """암호를 물어야 하는 보안 — 개방과 OWE(보안 개방)는 암호가 없다"""
+    return bool(sec) and sec.strip().upper() != "OWE"
 
 
 def _friendly(err):
@@ -609,7 +623,7 @@ def wifi_connect(ssid, sec, pw, dev):
             dbg("wifi_connect_secret 를 가져오지 못함", e)
             return "설정 앱의 네트워크 페이지에서 연결해 주세요"
         return _friendly(wifi_connect_secret(ssid, sec, pw, dev))
-    if sec:
+    if needs_key(sec):
         uuid = saved_wifi_uuid(ssid)
         if uuid is None:
             return NEED_PW
@@ -1618,6 +1632,9 @@ class QuickSettings(PanelPopup):
                             trailing=["changes-prevent-symbolic", "network-wireless-encrypted-symbolic"]
                             if secured else None)
             self._wifi_actions(act, net)
+        if on:
+            self._row(d, "wifi-hidden", ["network-wireless-symbolic"], "숨겨진 네트워크",
+                      "이름을 알리지 않는 네트워크에 연결", on_click=lambda: self._wifi_dialog(None))
         d.list.show_all()
         self._fit()
 
@@ -1635,8 +1652,9 @@ class QuickSettings(PanelPopup):
                 ui["ui"].set_status("네트워크 보안 키를 입력하세요", error=True)
                 return
             self._wifi_connect(net, ui["ui"], pw)
+        # 회사·학교 네트워크는 암호 칸 대신 로그인 창 (저장된 프로필이 있으면 그것으로 먼저 연결해 본다)
         ui["ui"] = _RowUI(act, "연결 끊기" if net["active"] else "연결", not net["active"], go,
-                          password=bool(net["sec"]) and not net["active"])
+                          password=needs_key(net["sec"]) and not is_enterprise(net["sec"]) and not net["active"])
 
     def _wifi_connect(self, net, ui, pw=None):
         self._wifi_busy = True
@@ -1650,13 +1668,29 @@ class QuickSettings(PanelPopup):
                 err = wifi_connect(net["ssid"], net["sec"], pw, dev)
             except Exception as e:                # 스레드에서 새면 버튼이 영영 잠긴다
                 err = str(e)
-            GLib.idle_add(self._wifi_done, ui, err, pw is not None)
+            GLib.idle_add(self._wifi_done, ui, err, pw is not None, net)
         threading.Thread(target=work, daemon=True).start()
 
-    def _wifi_done(self, ui, err, had_pw):
+    def _wifi_dialog(self, net):
+        """회사·학교 네트워크 로그인(net) · 숨겨진 네트워크 연결(None) — 설정 앱의 Wi-Fi 연결 창을 이 패널에서
+        띄운다. 팝업은 닫는다 (창이 키보드를 받아야 하고, 팝업 밖을 누르면 어차피 닫힌다)"""
+        wd = self._wifi_dev()
+        dev = wd["dev"] if wd else None
+        self.close()
+        try:
+            from sekaisettings.pages.network import WifiDialog
+        except Exception as e:                            # 설정 앱이 없는 설치본
+            dbg("WifiDialog 를 가져오지 못함", e)
+            self.open_settings("network")
+            return
+        WifiDialog(None, net["ssid"] if net else None, dev, security="eap" if net else None)
+
+    def _wifi_done(self, ui, err, had_pw, net=None):
         self._wifi_busy = False
         ui.busy(False)
-        if err == NEED_PW:
+        if err == NEED_PW and net is not None and is_enterprise(net["sec"]):
+            self._wifi_dialog(net)
+        elif err == NEED_PW:
             ui.set_status("네트워크 보안 키를 입력하세요")
             ui.ask_password()
         elif err:

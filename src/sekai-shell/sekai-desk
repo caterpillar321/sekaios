@@ -114,7 +114,7 @@ def notify(summary, body=""):
 
 
 def file_manager():
-    return settings().get("apps", {}).get("files") or "thunar"
+    return settings().get("apps", {}).get("files") or "sekai-files"
 
 
 # ── 실행기(.desktop) 신뢰 ─────────────────────────────────────
@@ -753,7 +753,8 @@ class Desk(Gtk.Window):
             self.wall_stamp = stamp
             old = self._current_surface()
             try:
-                self.wall_src = GdkPixbuf.Pixbuf.new_from_file(path)
+                # 폰 사진은 EXIF 방향대로 세운다 (안 하면 사진 앱에서 배경으로 고른 세로 사진이 누워 보였다)
+                self.wall_src = GdkPixbuf.Pixbuf.new_from_file(path).apply_embedded_orientation()
                 self.wall_path = path
             except Exception as e:
                 dbg("배경 읽기 실패", path, e)

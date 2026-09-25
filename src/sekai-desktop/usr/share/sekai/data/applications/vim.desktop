@@ -1,0 +1,6 @@
+[Desktop Entry]
+# SekaiOS: 시작 메뉴·검색에서 숨긴다 — 터미널 도구 — 터미널에서 vim 으로 실행
+Type=Application
+Name=Vim
+Exec=vim %F
+NoDisplay=true

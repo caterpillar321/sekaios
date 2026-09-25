@@ -1,0 +1,6 @@
+[Desktop Entry]
+# SekaiOS: 시작 메뉴·검색·연결 프로그램에서 숨긴다 — 사진(sekai-photos)이 대신한다
+Type=Application
+Name=Ristretto Image Viewer
+Exec=ristretto %U
+NoDisplay=true

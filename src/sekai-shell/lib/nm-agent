@@ -1,0 +1,579 @@
+#!/usr/bin/env python3
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 네트워크 암호 창 — NetworkManager 비밀 에이전트 (SecretAgent)
+#
+#  nm-applet 의 암호 창을 대신한다. NetworkManager 가 연결하다가 암호가 필요하면
+#  (저장된 Wi-Fi 암호가 틀렸거나 바뀌었을 때, 802.1X 회사·학교 네트워크, 모바일 광대역 PIN, PPPoE)
+#  이 세션의 에이전트에게 묻는다. 그때 윈도우처럼 "네트워크 보안 키 입력" 카드를 띄운다.
+#  (새 Wi-Fi 에 처음 연결할 때의 암호는 작업 표시줄의 빠른 설정이 직접 묻는다 — 여기는 다시 물을 때)
+#
+#  구조
+#    · org.freedesktop.NetworkManager.SecretAgent 를 Gio 로 직접 내보낸다 (시스템 버스,
+#      /org/freedesktop/NetworkManager/SecretAgent). AgentManager.RegisterWithCapabilities 로 등록하고,
+#      NetworkManager 가 다시 시작되면(버스 이름이 새로 생기면) 다시 등록한다.
+#    · GetSecrets 는 답을 미뤄 두었다가 사용자가 "연결"·"취소"를 누르면 답한다. 겹치면 줄을 세운다.
+#    · 우리는 암호를 따로 보관하지 않는다 (SaveSecrets·DeleteSecrets 는 성공으로만 답한다).
+#      암호를 저장하는 것은 NetworkManager 자신이다 (시스템 소유 암호 — nmcli 로 만든 연결의 기본값).
+#    · VPN 은 아직 지원하지 않는다 (VPN 플러그인마다 인증 창이 따로 있다) — NoSecrets 로 답하고 기록만.
+#    · nm-applet 을 함께 띄운다면 "nm-applet --indicator --no-agent" 로 (에이전트가 둘이면 어느 쪽이 물을지 모른다).
+#
+#  실행: /usr/lib/sekai/nm-agent     (세션이 띄운다 — hyprland.conf, x11/session)
+#  SEKAI_DEBUG=1 이면 받은 요청을 표준 오류로 남긴다 (암호는 남기지 않는다).
+# ═══════════════════════════════════════════════════════════════
+import os
+import re
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+for _d in (HERE, os.path.dirname(HERE)):              # 개발 트리(src/sekai-shell/lib)에서도 돌게
+    if os.path.isdir(os.path.join(_d, "sekaishell")):
+        sys.path.insert(0, _d)
+        break
+
+import gi  # noqa: E402
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
+
+from sekaishell import authui  # noqa: E402
+
+DEBUG = os.environ.get("SEKAI_DEBUG") == "1"
+
+NM_NAME = "org.freedesktop.NetworkManager"
+AM_PATH = "/org/freedesktop/NetworkManager/AgentManager"
+AM_IFACE = "org.freedesktop.NetworkManager.AgentManager"
+AGENT_PATH = "/org/freedesktop/NetworkManager/SecretAgent"
+IDENTIFIER = "org.sekaios.nm-agent"
+
+ERR = "org.freedesktop.NetworkManager.SecretAgent."
+ERR_NO_SECRETS = ERR + "NoSecrets"
+ERR_USER_CANCELED = ERR + "UserCanceled"
+ERR_AGENT_CANCELED = ERR + "AgentCanceled"
+
+# GetSecrets flags
+ALLOW_INTERACTION = 0x1
+REQUEST_NEW = 0x2
+USER_REQUESTED = 0x4
+WPS_PBC_ACTIVE = 0x8
+
+XML = """
+<node>
+  <interface name="org.freedesktop.NetworkManager.SecretAgent">
+    <method name="GetSecrets">
+      <arg type="a{sa{sv}}" name="connection" direction="in"/>
+      <arg type="o" name="connection_path" direction="in"/>
+      <arg type="s" name="setting_name" direction="in"/>
+      <arg type="as" name="hints" direction="in"/>
+      <arg type="u" name="flags" direction="in"/>
+      <arg type="a{sa{sv}}" name="secrets" direction="out"/>
+    </method>
+    <method name="CancelGetSecrets">
+      <arg type="o" name="connection_path" direction="in"/>
+      <arg type="s" name="setting_name" direction="in"/>
+    </method>
+    <method name="SaveSecrets">
+      <arg type="a{sa{sv}}" name="connection" direction="in"/>
+      <arg type="o" name="connection_path" direction="in"/>
+    </method>
+    <method name="DeleteSecrets">
+      <arg type="a{sa{sv}}" name="connection" direction="in"/>
+      <arg type="o" name="connection_path" direction="in"/>
+    </method>
+  </interface>
+</node>
+"""
+
+
+def log(*a):
+    print("[nm-agent]", *a, file=sys.stderr, flush=True)
+
+
+def dbg(*a):
+    if DEBUG:
+        log(*a)
+
+
+def _str(v):
+    if v is None:
+        return ""
+    if isinstance(v, (bytes, bytearray)):
+        return bytes(v).decode("utf-8", "replace")
+    if isinstance(v, (list, tuple)):
+        try:
+            return bytes(v).decode("utf-8", "replace")
+        except (TypeError, ValueError):
+            return ""
+    return str(v)
+
+
+def ssid_of(conn):
+    s = _str((conn.get("802-11-wireless") or {}).get("ssid"))
+    return s or (conn.get("connection") or {}).get("id") or ""
+
+
+# ═══ 무엇을 물을지 ═════════════════════════════════════════════════
+HEX = re.compile(r"^[0-9a-fA-F]+$")
+
+
+def check_psk(v):
+    if len(v) == 64 and HEX.match(v):
+        return None
+    if 8 <= len(v) <= 63:
+        return None
+    return "보안 키는 8~63자이거나 16진수 64자리여야 합니다."
+
+
+def check_wep(key_type):
+    def f(v):
+        if key_type == 1:                          # 16진수·ASCII 키
+            if len(v) in (5, 13) or (len(v) in (10, 26) and HEX.match(v)):
+                return None
+            return "WEP 키는 5·13자이거나 16진수 10·26자리여야 합니다."
+        if 1 <= len(v) <= 64:                      # 암호문(또는 모름 — NetworkManager 가 둘 다 받는다)
+            return None
+        return "WEP 암호는 64자 이하여야 합니다."
+    return f
+
+
+def check_pin(v):
+    return None if v.isdigit() and 4 <= len(v) <= 8 else "PIN은 4~8자리 숫자입니다."
+
+
+def obj(word):
+    """목적격 조사 — 받침이 있으면 "을", 없으면 "를" ("암호를", "사용자 이름을")"""
+    ch = word[-1:] if word else ""
+    if "\uac00" <= ch <= "\ud7a3":
+        return word + ("을" if (ord(ch) - 0xAC00) % 28 else "를")
+    return word + "을(를)"
+
+
+def nonempty(v):
+    return None if v else ""
+
+
+class Field:
+    """물어볼 칸 하나. key = 답할 설정 키. 사용자 이름(identity)은 비밀이 아니라 답에 넣지 않는다 (key 없음)"""
+
+    def __init__(self, key, label, secret=True, check=nonempty, value="", editable=True, identity=False):
+        self.key = key
+        self.identity = identity
+        self.label = label
+        self.secret = secret
+        self.check = check
+        self.value = value
+        self.editable = editable
+
+
+def plan(conn, setting, hints):
+    """(제목, 부제, 아이콘 후보, [Field], 설명) — 모르는 요청이면 None"""
+    ctype = (conn.get("connection") or {}).get("type", "")
+    cid = (conn.get("connection") or {}).get("id", "")
+    hints = list(hints or [])
+    wifi = ctype == "802-11-wireless"
+    name = ssid_of(conn) if wifi else cid
+    wicons = ["network-wireless", "network-wireless-signal-excellent", "network-wireless-symbolic"]
+    if setting == "802-11-wireless-security":
+        sec = conn.get("802-11-wireless-security") or {}
+        km = str(sec.get("key-mgmt", "")).lower()
+        if km in ("wpa-psk", "wpa-none"):
+            return ("네트워크 보안 키 입력", name, wicons,
+                    [Field("psk", "네트워크 보안 키", check=check_psk)], None)
+        if km == "sae":
+            return ("네트워크 보안 키 입력", name, wicons,
+                    [Field("psk", "네트워크 보안 키")], None)
+        if km == "none":
+            idx = int(sec.get("wep-tx-keyidx", 0) or 0)
+            idx = idx if 0 <= idx <= 3 else 0
+            kt = int(sec.get("wep-key-type", 0) or 0)
+            return ("네트워크 보안 키 입력", name, wicons,
+                    [Field(f"wep-key{idx}", "네트워크 보안 키", check=check_wep(kt))], None)
+        if km == "ieee8021x" and str(sec.get("auth-alg", "")).lower() == "leap":
+            user = str(sec.get("leap-username", ""))
+            return ("네트워크 인증", name, wicons,
+                    [Field("", "사용자 이름", secret=False, value=user, editable=False),
+                     Field("leap-password", "암호")], None)
+        return None
+    if setting == "802-1x":
+        x = conn.get("802-1x") or {}
+        eap = [str(e).lower() for e in (x.get("eap") or [])]
+        ident = str(x.get("identity", "") or "")
+        icons = wicons if wifi else ["network-wired", "network-wired-symbolic"]
+        sub = name if wifi else f"유선 네트워크 ({cid})" if cid else "유선 네트워크"
+        fields = []
+        if "private-key-password" in hints or "phase2-private-key-password" in hints or \
+                (eap == ["tls"] and not hints):
+            key = "phase2-private-key-password" if "phase2-private-key-password" in hints else "private-key-password"
+            if ident:
+                fields.append(Field("", "사용자 이름", secret=False, value=ident, editable=False))
+            fields.append(Field(key, "개인 키 암호"))
+            return ("네트워크 인증", sub, icons, fields, "인증서의 개인 키 암호를 입력하세요.")
+        # PEAP·TTLS·FAST·PWD·LEAP·MD5 — 사용자 이름과 암호
+        fields.append(Field("", "사용자 이름", secret=False, value=ident, editable=not ident, identity=True))
+        fields.append(Field("password", "암호"))
+        note = "이 네트워크에 로그인할 암호를 입력하세요." if ident else \
+            "이 네트워크에 로그인할 사용자 이름과 암호를 입력하세요."
+        return ("네트워크 인증", sub, icons, fields, note)
+    if setting == "gsm":
+        gsm = conn.get("gsm") or {}
+        icons = ["network-cellular", "modem", "network-wireless"]
+        if "pin" in hints:
+            return ("SIM PIN 입력", cid or "모바일 광대역", icons,
+                    [Field("pin", "SIM PIN", check=check_pin)], "SIM 카드의 잠금을 풀려면 PIN을 입력하세요.")
+        user = str(gsm.get("username", "") or "")
+        fields = [Field("", "사용자 이름", secret=False, value=user, editable=False)] if user else []
+        return ("모바일 광대역 인증", cid or "모바일 광대역", icons, fields + [Field("password", "암호")], None)
+    if setting == "cdma":
+        user = str((conn.get("cdma") or {}).get("username", "") or "")
+        fields = [Field("", "사용자 이름", secret=False, value=user, editable=False)] if user else []
+        return ("모바일 광대역 인증", cid or "모바일 광대역", ["network-cellular", "modem"],
+                fields + [Field("password", "암호")], None)
+    if setting == "pppoe":
+        user = str((conn.get("pppoe") or {}).get("username", "") or "")
+        fields = [Field("", "사용자 이름", secret=False, value=user, editable=False)] if user else []
+        return ("PPPoE 인증", cid or "광대역 연결", ["network-wired", "network-workgroup"],
+                fields + [Field("password", "암호")], "인터넷 서비스 공급자(ISP)가 준 암호를 입력하세요.")
+    if setting == "adsl":
+        return ("ADSL 인증", cid or "광대역 연결", ["network-wired"], [Field("password", "암호")], None)
+    return None
+
+
+# ═══ 요청 하나 ═══════════════════════════════════════════════════
+class Request:
+    def __init__(self, inv, conn, path, setting, hints, flags):
+        self.inv = inv
+        self.conn = conn
+        self.path = path
+        self.setting = setting
+        self.hints = hints
+        self.flags = flags
+        self.dialog = None
+        self.answered = False
+
+    def reply(self, values=None, error=None, text=""):
+        if self.answered:
+            return
+        self.answered = True
+        try:
+            if error:
+                self.inv.return_dbus_error(error, text or error)
+            else:
+                d = {k: GLib.Variant("s", v) for k, v in (values or {}).items()}
+                self.inv.return_value(GLib.Variant("(a{sa{sv}})", ({self.setting: d},)))
+        except Exception as e:                          # NetworkManager 가 이미 사라졌다
+            dbg("답을 보내지 못함", e)
+
+
+# ═══ 암호 창 ═════════════════════════════════════════════════════
+class SecretDialog:
+    def __init__(self, agent, req, what):
+        self.agent = agent
+        self.req = req
+        self.closed = False
+        title, sub, icons, self.fields, note = what
+        authui.load_style()
+        # 다른 창으로 초점을 옮길 수 있게(암호 관리자에서 복사) — 사용자 계정 컨트롤과 달리 화면을 덮지 않는다
+        self.win = authui.CardWindow("sekai-netauth", title, exclusive=False, width=400)
+        card = self.win.card
+        body = authui.body_box(12)
+        card.pack_start(body, False, False, 0)
+
+        top = Gtk.Box(spacing=14)
+        top.pack_start(authui.icon(icons, 36), False, False, 0)
+        col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        col.set_valign(Gtk.Align.CENTER)
+        col.pack_start(authui.label(title, "auth-title"), False, False, 0)
+        if sub:
+            col.pack_start(authui.label(sub, "auth-appname"), False, False, 0)
+        top.pack_start(col, True, True, 0)
+        body.pack_start(top, False, False, 0)
+
+        if note:
+            body.pack_start(authui.label(note, "auth-text"), False, False, 0)
+        self.hint = authui.Message()
+        body.pack_start(self.hint, False, False, 0)
+
+        self.entries = []
+        secrets = []
+        # 칸이 여럿이면 칸 위에 이름을 단다 (GTK3 는 칸에 초점이 가면 안내 글자를 감춘다)
+        captions = sum(1 for f in self.fields if f.editable) > 1 or any(not f.editable for f in self.fields)
+        for f in self.fields:
+            if not f.editable:
+                row = Gtk.Box(spacing=8)
+                row.pack_start(authui.label(f.label, "auth-key", wrap=False), False, False, 0)
+                row.pack_start(authui.label(f.value, "auth-val", selectable=True), True, True, 0)
+                body.pack_start(row, False, False, 0)
+                continue
+            e = authui.PasswordEntry(f.label, secret=f.secret)
+            e.field = f
+            if f.check is check_pin:
+                e.set_input_purpose(Gtk.InputPurpose.PIN)     # 숫자 자판 (화면 키보드)
+            if f.value:
+                e.set_text(f.value)
+            # Enter — "연결"이 아직 눌리지 않는 상태여도 불러서 왜 안 되는지 보여 준다
+            e.set_activates_default(False)
+            e.connect("activate", lambda *_: self.submit())
+            e.connect("changed", lambda *_: self._validate(False))
+            self.entries.append(e)
+            if f.secret:
+                secrets.append(e)
+            if captions:
+                box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+                box.pack_start(authui.label(f.label, "auth-key", wrap=False), False, False, 0)
+                box.pack_start(e, False, False, 0)
+                body.pack_start(box, False, False, 0)
+            else:
+                body.pack_start(e, False, False, 0)
+        self.caps = authui.CapsWarning(*secrets)
+        body.pack_start(self.caps, False, False, 0)
+        self.msg = authui.Message()
+        body.pack_start(self.msg, False, False, 0)
+
+        foot, self.ok, self.cancel = authui.foot_buttons("연결", "취소")
+        self.ok.connect("clicked", lambda *_: self.submit())
+        self.cancel.connect("clicked", lambda *_: self.answer(None))
+        card.pack_start(foot, False, False, 0)
+        self.win.set_default(self.ok)
+        self.win.connect("key-press-event", self._key)
+        self.win.connect("delete-event", lambda *_: (self.answer(None), True)[1])
+
+        if req.flags & REQUEST_NEW:
+            self.hint.show_text("암호가 올바르지 않을 수 있습니다. 다시 입력하세요.", "warn")
+        elif req.flags & WPS_PBC_ACTIVE:
+            self.hint.show_text("공유기의 WPS 단추를 눌러도 연결할 수 있습니다.", "info")
+        self._validate(False)
+        self.win.show_all()
+        first = next((e for e in self.entries if not e.get_text()), self.entries[0] if self.entries else None)
+        if first is not None:
+            first.grab_focus()
+
+    def _key(self, _w, ev):
+        if ev.keyval == Gdk.KEY_Escape:
+            self.answer(None)
+            return True
+        return False
+
+    def _validate(self, show):
+        """모든 칸이 맞아야 "연결"을 누를 수 있다. 치는 동안은 조용히, show=True(Enter·연결)일 때만 까닭을 보인다"""
+        why = None
+        for e in self.entries:
+            r = e.field.check(e.get_text())
+            if r is not None:
+                why = (e, r)
+                break
+        self.ok.set_sensitive(why is None)
+        if why is None or not show:
+            self.msg.show_text("")
+        else:
+            self.msg.show_text(why[1] or f"{obj(why[0].field.label)} 입력하세요.", "warn")
+            why[0].grab_focus_without_selecting()
+        return why is None
+
+    def submit(self):
+        if self.closed or not self._validate(True):
+            return
+        values = {}
+        ident = None
+        for e in self.entries:
+            if e.field.key:
+                values[e.field.key] = e.get_text()
+            elif e.field.identity:
+                ident = e.get_text()
+        self.answer(values, ident)
+
+    def answer(self, values, ident=None):
+        if self.closed:
+            return
+        self.close()
+        self.agent.finished(self.req, values, ident)
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        self.win.destroy()
+
+
+# ═══ 에이전트 ════════════════════════════════════════════════════
+class Agent:
+    def __init__(self):
+        self.conn = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        self.nm_owner = None          # NetworkManager 의 고유 버스 이름 — 이 이름(또는 root)의 요청만 받는다
+        self.queue = []
+        self.current = None
+        self.exit_code = 0
+        info = Gio.DBusNodeInfo.new_for_xml(XML)
+        self.conn.register_object(AGENT_PATH, info.interfaces[0], self._on_call, None, None)
+        Gio.bus_watch_name_on_connection(self.conn, NM_NAME, Gio.BusNameWatcherFlags.NONE,
+                                         self._nm_appeared, self._nm_vanished)
+
+    def quit(self, code):
+        self.exit_code = code
+        Gtk.main_quit()
+
+    # ── 등록 ──
+    def _nm_appeared(self, _conn, _name, owner):
+        self.nm_owner = owner
+        self.conn.call(NM_NAME, AM_PATH, AM_IFACE, "RegisterWithCapabilities",
+                       GLib.Variant("(su)", (IDENTIFIER, 0)), None,
+                       Gio.DBusCallFlags.NONE, 10000, None, self._registered)
+
+    def _registered(self, conn, res):
+        try:
+            conn.call_finish(res)
+        except GLib.Error as e:
+            if "already registered" in e.message:
+                log("이 사용자의 네트워크 암호 에이전트가 이미 떠 있습니다 — 끝냅니다.")
+                self.quit(2)
+                return
+            log("NetworkManager 에 등록하지 못했습니다:", e.message)
+            self.quit(1)
+            return
+        log("NetworkManager 에 등록했습니다")
+
+    def _nm_vanished(self, _conn, _name):
+        if self.nm_owner is not None:
+            log("NetworkManager 가 사라졌습니다 — 다시 뜨면 다시 등록합니다")
+        self.nm_owner = None
+        for r in ([self.current] if self.current else []) + self.queue:
+            if r.dialog is not None:
+                r.dialog.close()
+            r.reply(error=ERR_AGENT_CANCELED, text="NetworkManager 가 다시 시작되었습니다")
+        self.current = None
+        self.queue = []
+
+    # ── 부르는 쪽 확인 ──
+    def _on_call(self, conn, sender, _path, _iface, method, params, inv):
+        if sender == self.nm_owner:
+            self._dispatch(method, params, inv)
+            return
+        # NetworkManager 가 아니면 root 만 (root 는 어차피 모든 암호를 읽을 수 있다 — 시험용 호출도 root 로)
+        def done(c, res):
+            try:
+                uid = c.call_finish(res).unpack()[0]
+            except GLib.Error:
+                uid = -1
+            if uid == 0:
+                self._dispatch(method, params, inv)
+            else:
+                log("NetworkManager 가 아닌 곳의 요청을 거절:", sender, method)
+                inv.return_dbus_error("org.freedesktop.DBus.Error.AccessDenied", "NetworkManager 만 부를 수 있습니다")
+        conn.call("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+                  "GetConnectionUnixUser", GLib.Variant("(s)", (sender,)), GLib.VariantType("(u)"),
+                  Gio.DBusCallFlags.NONE, 3000, None, done)
+
+    def _dispatch(self, method, params, inv):
+        if method == "GetSecrets":
+            conn, path, setting, hints, flags = params.unpack()
+            ctype = (conn.get("connection") or {}).get("type", "")
+            dbg("GetSecrets", path, setting, list(hints), hex(flags), ctype,
+                {k: sorted(v.keys()) for k, v in conn.items()})
+            req = Request(inv, conn, path, setting, list(hints), flags)
+            if not flags & ALLOW_INTERACTION:
+                # 우리는 암호를 보관하지 않는다 — 물어볼 수 없으면 줄 것이 없다
+                req.reply(error=ERR_NO_SECRETS, text="보관한 암호가 없습니다")
+                return
+            if ctype == "vpn" or setting == "vpn":
+                log("VPN 암호 요청은 아직 지원하지 않습니다:", (conn.get("connection") or {}).get("id", path))
+                req.reply(error=ERR_NO_SECRETS, text="VPN 은 지원하지 않습니다")
+                return
+            if plan(conn, setting, hints) is None:
+                log("모르는 암호 요청:", ctype, setting, list(hints))
+                req.reply(error=ERR_NO_SECRETS, text="지원하지 않는 설정입니다")
+                return
+            # 같은 연결의 같은 요청이 이미 줄에 있으면 (NetworkManager 가 다시 물었다) 앞의 것은 취소
+            for old in [r for r in self.queue if r.path == path and r.setting == setting]:
+                self.queue.remove(old)
+                old.reply(error=ERR_AGENT_CANCELED)
+            self.queue.append(req)
+            if self.current is None:
+                self._next()
+        elif method == "CancelGetSecrets":
+            path, setting = params.unpack()
+            dbg("CancelGetSecrets", path, setting)
+            self.cancel(path, setting)
+            inv.return_value(None)
+        elif method in ("SaveSecrets", "DeleteSecrets"):
+            inv.return_value(None)                        # 따로 보관하는 암호가 없다
+        else:
+            inv.return_dbus_error("org.freedesktop.DBus.Error.UnknownMethod", method)
+
+    def cancel(self, path, setting):
+        cur = self.current
+        if cur is not None and cur.path == path and cur.setting == setting:
+            if cur.dialog is not None:
+                cur.dialog.close()
+            cur.reply(error=ERR_AGENT_CANCELED)
+            self._done(cur)
+            return
+        for r in [r for r in self.queue if r.path == path and r.setting == setting]:
+            self.queue.remove(r)
+            r.reply(error=ERR_AGENT_CANCELED)
+
+    def _next(self):
+        if self.current is not None or not self.queue:
+            return False
+        req = self.queue.pop(0)
+        self.current = req
+        try:
+            req.dialog = SecretDialog(self, req, plan(req.conn, req.setting, req.hints))
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            log("창을 띄우지 못했습니다:", e)
+            req.reply(error=ERR_NO_SECRETS)
+            self._done(req)
+        return False
+
+    def finished(self, req, values, ident=None):
+        if values is None:
+            req.reply(error=ERR_USER_CANCELED, text="사용자가 취소했습니다")
+        else:
+            req.reply(values)
+            if ident:
+                self._save_identity(req, ident)
+        self._done(req)
+
+    def _save_identity(self, req, ident):
+        """사용자 이름은 비밀이 아니라 에이전트의 답에 넣어도 NetworkManager 가 버린다 —
+        연결 설정에 비어 있던 것을 사용자가 채웠으면 설정에 저장한다 (다음 시도부터 쓰인다)"""
+        uuid = (req.conn.get("connection") or {}).get("uuid")
+        if not uuid:
+            return
+        try:
+            p = Gio.Subprocess.new(["nmcli", "connection", "modify", "uuid", uuid, "802-1x.identity", ident],
+                                   Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_PIPE)
+        except GLib.Error as e:
+            log("사용자 이름을 저장하지 못했습니다:", e.message)
+            return
+
+        def done(proc, res):
+            try:
+                _ok, _out, err = proc.communicate_utf8_finish(res)
+            except GLib.Error:
+                err = ""
+            if proc.get_exit_status() != 0:
+                log("사용자 이름을 저장하지 못했습니다:", (err or "").strip())
+        p.communicate_utf8_async(None, None, done)
+
+    def _done(self, req):
+        if self.current is req:
+            self.current = None
+            req.dialog = None
+            GLib.timeout_add(150, self._next)
+
+
+def main():
+    if not Gtk.init_check(sys.argv)[0]:
+        log("화면에 연결할 수 없습니다")
+        sys.exit(1)
+    try:
+        agent = Agent()
+    except GLib.Error as e:
+        log("시스템 버스에 연결할 수 없습니다:", e.message)
+        sys.exit(1)
+    Gtk.main()
+    sys.exit(agent.exit_code)
+
+
+if __name__ == "__main__":
+    main()

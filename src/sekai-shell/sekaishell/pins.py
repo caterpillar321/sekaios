@@ -15,7 +15,11 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gio  # noqa: E402
 
 PIN_FILE = os.path.expanduser("~/.config/sekai/pinned.json")
-DEFAULT_PINS = ["thunar", "chromium"]          # 윈도우의 파일 탐색기·브라우저처럼
+DEFAULT_PINS = ["sekai-files", "chromium"]     # 윈도우의 파일 탐색기·브라우저처럼
+# 다른 DE 의 앱 → 그것을 대신하는 SekaiOS 앱. 고정 목록(작업 표시줄·시작 메뉴)에 옛 id 가 남아 있으면
+#   새 앱이 설치돼 있을 때 새 것으로 보여 준다 (파일은 다음에 고칠 때 새 id 로 적힌다)
+REPLACED = {"thunar": "sekai-files", "org.xfce.mousepad": "sekai-notepad", "mousepad": "sekai-notepad",
+            "galculator": "sekai-calc", "org.xfce.ristretto": "sekai-photos"}
 _class_cache = {}
 _index = None                                  # 소문자 id → 실제 id (앱 목록에서 한 번에 만든다)
 _monitor = None
@@ -53,6 +57,14 @@ def real_id(app_id):
     return found
 
 
+def replaced_id(app_id):
+    """옛 앱 id 를 대신하는 SekaiOS 앱 id (그 앱이 없으면 그대로)"""
+    new = REPLACED.get((app_id or "").lower())
+    if new and os.path.exists(f"/usr/share/applications/{new}.desktop"):
+        return new
+    return app_id
+
+
 def load():
     try:
         with open(PIN_FILE, encoding="utf-8") as f:
@@ -60,7 +72,8 @@ def load():
         if isinstance(v, list):
             out, seen = [], set()
             for x in v:
-                aid = real_id(str(x)) or str(x)
+                x = replaced_id(str(x))
+                aid = real_id(x) or x
                 if aid and aid.lower() not in seen:
                     seen.add(aid.lower())
                     out.append(aid)

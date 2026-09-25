@@ -1,0 +1,6 @@
+[Desktop Entry]
+# SekaiOS: 시작 메뉴·검색에서 숨긴다 — 터미널 도구 — 작업 관리자가 있다. 터미널에서 htop 으로 실행
+Type=Application
+Name=Htop
+Exec=htop
+NoDisplay=true

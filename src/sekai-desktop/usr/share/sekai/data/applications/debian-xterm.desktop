@@ -1,0 +1,6 @@
+[Desktop Entry]
+# SekaiOS: 시작 메뉴·검색에서 숨긴다 — 기본 화면 모드용 예비 터미널 — 메뉴의 '터미널'이 알아서 고른다
+Type=Application
+Name=XTerm
+Exec=xterm
+NoDisplay=true

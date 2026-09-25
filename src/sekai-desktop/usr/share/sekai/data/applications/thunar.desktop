@@ -1,0 +1,6 @@
+[Desktop Entry]
+# SekaiOS: 시작 메뉴·검색·연결 프로그램에서 숨긴다 — 파일 탐색기(sekai-files)가 대신한다. 예전 설치본에 남은 XFCE 파일 관리자
+Type=Application
+Name=Thunar File Manager
+Exec=thunar %F
+NoDisplay=true

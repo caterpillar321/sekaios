@@ -1,0 +1,6 @@
+[Desktop Entry]
+# SekaiOS: 시작 메뉴·검색·연결 프로그램에서 숨긴다 — 메모장(sekai-notepad)이 대신한다
+Type=Application
+Name=Mousepad
+Exec=mousepad %U
+NoDisplay=true

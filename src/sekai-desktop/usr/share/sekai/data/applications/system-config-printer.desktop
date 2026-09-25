@@ -1,0 +1,6 @@
+[Desktop Entry]
+# SekaiOS: 시작 메뉴·검색에서 숨긴다 — 프린터 추가·속성·드라이버는 설정 › 프린터에 있다
+Type=Application
+Name=Print Settings
+Exec=system-config-printer
+NoDisplay=true

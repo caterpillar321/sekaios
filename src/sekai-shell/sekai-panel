@@ -82,7 +82,7 @@ _SEKAI_DEFAULTS = {
     "appearance": {"accent": "#39c5bb", "bg": "#151517",
                    "surface": "#1e1e22", "fg": "#f1f1f3"},
     "panel": {"height": 48, "clock_format": "%H:%M", "show_date": False},
-    "apps": {"terminal": "sekai-terminal", "browser": "chromium", "files": "thunar"},
+    "apps": {"terminal": "sekai-terminal", "browser": "chromium", "files": "sekai-files"},
 }
 
 
@@ -270,7 +270,7 @@ def app_dirs():
     return out
 
 
-# 지금 데스크톱 — Hyprland 세션은 "Hyprland", 기본 화면 모드(X11, xfwm4)는 "SekaiOS:XFCE"
+# 지금 데스크톱 — Hyprland 세션은 "Hyprland", 기본 화면 모드(X11, xfwm4)는 "SekaiOS"
 CURRENT_DESKTOPS = [d for d in os.environ.get("XDG_CURRENT_DESKTOP", "").split(":") if d]
 
 
@@ -373,7 +373,7 @@ def user_dir(kind):
 def make_desktop_shortcut(app):
     """시작 메뉴 → 바탕 화면에 바로 가기: 앱의 .desktop 파일을 바탕 화면 폴더에 복사.
     같은 이름이 있으면 덮어쓰지 않는다 (내용이 같으면 이미 있는 것, 다르면 이름-2 …).
-    실행 권한과 신뢰 표시(metadata::trusted)를 붙인다 — 파일 관리자(Thunar)에서 열어도 묻지 않게."""
+    실행 권한과 신뢰 표시(metadata::trusted)를 붙인다 — 파일 탐색기에서 열어도 묻지 않게."""
     src = app.get("path")
     if not src:
         return
@@ -463,11 +463,11 @@ def icon_image(names, size):
 # 고정 타일 기본값: (표시이름, .desktop 이름 후보들, 아이콘 후보들)
 #   사용자가 고치면 ~/.config/sekai/start-pins.json (sekaishell/startpins.py) 을 쓴다
 DEFAULT_PINS = [
-    ("파일",     ["thunar", "pcmanfm", "org.gnome.nautilus"],               ["system-file-manager", "folder"]),
+    ("파일",     ["sekai-files", "thunar"],                                 ["system-file-manager", "folder"]),
     ("웹",       ["google-chrome", "chromium", "firefox-esr"],             ["chromium", "web-browser"]),
     ("터미널",   ["kitty", "foot", "footclient"],                           ["utilities-terminal"]),
-    ("편집기",   ["org.xfce.mousepad", "mousepad", "org.gnome.texteditor"], ["accessories-text-editor"]),
-    ("계산기",   ["galculator", "org.gnome.calculator"],                    ["accessories-calculator"]),
+    ("메모장",   ["sekai-notepad", "org.xfce.mousepad"],                    ["accessories-text-editor"]),
+    ("계산기",   ["sekai-calc", "galculator"],                              ["accessories-calculator"]),
     ("설정",     ["sekai-settings"],                                        ["preferences-system"]),
 ]
 
@@ -548,7 +548,7 @@ class StartMenu(Gtk.Window):
 
         # 폴더는 인자 목록으로 넘긴다 — 문자열로 이으면 공백이 든 경로가 둘로 갈렸다
         def files_at(path):
-            return shlex.split(sekai_conf("apps", "files", "thunar") or "thunar") + [path]
+            return shlex.split(sekai_conf("apps", "files", "sekai-files") or "sekai-files") + [path]
 
         rail.pack_start(rail_btn(["user-home-symbolic", "go-home-symbolic"],
                                  os.environ.get("USER", "user"),
@@ -1017,7 +1017,7 @@ class StartMenu(Gtk.Window):
 
     def _open_file(self, item):
         """파일은 기본 앱으로, 폴더는 설정한 파일 관리자로. 열 앱이 없으면 든 폴더를 연다"""
-        fm = shlex.split(sekai_conf("apps", "files", "thunar") or "thunar")
+        fm = shlex.split(sekai_conf("apps", "files", "sekai-files") or "sekai-files")
         if item["dir"]:
             self._run(fm + [item["path"]])
             return

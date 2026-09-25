@@ -9,7 +9,7 @@
 ctrl + Escape
 	sekai-ctl menu
 super + e
-	thunar
+	sekai-files
 super + Return
 	sekai-terminal
 super + {r,d}

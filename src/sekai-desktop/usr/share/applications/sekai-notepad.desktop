@@ -1,0 +1,22 @@
+[Desktop Entry]
+Type=Application
+Name=Notepad
+Name[ko]=메모장
+GenericName=Text Editor
+GenericName[ko]=텍스트 편집기
+Comment=Write and edit plain text files
+Comment[ko]=텍스트 파일을 작성하고 편집합니다
+Exec=sekai-notepad %F
+Icon=accessories-text-editor
+Terminal=false
+Categories=Utility;TextEditor;GTK;
+MimeType=text/plain;text/x-log;text/markdown;text/x-readme;application/x-shellscript;text/x-python;text/x-csrc;text/x-chdr;text/x-c++src;text/css;application/json;application/xml;text/x-ini;text/csv;
+Keywords=메모장;텍스트;편집기;문서;메모;글;notepad;text;editor;txt;plain text;
+StartupNotify=true
+StartupWMClass=org.sekaios.Notepad
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=New Window
+Name[ko]=새 창
+Exec=sekai-notepad --new-window

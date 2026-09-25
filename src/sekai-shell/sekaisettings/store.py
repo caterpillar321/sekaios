@@ -76,7 +76,7 @@ DEFAULTS = {
     "apps": {
         "terminal": "sekai-terminal",
         "browser": "chromium",
-        "files": "thunar",
+        "files": "sekai-files",
     },
     "locale": {
         "lang": "ko_KR.UTF-8",   # 그래픽 세션 언어 (sekai-session 이 읽는다)

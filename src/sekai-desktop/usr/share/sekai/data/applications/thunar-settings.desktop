@@ -1,0 +1,6 @@
+[Desktop Entry]
+# SekaiOS: 시작 메뉴·검색에서 숨긴다 — 파일 관리자 자체 설정 창 (윈도우처럼 앱 안에서 연다)
+Type=Application
+Name=File Manager Preferences
+Exec=thunar-settings
+NoDisplay=true
