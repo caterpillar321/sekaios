@@ -1,8 +1,9 @@
 [Desktop Entry]
 Type=Application
-Name=Google Chrome 설치
-Name[en]=Install Google Chrome
-Comment=구글 공식 저장소를 등록하고 Chrome 을 설치합니다
+Name=Install Google Chrome
+Name[ko]=Google Chrome 설치
+Comment=Add Google's official repository and install Chrome
+Comment[ko]=구글 공식 저장소를 등록하고 Chrome 을 설치합니다
 Exec=sekai-terminal -T "Install Google Chrome" -e sudo sekai-install-chrome
 Icon=system-software-install
 Terminal=false

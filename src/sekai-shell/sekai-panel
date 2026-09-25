@@ -1227,6 +1227,25 @@ class TaskbarMixin:
 
     _preview = None
 
+    def _hook_bar_menu(self):
+        """작업 표시줄 빈 곳 우클릭 — 작업 관리자 · 작업 표시줄 설정 (윈도우 11 처럼)"""
+        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.connect("button-press-event", self._on_bar_press)
+
+    def _on_bar_press(self, widget, ev):
+        # 단추(작업 버튼·시작·시계 등)는 자기 창으로 받는다 — 이 창으로 온 누름만 빈 곳이다
+        if ev.button != 3 or ev.window != self.get_window():
+            return False
+        m = Gtk.Menu()
+        for label, cmd in (("작업 관리자", ["sekai-taskmgr"]),
+                           ("작업 표시줄 설정", ["sekai-settings", "--page=appearance"])):
+            it = Gtk.MenuItem(label=label)
+            it.connect("activate", lambda _i, c=cmd: subprocess.Popen(
+                c, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            m.append(it)
+        popup_menu(m, widget, ev)
+        return True
+
     @property
     def preview(self):
         """창 미리보기 — 모든 작업 표시줄이 하나를 같이 쓴다"""
@@ -1448,6 +1467,7 @@ class SecondaryPanel(Gtk.Window, TaskbarMixin):
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         bar.get_style_context().add_class("bar")
         self.add(bar)
+        self._hook_bar_menu()
         start = Gtk.Button()
         start.get_style_context().add_class("start-btn")
         logo = Gtk.DrawingArea()
@@ -1514,6 +1534,7 @@ class Panel(Gtk.Window, TaskbarMixin):
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         bar.get_style_context().add_class("bar")
         self.add(bar)
+        self._hook_bar_menu()
 
         # ── 시작 버튼 ──
         self.start_btn = Gtk.Button()

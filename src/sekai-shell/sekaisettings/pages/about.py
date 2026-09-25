@@ -74,7 +74,7 @@ def build_about(store):
     s = p.section("도구")
     row(s, "시스템 모니터", "실행 중인 프로세스와 자원 사용량",
         icon=["utilities-system-monitor", "xfce4-taskmanager"],
-        control=button("열기", lambda: spawn("xfce4-taskmanager")))
+        control=button("열기", lambda: spawn("sekai-taskmgr")))
     row(s, "터미널", "명령줄",
         icon=["utilities-terminal", "terminal"],
         control=button("열기", lambda: spawn(store.get("apps", "terminal", "sekai-terminal"))))

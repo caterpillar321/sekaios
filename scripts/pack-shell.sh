@@ -23,6 +23,7 @@ rm -f "$OUT"/sekai-shell_*.deb "$OUT"/sekai-desktop_*.deb "$OUT"/sekai-installer
 echo "==> 스테이징"
 install -Dm755 "$SRC/sekai-panel"     "$STAGE/usr/bin/sekai-panel"
 install -Dm755 "$SRC/sekai-settings"  "$STAGE/usr/bin/sekai-settings"
+install -Dm755 "$SRC/sekai-taskmgr"   "$STAGE/usr/bin/sekai-taskmgr"
 install -Dm755 "$SRC/sekai-wallpaper" "$STAGE/usr/bin/sekai-wallpaper"
 install -Dm755 "$SRC/sekai-desk"      "$STAGE/usr/bin/sekai-desk"
 install -Dm755 "$SRC/sekai-lock"      "$STAGE/usr/bin/sekai-lock"
@@ -99,7 +100,7 @@ Depends: python3, python3-gi, python3-gi-cairo, gir1.2-gtk-3.0,
  gir1.2-gtksessionlock-0.1, libgtk-session-lock0, python3-pampy,
  libglib2.0-bin, sekai-winshot
 Recommends: wireplumber, pavucontrol, swaylock,
- network-manager-gnome, xfce4-taskmanager
+ network-manager-gnome
 Description: SekaiOS desktop shell
  Panel, taskbar, start menu and the system settings app for
  SekaiOS, built on gtk-layer-shell and the Hyprland IPC.
@@ -265,7 +266,7 @@ Depends: sekai-shell (= ${FULL}),
  pipewire, pipewire-audio, pipewire-pulse, wireplumber,
  network-manager, network-manager-gnome, network-manager-l10n, systemd-resolved,
  wpasupplicant, wireless-regdb, iw, ntfs-3g, exfatprogs,
- bluez, wlsunset, python3-psutil,
+ bluez, wlsunset,
  tumbler, gvfs, gvfs-backends,
  qt6-wayland, xdg-user-dirs, xdg-user-dirs-gtk,
  fonts-pretendard, fonts-dejavu, fonts-jetbrains-mono, fonts-nanum,
@@ -279,7 +280,7 @@ Depends: sekai-shell (= ${FULL}),
 Recommends: htop, tmux, tree, ncdu, vim, nano, git, curl, wget,
  bash-completion, less, man-db,
  chromium, thunar, thunar-volman, mousepad, ristretto, evince, xarchiver, galculator,
- xfce4-taskmanager, pavucontrol
+ pavucontrol
 Conflicts: fnott
 Description: SekaiOS desktop (metapackage)
  Pulls in everything that makes up the SekaiOS desktop: the Hyprland

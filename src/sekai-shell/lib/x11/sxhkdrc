@@ -18,6 +18,8 @@ super + n
 	sekai-ctl notifications
 super + a
 	sekai-ctl quicksettings
+ctrl + shift + Escape
+	sekai-taskmgr
 super + v
 	sekai-ctl clipboard
 super + l

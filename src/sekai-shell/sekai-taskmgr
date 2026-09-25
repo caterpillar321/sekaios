@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""SekaiOS 작업 관리자 (Ctrl+Shift+Esc)."""
+import os
+import sys
+
+# 소스 트리에서 바로 실행하는 경우를 위해 스크립트 옆 디렉터리를 경로에 넣는다
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from sekaishell.taskmgr import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

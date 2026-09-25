@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Task Manager
+Name[ko]=작업 관리자
+GenericName=System Monitor
+GenericName[ko]=시스템 모니터
+Comment=View running apps and processes, CPU, memory, disk, network and GPU usage, and end unresponsive apps
+Comment[ko]=실행 중인 앱과 프로세스, CPU·메모리·디스크·네트워크·GPU 사용량을 보고 멈춘 앱을 끝냅니다
+Exec=sekai-taskmgr
+Icon=utilities-system-monitor
+Terminal=false
+Categories=System;Monitor;GTK;
+Keywords=작업;관리자;프로세스;성능;시작;끝내기;종료;메모리;task;manager;process;performance;monitor;kill;cpu;memory;startup;
+StartupNotify=true
+StartupWMClass=org.sekaios.TaskManager
