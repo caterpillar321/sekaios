@@ -229,3 +229,62 @@ class Osd(Gtk.Window):
 
     def brightness(self, action):
         self._add("bright", 1 if action == "up" else -1)
+
+
+class DesktopOsd(Gtk.Window):
+    """가상 데스크톱을 바꾸면 화면 가운데에 그 이름을 잠깐 (윈도우 11 처럼).
+    모양은 Alt+Tab 전환기의 판(.switcher)을 빌려 쓰고 글자 크기만 여기서 키운다."""
+
+    SHOW_MS = 900
+
+    def __init__(self):
+        super().__init__(type=Gtk.WindowType.TOPLEVEL)
+        self.get_style_context().add_class("osd-window")
+        make_translucent(self)
+        GtkLayerShell.init_for_window(self)
+        GtkLayerShell.set_namespace(self, "sekai-osd")          # 흐림 규칙(hyprland.conf layerrule)을 같이 받는다
+        GtkLayerShell.set_layer(self, GtkLayerShell.Layer.OVERLAY)
+        GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.NONE)
+        self.set_accept_focus(False)
+        # 모서리에 붙이지 않으면 화면 가운데에 뜬다
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.get_style_context().add_class("switcher")
+        self.label = Gtk.Label()
+        self.label.get_style_context().add_class("switcher-title")
+        # 말줄임을 켜면 이 레이어 창은 최소 너비("…")로 잡혀 이름이 모두 잘렸다 — 이름은 짧으니 그대로 둔다
+        self.label.set_max_width_chars(40)
+        box.pack_start(self.label, False, False, 0)
+        self.add(box)
+        css = Gtk.CssProvider()
+        css.load_from_data(b".desktop-osd-name { font-size: 26px; font-weight: 700; padding: 10px 36px; }"
+                           b".desktop-osd-note { font-size: 15px; font-weight: 600; padding: 8px 24px; }")
+        # 작업 표시줄 CSS(.switcher-title 13px)보다 앞서게 한 단계 위로
+        self.label.get_style_context().add_provider(css, Gtk.STYLE_PROVIDER_PRIORITY_USER + 1)
+        self._timer = None
+        self._monitor = None
+
+    def show_name(self, text, monitor=None, note=False):
+        """note: 데스크톱 이름이 아닌 안내 글 (작게)"""
+        if not text:
+            return
+        ctx = self.label.get_style_context()
+        ctx.remove_class("desktop-osd-note" if not note else "desktop-osd-name")
+        ctx.add_class("desktop-osd-note" if note else "desktop-osd-name")
+        self.label.set_text(text)
+        self.resize(1, 1)                       # 글자 길이에 맞게 창을 다시 잰다
+        if monitor is not None and monitor != self._monitor:
+            # 떠 있는 채로 모니터를 바꾸면 자리를 못 옮기는 합성기가 있다 — 숨겼다가 다시
+            if self.get_visible():
+                self.hide()
+            GtkLayerShell.set_monitor(self, monitor)
+            self._monitor = monitor
+        if not self.get_visible():
+            self.show_all()
+        if self._timer:
+            GLib.source_remove(self._timer)
+        self._timer = GLib.timeout_add(self.SHOW_MS, self._hide)
+
+    def _hide(self):
+        self._timer = None
+        self.hide()
+        return False

@@ -26,6 +26,10 @@ XML = """
       <arg type="s" name="icon" direction="in"/>
       <arg type="s" name="text" direction="in"/>
     </method>
+    <method name="Desktop">
+      <arg type="s" name="action" direction="in"/>
+      <arg type="s" name="arg" direction="in"/>
+    </method>
   </interface>
 </node>
 """

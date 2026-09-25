@@ -18,6 +18,7 @@ from .layer import GtkLayerShell
 from . import dbg
 from .popup import make_translucent
 from .appicon import app_icon
+from . import desktops
 
 E = GtkLayerShell.Edge
 ALT_KEYS = (Gdk.KEY_Alt_L, Gdk.KEY_Alt_R, Gdk.KEY_Meta_L, Gdk.KEY_Meta_R)
@@ -65,6 +66,13 @@ class Switcher(Gtk.Window):
     # ── 목록 ──
     def _collect(self):
         clients = self.hypr.query("clients") or []
+        desktops.remember(clients)
+        shown = None
+        if desktops.mode("alttab") == "current":
+            # 설정 › 멀티태스킹 — 지금 데스크톱(모니터마다 보이는 워크스페이스)의 창만.
+            #   X11 흉내에는 워크스페이스 정보가 없다 — 그땐 가리지 않는다
+            shown = {(m.get("activeWorkspace") or {}).get("id") for m in self.hypr.query("monitors") or []
+                     if (m.get("activeWorkspace") or {}).get("id")} or None
         out = []
         for c in clients:
             if not c.get("mapped", True) or c.get("hidden"):
@@ -73,6 +81,8 @@ class Switcher(Gtk.Window):
             wname = ws.get("name", "") or ""
             # 특수 워크스페이스 중 최소화(special:min)만 넣는다 (윈도우도 최소화 창을 보여 준다)
             if ws.get("id", 0) < 0 and wname != "special:min":
+                continue
+            if shown is not None and not desktops.visible(c, shown):
                 continue
             out.append(c)
         # 최근에 쓴 순서 (focusHistoryID 0 = 지금 창)

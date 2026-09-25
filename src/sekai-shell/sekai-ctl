@@ -10,8 +10,10 @@
 #    sekai-ctl menu | notifications         시작 메뉴 / 알림 센터
 #    sekai-ctl quicksettings                빠른 설정 (Win+A)
 #    sekai-ctl osd <아이콘> <글>             화면에 잠깐 알림
+#    sekai-ctl desktop new|close|next|prev   가상 데스크톱 (이름을 화면 가운데에)
+#    sekai-ctl desktop go|move <번호>        그 데스크톱으로 / 지금 창을 그리로
 #
-#  셸이 떠 있지 않으면 음량·밝기는 그래도 바꾼다 (표시만 없다).
+#  셸이 떠 있지 않으면 음량·밝기·데스크톱 이동은 그래도 한다 (표시만 없다).
 # ═══════════════════════════════════════════════════════════════
 call() {
     m=$1; shift
@@ -44,7 +46,15 @@ case "$1" in
     notifications) call NotificationCenter ;;
     quicksettings|qs) call QuickSettings ;;
     osd)           call Osd "${2:-dialog-information-symbolic}" "${3:-}" ;;
+    desktop)
+        call Desktop "${2:-show}" "${3:-}" || case "$2" in
+            next) hyprctl dispatch workspace e+1 ;;
+            prev) hyprctl dispatch workspace e-1 ;;
+            go)   hyprctl dispatch workspace "$3" ;;
+            move) hyprctl dispatch movetoworkspace "$3" ;;
+            new)  hyprctl dispatch workspace emptym ;;
+        esac >/dev/null 2>&1 ;;
     *)
-        sed -n '3,14p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'
         exit 2 ;;
 esac

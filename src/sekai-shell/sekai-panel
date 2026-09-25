@@ -22,7 +22,7 @@ from sekaishell.notify import NotificationService       # noqa: E402
 from sekaishell import logo as sekai_logo                # noqa: E402
 from sekaishell.appicon import app_icon                  # noqa: E402
 from sekaishell.switcher import Switcher                 # noqa: E402
-from sekaishell.osd import Osd                           # noqa: E402
+from sekaishell.osd import Osd, DesktopOsd               # noqa: E402
 from sekaishell.quicksettings import QuickSettings       # noqa: E402
 from sekaishell.clipboard import ClipboardPopup          # noqa: E402
 from sekaishell.windows import WindowManager             # noqa: E402
@@ -34,6 +34,7 @@ from sekaishell import startpins                          # noqa: E402
 from sekaishell import monitors                           # noqa: E402
 from sekaishell.taskpreview import TaskPreview           # noqa: E402
 from sekaishell import search                             # noqa: E402
+from sekaishell import desktops                           # noqa: E402
 
 # 시작 버튼 로고: layers / world / diamond / blockS / nested / slashes
 DEBUG = os.environ.get("SEKAI_DEBUG") == "1"
@@ -1273,9 +1274,15 @@ class TaskbarMixin:
     def task_snapshot(self):
         """작업 표시줄을 그리는 데 필요한 Hyprland 상태 — 모든 작업 표시줄이 한 번 조회한 것을 같이 쓴다"""
         active = self.hypr.query("activewindow") or {}
-        return {"clients": self.hypr.query("clients") or [],
+        clients = self.hypr.query("clients") or []
+        desktops.remember(clients)                  # 최소화하기 전의 데스크톱을 알아 두려고
+        mons = self.hypr.query("monitors") or []
+        return {"clients": clients,
                 "active": active.get("address") if isinstance(active, dict) else None,
-                "origins": hypr_monitor_origins(self.hypr)}
+                "origins": {m.get("id"): (m.get("x"), m.get("y")) for m in mons},
+                # 모니터마다 지금 보이는 워크스페이스 (X11 흉내에는 없다 — 그땐 가리지 않는다)
+                "shown": {(m.get("activeWorkspace") or {}).get("id") for m in mons
+                          if (m.get("activeWorkspace") or {}).get("id")}}
 
     def _queue_rebuild(self, delay=120):
         (getattr(self, "main", None) or self).queue_rebuild_all(delay)
@@ -1292,6 +1299,9 @@ class TaskbarMixin:
         self._task_btns = {}                                # 앱 묶음 → (버튼, 창들)
         clients = self._my_clients(snap["clients"], snap["origins"])
         clients = [c for c in clients if c.get("mapped", True) and c.get("address")]  # 연 순서
+        if snap.get("shown") and desktops.mode("taskbar") == "current":
+            # 설정 › 멀티태스킹 — 지금 보고 있는 데스크톱의 창만 (윈도우 기본값과 같게)
+            clients = [c for c in clients if desktops.visible(c, snap["shown"])]
         active_addr = snap["active"]
 
         groups = {}                                         # 묶음 키 → 창들
@@ -1399,9 +1409,11 @@ class TaskbarMixin:
         self._queue_rebuild()
 
     def restore_window(self, addr):
-        """최소화(special:min)된 창을 지금 워크스페이스로 되돌리고 초점"""
-        cur = self.hypr.query("activeworkspace") or {}
-        wid = cur.get("id", 1)
+        """최소화(special:min)된 창을 원래 데스크톱으로 되돌리고 초점 (모르면 지금 데스크톱으로).
+        다른 데스크톱의 창이면 그리로 간다 — 윈도우처럼 (movetoworkspace 는 창을 따라간다)"""
+        wid = desktops.home({"address": addr})
+        if not wid:
+            wid = (self.hypr.query("activeworkspace") or {}).get("id", 1)
         self.hypr.dispatch(f"movetoworkspace {wid},address:{addr}")
         self.hypr.dispatch(f"focuswindow address:{addr}")
         self._queue_rebuild()
@@ -2016,6 +2028,19 @@ def main():
     def volume(action):
         osd.volume(action)
 
+    # 가상 데스크톱 — 바꾸면 화면 가운데에 이름 (윈도우 11 처럼). 일은 desktops.py 가 hyprctl 로
+    desk_osd = DesktopOsd()
+    if not _layer.WAYLAND:
+        # 기본 화면 모드: 세션은 기본 단축키 파일로 sxhkd 를 띄운다 — 설정 › 단축키 에서 바꾼 것이
+        #   있으면(~/.config/sekai/sxhkdrc) 그것으로 다시 띄운다
+        from sekaishell import keybinds
+        GLib.timeout_add_seconds(2, lambda: keybinds.restart_sxhkd(only_if_needed=True) and False)
+
+    def desktop(action, arg=""):
+        text = desktops.handle(action, arg)
+        if text:
+            desk_osd.show_name(text, focused_gdk_monitor(hypr), note=isinstance(text, desktops.Note))
+
     panel.updates = UpdateNotifier()
     panel.gpuhint = GpuHint()
 
@@ -2030,6 +2055,7 @@ def main():
         "NotificationCenter": panel.toggle_center,
         "QuickSettings": panel.toggle_quick_settings,
         "Osd": osd.show_text,
+        "Desktop": desktop,
     })
 
     # SIGUSR1 = 시작 메뉴 토글
@@ -2068,6 +2094,7 @@ def main():
                 GLib.timeout_add(2500, lambda: monitors.publish_modes() and False)
             panel.tray.refresh_icons()
             panel.qs.refresh_icons()        # 네트워크·음량·배터리 아이콘도 새 테마로 (다크 모드 타일도 맞춘다)
+            panel.queue_rebuild_all(0)      # 작업 표시줄에 보일 창(지금 데스크톱만 / 모두)이 바뀌었을 수 있다
             # 방해 금지·기록 지우기·보관 개수는 설정 앱에서도 바꾼다 — 다시 읽는다
             try:
                 panel.notifications.sync_settings()

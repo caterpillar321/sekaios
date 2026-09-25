@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- SekaiOS 프린터 도우미 — 설정 앱의 "프린터" 페이지가 pkexec 로 부른다.
+     CUPS 관리 권한(lpadmin 그룹)이 없는 사용자만 여기로 온다 (있으면 CUPS 명령을 직접 쓴다) -->
+<policyconfig>
+  <vendor>SekaiOS</vendor>
+  <action id="org.sekaios.printers">
+    <description>Manage printers</description>
+    <description xml:lang="ko">프린터 관리</description>
+    <message>Authentication is required to add, remove or manage printers</message>
+    <message xml:lang="ko">프린터를 추가·제거하거나 관리하려면 인증이 필요합니다</message>
+    <icon_name>printer</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <!-- 한 번 인증하면 잠시 동안(추가 → 기본값·테스트 페이지, 여러 작업 취소) 다시 묻지 않는다 -->
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/sekai/sekai-printers</annotate>
+  </action>
+</policyconfig>

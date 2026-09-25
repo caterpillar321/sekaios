@@ -28,7 +28,10 @@ xset s off 2>/dev/null
 xfwm4 --compositor=on --replace >/dev/null 2>&1 &
 
 ibus-daemon -drx >/dev/null 2>&1
-sxhkd -c "$X/sxhkdrc" >/dev/null 2>&1 &
+# 설정 › 단축키에서 바꾼 것이 있으면 그 파일로 (기본값 + 바꾼 것을 합쳐 만든다 — sekaishell/keybinds.py)
+KEYS="$X/sxhkdrc"
+[ -f "$HOME/.config/sekai/sxhkdrc" ] && KEYS="$HOME/.config/sekai/sxhkdrc"
+sxhkd -c "$KEYS" >/dev/null 2>&1 &
 xcape -e 'Super_L=Control_L|Escape' >/dev/null 2>&1 &
 sekai-idle >/dev/null 2>&1 &
 /usr/lib/sekai/keep-running sekai-desk >/dev/null 2>&1 &

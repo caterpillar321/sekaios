@@ -268,6 +268,7 @@ Depends: sekai-shell (= ${FULL}),
  network-manager, network-manager-gnome, network-manager-l10n, systemd-resolved,
  wpasupplicant, wireless-regdb, iw, ntfs-3g, exfatprogs,
  bluez, wlsunset,
+ cups, avahi-daemon, libnss-mdns, ipp-usb, system-config-printer,
  tumbler, gvfs, gvfs-backends,
  qt6-wayland, xdg-user-dirs, xdg-user-dirs-gtk,
  fonts-pretendard, fonts-dejavu, fonts-jetbrains-mono, fonts-nanum,
@@ -281,8 +282,8 @@ Depends: sekai-shell (= ${FULL}),
 Recommends: htop, tmux, tree, ncdu, vim, nano, git, curl, wget,
  bash-completion, less, man-db,
  chromium, thunar, thunar-volman, mousepad, ristretto, evince, xarchiver, galculator,
- pavucontrol
-Conflicts: fnott
+ pavucontrol, cups-pk-helper
+Conflicts: fnott, cups-browsed
 Description: SekaiOS desktop (metapackage)
  Pulls in everything that makes up the SekaiOS desktop: the Hyprland
  compositor with title-bar and overview plugins, the sekai-shell panel,

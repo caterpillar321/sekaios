@@ -311,3 +311,43 @@ window.identify-win { background: transparent; }
 /* 짝 맺기 숫자 (장치 화면의 숫자와 견주기 좋게 크게) */
 label.bt-code { color: @accent; margin: 6px 0; }
 button.bt-scan:disabled { opacity: 0.45; }
+
+/* ── 단축키 ───────────────────────────────────────────────── */
+entry.kb-search { margin: 4px 0 6px 0; }
+/* 키 조합 단추 — 키캡처럼 */
+button.kb-chip {
+    font-family: "Pretendard", "NanumGothic", sans-serif;
+    font-weight: 600;
+    min-width: 96px;
+    padding: 5px 12px;
+    background: @winbg;
+    border: 1px solid alpha(@fg, 0.16);
+    border-bottom-width: 2px;
+}
+button.kb-chip:hover { border-color: alpha(@accent, 0.7); }
+button.kb-chip:disabled { color: @text2; border-color: @line; }
+button.kb-chip.kb-off, button.kb-chip.kb-off label { color: @text3; font-weight: 400; }
+button.kb-reset { padding: 5px 10px; font-size: 12px; }
+/* "새 단축키를 누르세요" 창 */
+label.kb-capture {
+    font-size: 22px;
+    font-weight: 700;
+    color: @accent;
+    padding: 14px 0;
+}
+label.kb-capture-error { color: mix(#e0453a, @fg, 0.25); font-size: 13px; }   /* 다크·라이트 모두 읽히게 */
+
+/* ── 프린터 ───────────────────────────────────────────────── */
+button.prn-add:disabled { opacity: 0.45; }
+/* 오프라인·용지 없음 같은 문제 (다크·라이트 모두 읽히게) */
+label.prn-problem { color: mix(#e0453a, @fg, 0.25); }
+/* 프린터 자세히 — ← · 아이콘 · 이름 */
+box.prn-head { margin: 4px 0 18px 0; }
+button.prn-back {
+    background: transparent;
+    border-color: transparent;
+    border-radius: 6px;
+    padding: 8px;
+}
+button.prn-back:hover { background: @hover; }
+label.prn-name { font-size: 20px; font-weight: 700; color: @fg; }

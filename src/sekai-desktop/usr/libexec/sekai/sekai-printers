@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 프린터 도우미 — 관리자 권한으로 실행된다 (pkexec)
+#
+#    sekai-printers add <이름> <URI> <설명|""> <default|keep>
+#                                         드라이버 없이(IPP Everywhere) 프린터를 추가한다.
+#                                         default 면 시스템 기본 프린터로도 정한다
+#    sekai-printers remove <이름>         프린터를 지운다
+#    sekai-printers default <이름>        시스템 기본 프린터로 정한다
+#    sekai-printers cancel <작업번호>…    인쇄 작업을 취소한다 (다른 사용자의 것도)
+#    sekai-printers resume <이름>         멈춘 프린터를 다시 시작하고 작업을 받게 한다
+#    sekai-printers pause <이름>          프린터를 일시 중지한다
+#    sekai-printers service-on            인쇄 서비스(CUPS)를 켜고 부팅 때 켜지게 한다
+#
+#  설정 앱의 "프린터" 페이지가 부른다. CUPS 관리 권한(root·lpadmin 그룹)이 있는 사용자는
+#  페이지가 CUPS 명령을 직접 쓰고, 없는 사용자만 이 도우미를 거친다.
+#  관리자 권한으로 도는 프로그램이라 인자는 위 형식만 받고 엄격히 검사한다
+#  (옵션처럼 보이는 값·제어 문자·아무 명령이나 넘길 수 없게).
+#  결과: 성공하면 종료 코드 0 과 "OK", 실패하면 표준 출력에 사람이 읽을 이유 한 줄.
+# ═══════════════════════════════════════════════════════════════
+import os
+import re
+import subprocess
+import sys
+
+ENV = dict(os.environ, LANG="C.UTF-8", LC_ALL="C.UTF-8", PATH="/usr/sbin:/usr/bin:/sbin:/bin")
+# 모두 fullmatch 로 쓴다 — $ 는 끝의 줄바꿈 앞에서도 맞아 "PDF\n" 같은 값이 지나간다
+# 새로 만드는 이름 — 설정 앱이 모델 이름에서 만든다 (영문·숫자·_·-)
+NEW_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+# 이미 있는 프린터 이름 — 다른 도구로 만든 것도 다룰 수 있게 CUPS 규칙(lpadmin validate_name)대로.
+#   공백·제어 문자·/ \ ? ' " # @ 와 목록 구분자 , 는 안 되고, - 로 시작하면 옵션으로 읽히니 막는다
+NAME_RE = re.compile(r"[^\s/\\?'\"#@,\x00-\x1f\x7f-][^\s/\\?'\"#@,\x00-\x1f\x7f]{0,126}")
+# 드라이버 없이 쓸 수 있는 연결만 (cupsd 의 IPP Everywhere 가 받는 것)
+URI_RE = re.compile(r"(ipps?|dnssd)://[A-Za-z0-9._~%!$&'()*+,;=:@\[\]-]+(/[\x21-\x7e]*)?")
+PRINTERS_CONF = ("/etc/cups/printers.conf", "/etc/cups/classes.conf")
+
+
+def fail(msg, code=1):
+    print(msg, flush=True)
+    sys.exit(code)
+
+
+def run(cmd):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, env=ENV, timeout=180)
+    except FileNotFoundError:
+        return 127, f"{cmd[0]} 이(가) 없습니다"
+    except subprocess.TimeoutExpired:
+        return 124, "시간이 초과되었습니다"
+    return r.returncode, (r.stderr.strip() or r.stdout.strip())
+
+
+def reason(text, fallback):
+    """CUPS 명령의 오류 → 마지막 줄 ("lpadmin: " 따위 앞머리는 뗀다)"""
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    if not lines:
+        return fallback
+    return re.sub(r"^[a-z]+: ", "", lines[-1])
+
+
+def check_name(name, new=False):
+    if not (NEW_NAME_RE if new else NAME_RE).fullmatch(name) or len(name.encode()) > 127:
+        fail("프린터 이름이 올바르지 않습니다")
+
+
+def queues():
+    """cupsd 가 지금 가진 프린터 이름들 (소문자). `lpstat -p 이름` 은 없는 이름이면 네트워크에서
+    같은 이름을 찾아(DNS-SD) 있다고 할 수 있어 이름 없이 전체 목록을 읽는다"""
+    try:
+        r = subprocess.run(["lpstat", "-p"], capture_output=True, text=True, env=ENV, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    return {m.group(1).lower() for m in re.finditer(r"^printer (\S+) ", r.stdout, re.M)}
+
+
+def exists(name):
+    """이 이름의 프린터·클래스가 이미 있나 — cupsd 에 묻고, 클래스까지 보려고 설정 파일도 본다.
+    설정 파일만으론 안 된다: cupsd 는 바뀐 것을 30초쯤 뒤에야 파일에 쓴다 (DirtyCleanInterval)"""
+    low = name.lower()
+    if low in queues():
+        return True
+    for path in PRINTERS_CONF:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    m = re.match(r"\s*<(?:Default)?(?:Printer|Class)\s+([^>]+)>", line)
+                    if m and m.group(1).strip().lower() == low:
+                        return True
+        except OSError:
+            continue
+    return False
+
+
+def add(name, uri, info, make_default):
+    check_name(name, new=True)
+    if len(uri) > 1000 or not URI_RE.fullmatch(uri):
+        fail("프린터 주소가 올바르지 않습니다")
+    if len(info) > 127 or re.search(r"[\x00-\x1f\x7f]", info):
+        fail("프린터 설명이 올바르지 않습니다")
+    if exists(name):
+        # 있는 프린터를 -p 로 부르면 그 설정(주소)이 바뀐다 — 추가만 한다
+        fail("같은 이름의 프린터가 이미 있습니다")
+    # -E 는 -p 뒤에 와야 "켜고 작업 받기" 다 (앞에 오면 암호화 옵션). 이 PC 밖으로 공유하지 않는다
+    cmd = ["lpadmin", "-p", name, "-v", uri, "-m", "everywhere", "-o", "printer-is-shared=false"]
+    if info:
+        cmd += ["-D", info]
+    rc, out = run(cmd + ["-E"])
+    if rc != 0:
+        # 드라이버를 만들지 못하면 드라이버 없는 반쪽 대기열이 남을 수 있다 — 방금 만든 것이니 지운다
+        if exists(name):
+            run(["lpadmin", "-x", name])
+        fail(reason(out, "프린터를 추가하지 못했습니다"))
+    if make_default:
+        run(["lpadmin", "-d", name])          # 기본값은 덤 — 실패해도 추가는 된 것
+
+
+def simple(cmds, fallback):
+    for cmd in cmds:
+        rc, out = run(cmd)
+        if rc != 0:
+            fail(reason(out, fallback))
+
+
+def service_on():
+    # cups.socket 이 있으면 첫 요청 때 cupsd 가 뜬다. 소켓 단위가 없는 설치본도 있으니 서비스만 필수로
+    run(["systemctl", "enable", "--now", "cups.socket"])
+    rc, out = run(["systemctl", "enable", "--now", "cups.service"])
+    if rc != 0:
+        fail(reason(out, "인쇄 서비스를 켜지 못했습니다"))
+
+
+def main():
+    if os.geteuid() != 0:
+        fail("관리자 권한이 필요합니다")
+    a = sys.argv[1:]
+    if len(a) == 5 and a[0] == "add" and a[4] in ("default", "keep"):
+        add(a[1], a[2], a[3], a[4] == "default")
+    elif len(a) == 2 and a[0] in ("remove", "default", "resume", "pause"):
+        check_name(a[1])
+        if a[0] == "remove":
+            simple([["lpadmin", "-x", a[1]]], "프린터를 지우지 못했습니다")
+        elif a[0] == "default":
+            simple([["lpadmin", "-d", a[1]]], "기본 프린터로 정하지 못했습니다")
+        elif a[0] == "resume":
+            simple([["cupsenable", a[1]], ["cupsaccept", a[1]]], "프린터를 다시 시작하지 못했습니다")
+        else:
+            simple([["cupsdisable", a[1]]], "프린터를 일시 중지하지 못했습니다")
+    elif 2 <= len(a) <= 201 and a[0] == "cancel" and all(re.fullmatch(r"[0-9]{1,9}", i) for i in a[1:]):
+        simple([["cancel"] + a[1:]], "인쇄 작업을 취소하지 못했습니다")
+    elif a == ["service-on"]:
+        service_on()
+    else:
+        fail("사용법: sekai-printers add|remove|default|cancel|resume|pause|service-on …", 2)
+    print("OK", flush=True)
+
+
+if __name__ == "__main__":
+    main()

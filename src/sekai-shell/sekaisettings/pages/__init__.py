@@ -11,8 +11,10 @@ sections 는 이 페이지가 화면에 보여 주는 설정(store) 섹션 — �
 from . import (about, display, graphics, personalize, devices, network,  # noqa: F401
                notifications, locale, apps, users, update)
 from . import bluetooth  # noqa: F401
+from . import printers  # noqa: F401
+from . import multitasking, shortcuts  # noqa: F401
 
-MODULES = [about, display, graphics, personalize, devices, bluetooth, network,
+MODULES = [about, display, graphics, personalize, multitasking, devices, shortcuts, bluetooth, printers, network,
            notifications, locale, apps, users, update]
 
 

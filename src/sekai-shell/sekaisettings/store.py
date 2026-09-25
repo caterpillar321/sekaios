@@ -90,6 +90,16 @@ DEFAULTS = {
         "lock": 900,
         "suspend": 0,
     },
+    # 단축키 — 기본값은 hyprland.conf 의 bind 줄 (sekaishell/keybinds.py). 여기엔 바꾼 것만
+    "keybinds": {
+        "changed": {},           # 기본 키 조합 → 새 조합 ("" = 끔), 예: {"SUPER+E": "SUPER+w"}
+        "custom": [],            # [{"name", "command", "key"}]
+    },
+    # 가상 데스크톱의 개수·이름은 ~/.config/sekai/desktops.json (sekaishell/desktops.py — 작업 표시줄도 바꾼다)
+    "multitasking": {
+        "taskbar": "current",    # 작업 표시줄에 보일 창: current = 지금 데스크톱만 / all = 모든 데스크톱 (윈도우 기본값과 같게)
+        "alttab": "current",     # Alt+Tab 에 보일 창
+    },
 }
 
 _FRAG_HEADER = """# ═══════════════════════════════════════════════════════════
@@ -128,6 +138,19 @@ _COLOR_KEYS = {("appearance", k) for k in ("accent", "bg", "surface", "fg", "tit
     {("wallpaper", "color")}
 # 모니터 한 대의 설정 (display 섹션은 기본값이 비어 있어 따로 적어 둔다)
 _DISPLAY_KEYS = {"mode": "", "position": "", "scale": 1.0, "transform": 0, "vrr": 0, "enabled": True}
+# 고를 수 있는 값이 정해진 것
+_CHOICES = {("multitasking", "taskbar"): ("current", "all"),
+            ("multitasking", "alttab"): ("current", "all")}
+
+
+def _clean_keybinds(vals):
+    """단축키 섹션 — 키 조합 모양·타입이 틀린 항목은 버린다 (틀린 줄이 조각에 들어가면 Hyprland 가 오류를 띄운다)"""
+    try:
+        from sekaishell import keybinds
+        return keybinds.clean_section(vals)
+    except Exception as e:
+        dbg("단축키 설정을 읽지 못함 — 기본값 사용:", e)
+        return {}
 
 
 def _coerce(v, d):
@@ -165,6 +188,9 @@ def _sanitize(saved):
         if not isinstance(vals, dict):
             dbg(f"설정 [{sec}] 이 사전이 아닙니다 ({type(vals).__name__}) — 기본값 사용")
             continue
+        if sec == "keybinds":
+            out[sec] = _clean_keybinds(vals)
+            continue
         clean = {}
         for k, v in vals.items():
             if sec == "display":               # {"DP-1": {...}} — 모니터마다 사전
@@ -184,7 +210,8 @@ def _sanitize(saved):
                 clean[k] = v
                 continue
             fixed = _coerce(v, base[k])
-            if fixed is _BAD or ((sec, k) in _COLOR_KEYS and not _HEX.match(fixed)):
+            if fixed is _BAD or ((sec, k) in _COLOR_KEYS and not _HEX.match(fixed)) or \
+                    ((sec, k) in _CHOICES and fixed not in _CHOICES[(sec, k)]):
                 dbg(f"설정 [{sec}] {k} = {v!r} — 틀린 값이라 기본값({base[k]!r})을 씀")
                 continue
             clean[k] = fixed
@@ -318,7 +345,30 @@ class Store:
             except Exception as e:
                 dbg("리스너 예외", e)
 
+    def set_keybinds(self, changed, custom):
+        """단축키 — 저장하고(조각·X11 파일도) 바뀐 키 조합만 지금 세션에 다시 건다.
+        apply_one 으로는 안 된다: 무엇을 뗄지 알려면 바뀌기 전 값이 있어야 한다"""
+        old = copy.deepcopy(self.get("keybinds"))
+        self.data["keybinds"] = _clean_keybinds({"changed": changed, "custom": custom}) or \
+            copy.deepcopy(DEFAULTS["keybinds"])
+        self.save()
+        try:
+            from sekaishell import keybinds
+            keybinds.apply_live(old, self.get("keybinds"))
+        except Exception as e:
+            dbg("단축키를 세션에 반영하지 못함 — 다시 로그인하면 반영된다", e)
+        for cb in self._listeners:
+            try:
+                cb("keybinds", "changed", self.get("keybinds"))
+            except Exception as e:
+                dbg("리스너 예외", e)
+
     def reset_section(self, section):
+        if section == "keybinds":
+            # 모두 기본값 — 뗄 키를 알아야 해서 따로 (apply_all 은 단축키를 모른다)
+            self.set_keybinds({}, [])
+            self.request_rebuild(section=section)
+            return
         old_mode = theme.mode_of(self.get("appearance"))
         self.data[section] = copy.deepcopy(DEFAULTS.get(section, {}))
         self.save()
@@ -435,8 +485,28 @@ class Store:
             lines.append(f"workspace = 1, monitor:{prim}, default:true")
         lines.append("")
 
+        # 가상 데스크톱 — 로그인하면 이 개수·이름으로 만들어져 있게 (sekaishell/desktops.py)
+        try:
+            from sekaishell import desktops
+            lines += desktops.rule_lines(desktops.load()) + [""]
+        except Exception as e:
+            dbg("가상 데스크톱 규칙을 만들지 못함", e)
+        # 단축키 — 맨 끝에. 여기가 잘못돼도 위의 설정과 (hyprland.conf 의) 기본 단축키는 그대로다
+        kb = self.get("keybinds")
+        try:
+            from sekaishell import keybinds
+            lines += keybinds.hypr_lines(kb)
+        except Exception as e:
+            dbg("단축키 줄을 만들지 못함 — 기본 단축키만 쓴다", e)
+
         atomic_write(HYPR_FRAG, "\n".join(lines))
         dbg("조각 생성", HYPR_FRAG)
+        # 기본 화면 모드(X11)의 sxhkd 설정도 같은 단축키로 (세션 시작 때도 여기를 거친다 — sekai-session)
+        try:
+            from sekaishell import keybinds
+            keybinds.write_x11(kb)
+        except Exception as e:
+            dbg("기본 화면 모드 단축키 파일을 쓰지 못함", e)
         self.publish_display()
 
     # ── 즉시 반영 ───────────────────────────────────────

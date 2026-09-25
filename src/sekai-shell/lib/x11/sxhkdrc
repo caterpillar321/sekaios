@@ -1,5 +1,7 @@
 # SekaiOS 기본 화면 모드 단축키 (sxhkd) — Hyprland 쪽과 같은 자리에
 #   창 배치(Win+←/→/↑/↓)·닫기(Alt+F4, Win+Q)는 xfwm4 가 한다 (xfwm4-setup)
+#   설정 › 단축키 에서 바꾼 키는 hyprland.conf 의 "같은 키 조합" 항목을 따라 이 파일의 줄을 바꿔
+#   ~/.config/sekai/sxhkdrc 로 만든다 (sekaishell/keybinds.py) — 여기 키 조합은 hyprland.conf 와 맞춰 둘 것
 
 # Win 키만 눌렀다 떼면 시작 메뉴 — xcape 가 "Win 단독 탭"을 Ctrl+Esc 로 바꿔 준다
 # (sxhkd 의 @Super_L 은 Win+L 같은 조합 뒤에 Win 을 뗄 때도 반응해서 쓰지 않는다.
