@@ -105,22 +105,41 @@ def publish_modes(hmons=None):
     if not lines:
         return
     import pwd
+    import stat
+    import tempfile
     path = os.path.join(d, pwd.getpwuid(os.getuid()).pw_name + ".modes")
     text = "".join(lines)
+    # 누구나 쓰는 폴더다 — 남이 같은 이름으로 FIFO·링크를 먼저 만들어 둘 수 있다.
+    #   비교용 읽기도 링크를 따라가지 않고(O_NOFOLLOW) 막히지 않게(O_NONBLOCK), 내 일반 파일일 때만.
     try:
-        with open(path, encoding="utf-8") as f:
-            if f.read() == text:
-                return
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     except OSError:
-        pass
-    try:
-        old = os.umask(0o022)
+        fd = -1
+    if fd >= 0:
         try:
-            tmp = f"{path}.{os.getpid()}.tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                f.write(text)
-            os.replace(tmp, path)
+            st = os.fstat(fd)
+            if stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid() \
+                    and os.read(fd, 8192).decode("utf-8", "replace") == text:
+                return
+        except OSError:
+            pass
         finally:
-            os.umask(old)
+            os.close(fd)
+    # 새 파일은 예측할 수 없는 이름으로 새로 만들어(mkstemp — O_EXCL) 바꿔 넣는다.
+    #   남의 파일이 그 이름에 있으면 바꿔 넣기가 거부된다 (sticky 폴더) — 그땐 그냥 둔다.
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(prefix=".modes.", dir=d)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            os.fchmod(f.fileno(), 0o644)             # 부팅 옵션을 만드는 쪽(root)·로그인 화면이 읽는다
+            f.write(text)
+        os.replace(tmp, path)
+        tmp = None
     except OSError:
         pass
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass

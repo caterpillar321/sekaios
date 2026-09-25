@@ -16,8 +16,9 @@
 #  ESP 구조 (SekaiOS 가 설치된 디스크의 자기 ESP):
 #    /EFI/sekai/    shimx64.efi grubx64.efi mmx64.efi grub.cfg BOOTX64.CSV
 #    /EFI/debian/   grub.cfg  ← 데비안 서명 GRUB 이 설정을 여기서 찾는다
-#    /EFI/BOOT/     BOOTX64.EFI(=shim) grubx64.efi mmx64.efi fbx64.efi
-#                   (NVRAM 부팅 항목이 지워져도 켜지고, fbx64 가 항목을 되살린다)
+#    /EFI/BOOT/     BOOTX64.EFI(=shim) grubx64.efi mmx64.efi fbx64.efi sekaios.sha256
+#                   (NVRAM 부팅 항목이 지워져도 켜지고, fbx64 가 항목을 되살린다.
+#                    다른 OS 와 같이 쓰는 ESP 면 건드리지 않는다 — fallback 참고)
 #  메뉴 모양: /etc/default/grub.d/sekai.cfg, 항목: /etc/grub.d/09_sekaios
 # ═══════════════════════════════════════════════════════════════
 set -euo pipefail
@@ -44,19 +45,50 @@ grub_install() {
     printf 'shimx64.efi,%s,,%s\n' "$LABEL" "SekaiOS 부팅" | iconv -f UTF-8 -t UTF-16LE > "$EFIDIR/BOOTX64.CSV"
 }
 
+other_os() {
+    # 이 ESP 에 SekaiOS 말고 다른 것이 있으면 그 폴더 이름을 찍는다 (없으면 실패).
+    #   우리 것: EFI/sekai, EFI/BOOT, grub.cfg 만 든 EFI/debian (데비안 서명 GRUB 이 찾는 곳 — 위에서 만든다).
+    #   FAT 은 대소문자를 가리지 않으므로 소문자로 비교한다.
+    local d n
+    for d in "$ESP"/EFI/*/; do
+        [ -d "$d" ] || continue
+        n=$(basename "$d")
+        case "${n,,}" in
+            "$ID"|boot) continue ;;
+            debian) [ -z "$(find "$d" -mindepth 1 ! -iname grub.cfg -print -quit 2>/dev/null)" ] && continue ;;
+        esac
+        echo "$n"
+        return 0
+    done
+    return 1
+}
+
 fallback() {
-    # 폴백 경로 — SekaiOS 전용 ESP 일 때만 (다른 OS 의 ESP 면 그쪽 폴백을 덮지 않는다)
-    local B="$ESP/EFI/BOOT"
-    if [ -f "$B/BOOTX64.EFI" ] && [ -d "$ESP/EFI/Microsoft" ]; then
-        say "이 ESP 에 Windows 가 있어 폴백 경로는 건드리지 않습니다"
+    # 폴백 경로(EFI/BOOT/BOOTX64.EFI — NVRAM 항목이 없을 때 펌웨어가 켜는 것)는 한 ESP 에 하나뿐이다.
+    #   남의 것을 덮으면 그 운영체제가 폴백으로 켜지지 않는다. 그래서 우리가 넣은 것만 고친다:
+    #     ① 지난번에 우리가 쓴 그대로다 (sekaios.sha256 에 적어 둔 해시와 같다) — 업데이트
+    #     ② 이 ESP 에 SekaiOS 말고 아무것도 없다 — 새 설치(설치 프로그램이 디스크째 만든 ESP),
+    #        또는 표시가 없던 예전 SekaiOS 설치본(rEFInd 시절 포함)
+    #   그 밖엔 (다른 OS 가 있거나, 우리가 쓴 뒤에 누가 바꿨다) 건드리지 않는다.
+    local B="$ESP/EFI/BOOT" MARK="$ESP/EFI/BOOT/sekaios.sha256" other cur
+    if [ -f "$B/BOOTX64.EFI" ] && [ -f "$MARK" ]; then
+        cur=$(sha256sum "$B/BOOTX64.EFI" | cut -d" " -f1)
+        if [ "$cur" != "$(cat "$MARK" 2>/dev/null)" ]; then
+            say "폴백 경로(EFI/BOOT)가 SekaiOS 가 쓴 뒤에 바뀌어 건드리지 않습니다"
+            return
+        fi
+    elif other=$(other_os); then
+        say "이 ESP 에 다른 운영체제($other)가 있어 폴백 경로(EFI/BOOT)는 건드리지 않습니다"
         return
     fi
     mkdir -p "$B"
+    # 예전 SekaiOS(rEFInd)가 폴백 경로에 두던 것 — 우리 것일 때만 여기까지 온다
     rm -f "$B/refind.conf"; rm -rf "$B/icons" "$B/fonts" "$B/themes" "$B/drivers_x64"
     cp -f "$EFIDIR/shimx64.efi" "$B/BOOTX64.EFI"
     cp -f "$EFIDIR/grubx64.efi" "$B/grubx64.efi"
     cp -f "$EFIDIR/mmx64.efi"   "$B/mmx64.efi"   2>/dev/null || true
     cp -f /usr/lib/shim/fbx64.efi.signed "$B/fbx64.efi" 2>/dev/null || true
+    sha256sum "$B/BOOTX64.EFI" | cut -d" " -f1 > "$MARK"
 }
 
 nvram() {  # 디스크 파티션번호

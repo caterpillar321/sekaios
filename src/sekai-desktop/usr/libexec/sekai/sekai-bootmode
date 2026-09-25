@@ -14,6 +14,7 @@ sekai-bootmode.path 가 이것을 부른다. 가장 최근에 적은 사용자�
 import os
 import pwd
 import re
+import stat
 import subprocess
 import sys
 
@@ -26,8 +27,27 @@ def log(*a):
     print("sekai-bootmode:", *a, file=sys.stderr, flush=True)
 
 
+def read_owned(path, uid):
+    """(내용, 수정 시각) — 주인이 uid 인 4KB 이하의 일반 파일만, 아니면 None.
+    한 번 연 fd 로 확인과 읽기를 같이 한다 (확인한 뒤 이름으로 다시 열면 그 사이에 바꿔치기될 수 있다).
+    심볼릭 링크는 따라가지 않고(O_NOFOLLOW), FIFO 도 막히지 않게 연다(O_NONBLOCK) — 누구나 쓰는 폴더라서."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != uid or st.st_size > 4096:
+            return None
+        return os.read(fd, 4096).decode("utf-8", "replace"), st.st_mtime
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
 def newest():
-    """(사용자, 경로) — 주인이 맞는 .modes 중 가장 최근 것"""
+    """(사용자, 내용) — 주인이 맞는 .modes 중 가장 최근 것"""
     best = None
     try:
         names = os.listdir(DIR)
@@ -39,31 +59,30 @@ def newest():
         user = f[:-len(".modes")]
         if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", user):
             continue
-        path = os.path.join(DIR, f)
         try:
-            st = os.lstat(path)
             uid = pwd.getpwnam(user).pw_uid
-        except (OSError, KeyError):
+        except KeyError:
             continue
-        if not os.path.isfile(path) or os.path.islink(path) or st.st_uid != uid or st.st_size > 4096:
+        got = read_owned(os.path.join(DIR, f), uid)
+        if got is None:
             continue
-        if best is None or st.st_mtime > best[0]:
-            best = (st.st_mtime, user, path)
+        text, mtime = got
+        if best is None or mtime > best[0]:
+            best = (mtime, user, text)
     return best[1:] if best else None
 
 
-def video_opts(path):
+def video_opts(text):
     opts = []
-    with open(path, encoding="utf-8", errors="replace") as f:
-        for line in f.read().splitlines()[:8]:
-            m = LINE.match(line.strip())
-            if not m:
-                continue
-            name, w, h, hz = m.group(1), int(m.group(2)), int(m.group(3)), float(m.group(4))
-            if not (320 <= w <= 16384 and 200 <= h <= 16384 and 20 <= hz <= 600):
-                continue
-            # 커널은 주사율을 정수(반올림)로 맞춰 본다 — 164.96 → 165
-            opts.append(f"video={name}:{w}x{h}@{round(hz)}")
+    for line in text.splitlines()[:8]:
+        m = LINE.match(line.strip())
+        if not m:
+            continue
+        name, w, h, hz = m.group(1), int(m.group(2)), int(m.group(3)), float(m.group(4))
+        if not (320 <= w <= 16384 and 200 <= h <= 16384 and 20 <= hz <= 600):
+            continue
+        # 커널은 주사율을 정수(반올림)로 맞춰 본다 — 164.96 → 165
+        opts.append(f"video={name}:{w}x{h}@{round(hz)}")
     return " ".join(opts)
 
 
@@ -73,8 +92,8 @@ def main():
     found = newest()
     if not found:
         return 0
-    user, path = found
-    opts = video_opts(path)
+    user, text = found
+    opts = video_opts(text)
     want = f'SEKAI_VIDEO_OPTS="{opts}"\n'
     try:
         with open(OUT, encoding="utf-8") as f:
