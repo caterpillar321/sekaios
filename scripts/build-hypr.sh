@@ -94,6 +94,8 @@ install -m644 "$SELF/hypr/patch-hyprbars-snap.py"  "$BR/build/patch-hyprbars-sna
 install -m644 "$SELF/hypr/patch-hyprbars-theme.py" "$BR/build/patch-hyprbars-theme.py"
 install -m644 "$SELF/hypr/patch-hyprland-clientmove.py" "$BR/build/patch-hyprland-clientmove.py"
 install -m644 "$SELF/hypr/patch-hyprland-keepoutputs.py" "$BR/build/patch-hyprland-keepoutputs.py"
+install -m644 "$SELF/hypr/patch-hyprland-bordergrab.py" "$BR/build/patch-hyprland-bordergrab.py"
+install -m644 "$SELF/hypr/patch-hyprbars-bordergrab.py" "$BR/build/patch-hyprbars-bordergrab.py"
 
 # ── 빌드 ─────────────────────────────────────────────
 say "빌드 시작"; echo

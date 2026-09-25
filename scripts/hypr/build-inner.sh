@@ -16,7 +16,9 @@ REV="sekai2"
 #   hyprbars sekai8: 버튼 마우스 올림 배경을 글자색에서 (라이트 모드)
 #   hyprland sekai3: 창이 그린 제목줄(CSD — Chromium 탭 줄 등)을 끌어서 옮기기 (patch-hyprland-clientmove.py)
 #   hyprland sekai4: 끝날 때 모니터 출력을 끄지 않는다 — 로그인 때 화면이 꺼지지 않게 (patch-hyprland-keepoutputs.py)
-rev_for() { case "$1" in hyprbars) echo sekai8 ;; hyprland) echo sekai4 ;; *) echo "$REV" ;; esac; }
+#   hyprland sekai5: 창 테두리 크기 조절을 윈도우처럼 — 커서, 안쪽 가장자리, 위쪽, 한 방향 (patch-hyprland-bordergrab.py)
+#   hyprbars sekai9: 제목줄 가장자리 4px 누름은 넘긴다 — 위쪽으로 크기 조절 (patch-hyprbars-bordergrab.py)
+rev_for() { case "$1" in hyprbars) echo sekai9 ;; hyprland) echo sekai5 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
@@ -137,6 +139,7 @@ PYEOF
     say "SekaiOS 패치: 창이 그린 제목줄 끌기"
     python3 /build/patch-hyprland-clientmove.py "$dir" || die "패치 실패 (clientmove)"
     python3 /build/patch-hyprland-keepoutputs.py "$dir" || die "패치 실패 (keepoutputs)"
+    python3 /build/patch-hyprland-bordergrab.py "$dir" || die "패치 실패 (bordergrab)"
     ok "패치 완료"
 }
 
@@ -216,7 +219,7 @@ add_copyright() {
         echo "패키지:  $pkg (SekaiOS 빌드)"
         echo "원본:    https://github.com/hyprwm/$repo  (태그 $tag)"
         case "$pkg" in
-            hyprland) echo "수정:    GCC 14 빌드 호환 패치, 창이 그린 제목줄 끌기 (scripts/hypr/build-inner.sh 의 patch_hyprland, patch-hyprland-clientmove.py, patch-hyprland-keepoutputs.py)" ;;
+            hyprland) echo "수정:    GCC 14 빌드 호환 패치, 창이 그린 제목줄 끌기 (scripts/hypr/build-inner.sh 의 patch_hyprland, patch-hyprland-*.py)" ;;
             hyprbars) echo "수정:    창 조작 버튼 벡터 아이콘·마우스 올림 배경·끌어서 스냅 알림 (scripts/hypr/patch-hyprbars-*.py)" ;;
             *)        echo "수정:    없음 (원본 그대로 빌드)" ;;
         esac
@@ -359,6 +362,7 @@ build_plugin() {
         python3 /build/patch-hyprbars-hover.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (hover)"
         python3 /build/patch-hyprbars-snap.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (snap)"
         python3 /build/patch-hyprbars-theme.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (theme)"
+        python3 /build/patch-hyprbars-bordergrab.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (bordergrab)"
     fi
 
     say "빌드(plugin): $pkg $ver"
