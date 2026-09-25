@@ -96,6 +96,7 @@ install -m644 "$SELF/hypr/patch-hyprland-clientmove.py" "$BR/build/patch-hyprlan
 install -m644 "$SELF/hypr/patch-hyprland-keepoutputs.py" "$BR/build/patch-hyprland-keepoutputs.py"
 install -m644 "$SELF/hypr/patch-hyprland-bordergrab.py" "$BR/build/patch-hyprland-bordergrab.py"
 install -m644 "$SELF/hypr/patch-hyprland-layerfocus.py" "$BR/build/patch-hyprland-layerfocus.py"
+install -m644 "$SELF/hypr/patch-hyprland-dndhotspot.py" "$BR/build/patch-hyprland-dndhotspot.py"
 install -m644 "$SELF/hypr/patch-hyprbars-bordergrab.py" "$BR/build/patch-hyprbars-bordergrab.py"
 install -m644 "$SELF/hypr/patch-hyprbars-focus.py" "$BR/build/patch-hyprbars-focus.py"
 

@@ -24,7 +24,8 @@ REV="sekai2"
 #                    (갇힌 포인터·끝난 뒤 커서·앱 커서 요청), 버튼 없이 온 move 요청·끄던 창이 닫힐 때 놓음 알림
 #   hyprbars sekai10: 제목줄을 누르면 키보드가 레이어에 있어도 초점, 최대화 창 제목줄 가장자리는 넘기지 않음,
 #                     끄던 창이 닫히면 끌기를 끝내고 알림
-rev_for() { case "$1" in hyprbars) echo sekai10 ;; hyprland) echo sekai8 ;; *) echo "$REV" ;; esac; }
+#   hyprland sekai9: 끌기 아이콘의 기준점(누른 점)을 지킨다 (patch-hyprland-dndhotspot.py)
+rev_for() { case "$1" in hyprbars) echo sekai10 ;; hyprland) echo sekai9 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
@@ -148,6 +149,7 @@ PYEOF
     python3 /build/patch-hyprland-keepoutputs.py "$dir" || die "패치 실패 (keepoutputs)"
     python3 /build/patch-hyprland-bordergrab.py "$dir" || die "패치 실패 (bordergrab)"
     python3 /build/patch-hyprland-layerfocus.py "$dir" || die "패치 실패 (layerfocus)"
+    python3 /build/patch-hyprland-dndhotspot.py "$dir" || die "패치 실패 (dndhotspot)"
     ok "패치 완료"
 }
 
