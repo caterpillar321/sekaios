@@ -218,3 +218,68 @@ for f in (inp, lay):
     if n != t:
         f.write_text(n)
         print(f"    적용: {f.name} 커서 이름 (양방향 화살표)")
+
+# ── SEKAI_BORDER_FIX: 위 패치의 부작용 세 가지 (따로 멱등) ─────────────────────────────
+#   ① 포인터를 창 안에 가두는 앱(게임·가상머신)은 가장자리 4px 누름이 크기 조절로 삼켜졌다 — 갇혀 있으면 앱에 준다
+#   ② 크기 조절을 끝내고 손을 떼면 테두리 위인데도 크기 조절 커서가 다시 안 떴다 — 끄는 동안 방향 기억을 비운다
+#      (원래 코드의 의도. 다음 움직임에 다시 판정한다)
+#   ③ 테두리 커서를 띄운 채 창에 들어가면 앱이 enter 에 답해 보낸 커서 요청이 버려져, 창 안에서 엉뚱한 커서가 남았다
+#      — 테두리 커서 동안 온 요청은 적어만 두고, 테두리를 벗어날 때(unsetCursorImage → restoreCursorIconToApp) 띄운다
+t = inp.read_text()
+if "SEKAI_BORDER_FIX" not in t:
+    t = sub(t, '''    if (*PRESIZEONBORDER && w && !w->isFullscreen() && !w->isX11OverrideRedirect() && !g_pSessionLockManager->isSessionLocked() && !m_lastFocusOnLS &&
+        e.state == WL_POINTER_BUTTON_STATE_PRESSED && !w->hasPopupAt(mouseCoords)) {''',
+            '''    if (*PRESIZEONBORDER && w && !w->isFullscreen() && !w->isX11OverrideRedirect() && !g_pSessionLockManager->isSessionLocked() && !m_lastFocusOnLS &&
+        e.state == WL_POINTER_BUTTON_STATE_PRESSED && !w->hasPopupAt(mouseCoords) && (g_pSeatManager->m_mouse.expired() || !isConstrained()) /* SEKAI_BORDER_FIX */) {''',
+            "갇힌 포인터")
+    t = sub(t, '''    if (!g_pInputManager->m_currentlyDraggedWindow.expired())
+        return;
+
+    // ignore X11 OR windows, they shouldn't be touched''',
+            '''    if (!g_pInputManager->m_currentlyDraggedWindow.expired()) {
+        m_borderIconDirection = BORDERICON_NONE; // SEKAI_BORDER_FIX: 끝나면 다음 움직임에 다시 판정
+        return;
+    }
+
+    // ignore X11 OR windows, they shouldn't be touched''', "끄는 동안 방향")
+    # 앱 커서 요청 두 곳 (wl_pointer.set_cursor · cursor-shape)
+    t = sub(t, '''void CInputManager::processMouseRequest(const CSeatManager::SSetCursorEvent& event) {
+    if (!cursorImageUnlocked())
+        return;
+''', '''void CInputManager::processMouseRequest(const CSeatManager::SSetCursorEvent& event) {
+    const bool SEKAIDEFER = m_cursorImageOverridden && m_borderIconDirection != BORDERICON_NONE && m_clickBehavior != CLICKMODE_KILL; // SEKAI_BORDER_FIX: 테두리 커서 동안이면 적어만 둔다
+    if (!cursorImageUnlocked() && !SEKAIDEFER)
+        return;
+''', "커서 요청 조건")
+    t = sub(t, '''    m_cursorSurfaceInfo.name = "";
+
+    m_cursorSurfaceInfo.inUse = true;
+    g_pHyprRenderer->setCursorSurface(m_cursorSurfaceInfo.wlSurface, event.hotspot.x, event.hotspot.y);''',
+            '''    m_cursorSurfaceInfo.name = "";
+
+    m_cursorSurfaceInfo.inUse = !SEKAIDEFER; // 미뤘으면 restoreCursorIconToApp 가 띄운다
+    if (SEKAIDEFER)
+        return;
+    g_pHyprRenderer->setCursorSurface(m_cursorSurfaceInfo.wlSurface, event.hotspot.x, event.hotspot.y);''', "커서 요청 적용")
+    t = sub(t, '''    m_listeners.setCursorShape = PROTO::cursorShape->m_events.setShape.listen([this](const CCursorShapeProtocol::SSetShapeEvent& event) {
+        if (!cursorImageUnlocked())
+            return;
+''', '''    m_listeners.setCursorShape = PROTO::cursorShape->m_events.setShape.listen([this](const CCursorShapeProtocol::SSetShapeEvent& event) {
+        const bool SEKAIDEFER = m_cursorImageOverridden && m_borderIconDirection != BORDERICON_NONE && m_clickBehavior != CLICKMODE_KILL; // SEKAI_BORDER_FIX: 테두리 커서 동안이면 적어만 둔다
+        if (!cursorImageUnlocked() && !SEKAIDEFER)
+            return;
+''', "커서 모양 조건")
+    t = sub(t, '''        m_cursorSurfaceInfo.hidden   = false;
+
+        m_cursorSurfaceInfo.inUse = true;
+        g_pHyprRenderer->setCursorFromName(m_cursorSurfaceInfo.name);''',
+            '''        m_cursorSurfaceInfo.hidden   = false;
+
+        m_cursorSurfaceInfo.inUse = !SEKAIDEFER;
+        if (SEKAIDEFER)
+            return;
+        g_pHyprRenderer->setCursorFromName(m_cursorSurfaceInfo.name);''', "커서 모양 적용")
+    inp.write_text(t)
+    print("    적용: InputManager.cpp 테두리 부작용 (갇힌 포인터·끝난 뒤 커서·앱 커서 요청)")
+else:
+    print("    (InputManager.cpp 테두리 부작용 이미 적용됨)")

@@ -132,3 +132,30 @@ void sekaiClientMoveStart(PHLWINDOW w) {
     print("    적용: InputManager.cpp 끌기·스냅 이벤트")
 else:
     print("    (InputManager.cpp 이미 적용됨)")
+
+# ── SEKAI_CLIENT_MOVE2 (따로 멱등) ─────────────────────────────────────────
+#   ① move 요청이 버튼을 뗀 뒤에 오면(앱이 바빠 늦게 보냄) 버튼 없이 창이 커서를 따라다녔다 — 누르고 있을 때만
+#   ② 끄는 중 창이 닫히면 놓음 알림이 빠져 셸이 끌기 상태에 갇혔다 — 창이 없어도 "none" 으로 알린다
+t = inp.read_text()
+if "SEKAI_CLIENT_MOVE2" not in t:
+    t = sub(t, '''static PHLWINDOWREF sekaiMoveWin;''', '''static PHLWINDOWREF sekaiMoveWin;
+static bool         sekaiButtonHeld = false; // SEKAI_CLIENT_MOVE2: 지금 마우스 버튼이 눌려 있나 (onMouseButton 이 적는다)''', "버튼 상태 변수")
+    t = sub(t, '''    if (!w || sekaiMoving || !g_pInputManager->m_currentlyDraggedWindow.expired())
+        return;''', '''    if (!w || sekaiMoving || !sekaiButtonHeld || !g_pInputManager->m_currentlyDraggedWindow.expired())
+        return;''', "누르고 있을 때만")
+    t = sub(t, '''    switch (m_clickBehavior) {
+        case CLICKMODE_DEFAULT: processMouseDownNormal(e); break;''', '''    sekaiButtonHeld = !m_currentlyHeldButtons.empty(); // SEKAI_CLIENT_MOVE2
+
+    switch (m_clickBehavior) {
+        case CLICKMODE_DEFAULT: processMouseDownNormal(e); break;''', "버튼 상태 적기")
+    t = sub(t, '''        if (const auto w = sekaiMoveWin.lock())
+            g_pEventManager->postEvent(SHyprIPCEvent{"sekaisnapdrop", std::format("{},{},{:x}", z, mon ? mon->m_name : "", (uintptr_t)w.get())});
+        sekaiMoveZone = "none";''', '''        if (const auto w = sekaiMoveWin.lock())
+            g_pEventManager->postEvent(SHyprIPCEvent{"sekaisnapdrop", std::format("{},{},{:x}", z, mon ? mon->m_name : "", (uintptr_t)w.get())});
+        else // SEKAI_CLIENT_MOVE2: 끄던 창이 닫혔다 — 셸이 끌기를 끝내게
+            g_pEventManager->postEvent(SHyprIPCEvent{"sekaisnapdrop", "none,,0"});
+        sekaiMoveZone = "none";''', "창이 없어도 놓음")
+    inp.write_text(t)
+    print("    적용: InputManager.cpp 누르고 있을 때만 끌기, 창이 닫혀도 놓음 알림")
+else:
+    print("    (InputManager.cpp 끌기 보강 이미 적용됨)")

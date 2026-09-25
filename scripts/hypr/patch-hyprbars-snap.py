@@ -11,16 +11,15 @@ Hyprland IPC 이벤트(socket2)로:
 그리고 스냅 레이아웃(최대화 버튼에 마우스를 올리면 배치 그림)을 위해:
   sekaimaxhover>>on,주소,x,y       최대화 버튼에 올림 (x,y = 버튼 아래 가운데, 전체 화면 논리 좌표)
   sekaimaxhover>>off,주소          벗어남
-멱등 — 두 부분을 따로 표시한다(SEKAI_SNAP, SEKAI_SNAP_LAYOUT).
+멱등 — 부분마다 따로 표시한다(SEKAI_SNAP, SEKAI_SNAP_LAYOUT, SEKAI_SNAP_DROP, SEKAI_SNAP_GONE).
 patch-hyprbars-hover.py 다음에 적용해야 한다 (그 패치의 m_iSekaiHover 를 쓴다).
 """
 import sys
 
 path = sys.argv[1]
 s = open(path, encoding="utf-8").read()
-MARK, MARK2, MARK3 = "SEKAI_SNAP", "SEKAI_SNAP_LAYOUT", "SEKAI_SNAP_DROP"
-if MARK3 in s:
-    print("이미 적용됨"); sys.exit(0)
+MARK, MARK2, MARK3, MARK4 = "SEKAI_SNAP", "SEKAI_SNAP_LAYOUT", "SEKAI_SNAP_DROP", "SEKAI_SNAP_GONE"
+orig = s
 
 
 def patch(s):
@@ -163,9 +162,52 @@ def patch_drop(s):
 ''', 1)
 
 
+def patch_gone(s):
+    """7. 끄던 창이 닫히면(끌면서 Alt+F4, 앱이 끝남) 놓음이 오지 않아 셸이 끌기 상태에 갇혔다 — SEKAI_SNAP_GONE
+    초점이 다른 창으로 옮겨 가 handleUpEvent 가 일찍 끝나거나, 장식이 창과 함께 없어진다. 두 곳에서
+    끌기를 끝내고 "none" 놓음을 알린다."""
+    old = '''    g_pEventManager->postEvent(SHyprIPCEvent{"sekaisnapdrop", std::format("{},{},{:x}", z, mon ? mon->m_name : "", (uintptr_t)w.get())});
+}
+'''
+    assert s.count(old) == 1, "sekaiSnapDrop 기준점 없음"
+    s = s.replace(old, old + '''
+static void sekaiSnapCancel() { // SEKAI_SNAP_GONE: 끄던 창이 없어졌다 — 셸이 끌기를 끝내게
+    sekaiZone = "none";
+    g_pEventManager->postEvent(SHyprIPCEvent{"sekaisnapdrop", "none,,0"});
+}
+''', 1)
+    old = '''void CHyprBar::handleUpEvent(SCallbackInfo& info) {
+    if (m_pWindow.lock() != g_pCompositor->m_lastWindow.lock())
+        return;
+'''
+    assert s.count(old) == 1, "handleUpEvent 기준점 없음"
+    s = s.replace(old, '''void CHyprBar::handleUpEvent(SCallbackInfo& info) {
+    if (m_pWindow.lock() != g_pCompositor->m_lastWindow.lock()) {
+        if (m_bDraggingThis) { // SEKAI_SNAP_GONE: 초점이 옮겨 가(창이 닫힘) 놓음이 여기서 끝났다
+            g_pKeybindManager->m_dispatchers["mouse"]("0movewindow");
+            m_bDraggingThis = false;
+            m_bDragPending  = false;
+            sekaiSnapCancel();
+        }
+        return;
+    }
+''', 1)
+    old = '''CHyprBar::~CHyprBar() {
+'''
+    assert s.count(old) == 1, "소멸자 기준점 없음"
+    return s.replace(old, old + '''    if (m_bDraggingThis) // SEKAI_SNAP_GONE
+        sekaiSnapCancel();
+''', 1)
+
+
 if MARK2 not in s:
     s = patch_layout(s)
-s = patch_drop(s)
+if MARK3 not in s:
+    s = patch_drop(s)
+if MARK4 not in s:
+    s = patch_gone(s)
 
+if s == orig:
+    print("이미 적용됨"); sys.exit(0)
 open(path, "w", encoding="utf-8").write(s)
 print("적용함")

@@ -20,7 +20,11 @@ REV="sekai2"
 #   hyprbars sekai9: 제목줄 가장자리 4px 누름은 넘긴다 — 위쪽으로 크기 조절 (patch-hyprbars-bordergrab.py)
 #   hyprland sekai6: 바탕화면 레이어가 창의 키보드 초점을 가로채지 않게 (patch-hyprland-layerfocus.py)
 #   hyprland sekai7: follow_mouse=2 에서 바탕화면 레이어가 커서 올림만으로 키보드를 가져가지 않게
-rev_for() { case "$1" in hyprbars) echo sekai9 ;; hyprland) echo sekai7 ;; *) echo "$REV" ;; esac; }
+#   hyprland sekai8: 메뉴가 닫힐 때(다시 잡기)도 바탕화면이 키보드를 가져가지 않게, 테두리 조절 부작용
+#                    (갇힌 포인터·끝난 뒤 커서·앱 커서 요청), 버튼 없이 온 move 요청·끄던 창이 닫힐 때 놓음 알림
+#   hyprbars sekai10: 제목줄을 누르면 키보드가 레이어에 있어도 초점, 최대화 창 제목줄 가장자리는 넘기지 않음,
+#                     끄던 창이 닫히면 끌기를 끝내고 알림
+rev_for() { case "$1" in hyprbars) echo sekai10 ;; hyprland) echo sekai8 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
@@ -30,6 +34,7 @@ C_B=$'\033[1;36m'; C_G=$'\033[1;32m'; C_R=$'\033[1;31m'; C_0=$'\033[0m'
 say(){ printf '%s==>%s %s\n' "$C_B" "$C_0" "$*"; }
 ok(){  printf '%s  ok%s %s\n' "$C_G" "$C_0" "$*"; }
 die(){ printf '%s  ERROR: %s%s\n' "$C_R" "$*" "$C_0"; exit 1; }
+warn(){ printf '%s  경고:%s %s\n' "$C_R" "$C_0" "$*"; }
 
 # 로그에서 실제 에러 줄만 추려서 보여줌 (템플릿 에러 덤프에 묻히지 않게)
 show_errors() {
@@ -247,9 +252,9 @@ mkdeb() {
         | while read -r x; do file -b "$x" 2>/dev/null | grep -qi '^ELF' && echo "$x"; done)
 
     if [ ${#bins[@]} -gt 0 ]; then
+        local rc=0                      # set -e 여도 경고만 하고 계속한다
         ( cd "$stage" && mkdir -p debian && : > debian/control
-          dpkg-shlibdeps -O --ignore-missing-info "${bins[@]}" ) > /tmp/.sd 2> "$sdlog"
-        local rc=$?
+          dpkg-shlibdeps -O --ignore-missing-info "${bins[@]}" ) > /tmp/.sd 2> "$sdlog" || rc=$?
         deps=$(sed -n 's/^shlibs:Depends=//p' /tmp/.sd | head -1)
         rm -rf "$stage/debian" /tmp/.sd
         if [ $rc -ne 0 ] || [ -z "$deps" ]; then
@@ -366,6 +371,7 @@ build_plugin() {
         python3 /build/patch-hyprbars-snap.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (snap)"
         python3 /build/patch-hyprbars-theme.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (theme)"
         python3 /build/patch-hyprbars-bordergrab.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (bordergrab)"
+        python3 /build/patch-hyprbars-focus.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (focus)"
     fi
 
     say "빌드(plugin): $pkg $ver"
