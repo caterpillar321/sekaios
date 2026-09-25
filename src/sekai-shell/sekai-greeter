@@ -139,6 +139,66 @@ def signed_in():
         return {}
 
 
+# PAM 이 greetd 에 준 까닭(설명 글) → 보여 줄 말. 오류 문장은 영어(C 로캘)로 온다
+PAM_REASONS = (
+    (("account has expired", "acct_expired"), "계정이 만료됐습니다 — 관리자에게 문의하세요."),
+    (("new one required", "authentication token expired", "password expired", "password has expired"),
+     "비밀번호가 만료됐습니다 — 새 비밀번호로 바꿔야 합니다. Ctrl+Alt+F2 의 글자 화면에서 로그인하면 바꿀 수 있습니다."),
+    (("permission denied",), "이 계정은 지금 로그인할 수 없습니다 (권한 거부)."),
+    (("maximum number of tries", "maxtries"), "시도 횟수를 넘었습니다 — 잠시 뒤 다시 해 보세요."),
+    (("locked",), "계정이 잠겼습니다 — 잠시 뒤 다시 하거나 관리자에게 문의하세요."),
+)
+EXPIRED_MSG = PAM_REASONS[1][1]
+# 비밀번호를 바꾸라는 대화(비밀번호가 맞은 뒤 greetd 가 pam_chauthtok 으로 넘어간다)에서 나오는 말
+CHANGE_HINTS = ("change your password", "password change", "new password", "current password",
+                "expired", "암호", "비밀번호")
+
+
+def explain(desc, default):
+    d = (desc or "").lower()
+    for keys, msg in PAM_REASONS:
+        if any(k in d for k in keys):
+            return msg
+    return default
+
+
+def greetd_login(g, user, password, cmd, env):
+    """greetd 로 로그인. 성공하면 None, 실패하면 보여 줄 말.
+    sekaishell.greetd.Greetd.login 과 같되, 비밀번호를 두 번째로 묻는 것을 무조건 "틀림"으로 보지 않는다 —
+    비밀번호가 만료되면 greetd 는 인증에 성공한 뒤 바꾸기 대화(새 비밀번호 묻기)로 넘어가는데,
+    예전엔 그게 "비밀번호가 올바르지 않습니다"로 보였다. 이 화면에서 바꾸기는 아직 하지 않으므로
+    취소하고 알린다. 계정 만료·잠김 같은 오류도 까닭대로."""
+    r = g.create_session(user)
+    answered = False
+    said = []                                   # 받은 안내·오류 글 (까닭을 알아보려고)
+    while r.get("type") == "auth_message":
+        kind = r.get("auth_message_type")
+        text = r.get("auth_message") or ""
+        if kind in ("secret", "visible"):
+            if answered:
+                g.cancel()
+                seen = " ".join(said + [text]).lower()
+                if any(h in seen for h in CHANGE_HINTS):
+                    return EXPIRED_MSG
+                return "추가 인증을 요구합니다 — 이 로그인 화면에선 아직 지원하지 않는 방식입니다."
+            r = g.respond(password)
+            answered = True
+        else:                                   # info / error — 기록해 두고 넘긴다
+            said.append(text)
+            r = g.respond(None)
+    if r.get("type") == "error":
+        g.cancel()
+        desc = r.get("description") or ""
+        default = "비밀번호가 올바르지 않습니다." if r.get("error_type") == "auth_error" else \
+            (desc or "로그인하지 못했습니다.")
+        return explain(" ".join(said + [desc]), default)
+    r = g.start_session(cmd, env)
+    if r.get("type") != "success":
+        g.cancel()
+        return explain(r.get("description"), r.get("description") or "세션을 시작하지 못했습니다.")
+    return None
+
+
 def last_user():
     try:
         with open(os.path.join(STATE, "last-user")) as f:
@@ -331,11 +391,12 @@ class Greeter(Gtk.Window):
         ov.add_overlay(corner)
 
         self.connect("key-press-event", self._key)
+        self.sessions = signed_in()             # 처음 한 번은 바로 (첫 화면이 맞게)
+        self._refreshing = False
         self.pick(self.user)
+        self._apply_sessions(self.sessions)
         self._tick()
         GLib.timeout_add_seconds(1, self._tick)
-        self.sessions = {}
-        self._refresh_sessions()
         GLib.timeout_add_seconds(2, self._refresh_sessions)
 
     # ── 그리기 ──
@@ -365,14 +426,27 @@ class Greeter(Gtk.Window):
         return False
 
     def _refresh_sessions(self):
-        self.sessions = signed_in()
-        for u, lb in getattr(self, "state_labels", {}).items():
-            lb.set_visible(u in self.sessions)
-        # 고른 사람의 상태가 바뀌었으면 (그 사이 로그아웃 등) 화면을 맞춘다
-        mode = self.user in self.sessions
-        if mode != getattr(self, "_switch_mode", None) and not self.busy:
-            self.pick(self.user)
+        """2초마다 — loginctl 은 따로 도는 스레드에서 부른다 (화면이 멈추지 않게)"""
+        if not self._refreshing:
+            self._refreshing = True
+            threading.Thread(target=lambda: GLib.idle_add(self._sessions_done, signed_in()),
+                             daemon=True).start()
         return True
+
+    def _sessions_done(self, res):
+        self._refreshing = False
+        if res != self.sessions:                # 바뀌었을 때만 화면을 만진다
+            self.sessions = res
+            self._apply_sessions(res)
+        return False
+
+    def _apply_sessions(self, res):
+        for u, lb in getattr(self, "state_labels", {}).items():
+            lb.set_visible(u in res)
+        # 고른 사람의 상태가 바뀌었으면 (그 사이 로그아웃 등) 화면을 맞춘다 — 입력 중인 비밀번호는 그대로
+        mode = self.user in res
+        if mode != getattr(self, "_switch_mode", None) and not self.busy:
+            self.pick(self.user, keep=True)
 
     def _tick(self):
         t = time.localtime()
@@ -381,7 +455,8 @@ class Greeter(Gtk.Window):
         return True
 
     # ── 동작 ──
-    def pick(self, uname):
+    def pick(self, uname, keep=False):
+        """keep: 세션 상태가 바뀌어 다시 맞출 때 — 입력 중인 비밀번호·안내를 지우지 않는다"""
         self.user = uname
         real = dict(self.users).get(uname) or uname
         self.name.set_text(real)
@@ -389,8 +464,9 @@ class Greeter(Gtk.Window):
         for u, b in getattr(self, "user_buttons", {}).items():
             ctx = b.get_style_context()
             (ctx.add_class if u == uname else ctx.remove_class)("current")
-        self.pw.set_text("")
-        self._set_msg("")
+        if not keep:
+            self.pw.set_text("")
+            self._set_msg("")
         # 이미 로그인해 있는 사람(사용자 전환으로 잠시 떠난 사람) → 새로 로그인하지 않고 그 화면으로
         self._switch_mode = uname in getattr(self, "sessions", {})
         self.pw.set_visible(not self._switch_mode)
@@ -399,7 +475,10 @@ class Greeter(Gtk.Window):
             self._set_msg("로그인되어 있습니다 — 전환하면 이 사람의 잠금 화면이 나옵니다", info=True)
             self.go.grab_focus()
         else:
-            self.pw.grab_focus()
+            if keep and self.msg.get_text().startswith("로그인되어 있습니다"):
+                self._set_msg("")
+            if not self.pw.has_focus():
+                self.pw.grab_focus()
 
     def _key(self, _w, ev):
         if ev.keyval == Gdk.KEY_Escape:
@@ -446,7 +525,7 @@ class Greeter(Gtk.Window):
             err = None if password == "demo" else "비밀번호가 올바르지 않습니다."
         else:
             try:
-                err = Greetd().login(user, password, SESSION_CMD, SESSION_ENV)
+                err = greetd_login(Greetd(), user, password, SESSION_CMD, SESSION_ENV)
             except (GreetdError, OSError) as e:
                 err = f"로그인 관리자와 통신하지 못했습니다 ({e})"
         GLib.idle_add(self._done, user, err)

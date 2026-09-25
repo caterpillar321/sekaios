@@ -12,16 +12,20 @@
 #
 #  sekai-lock         잠그고, 잠금이 걸리면 곧바로 돌아온다 (백그라운드로 남음)
 #                     → swayidle 의 before-sleep 에 쓰기 좋다: 잠긴 뒤에 절전에 들어간다
-#                     잠그지 못하면 1 — 부르는 쪽이 swaylock -f 로 넘어간다 (sekai-idle)
+#                     잠그지 못하면(READY_TIMEOUT 안에 못 잠가도) 1 — 부르는 쪽이 swaylock -f 로 넘어간다.
+#                     보통은 /usr/libexec/sekai/lock-now 를 거쳐 부른다 (대체 경로·감시자가 거기 있다)
+#  잠김 표시(LOCKED_MARK): 잠긴 순간 쓰고, 사용자가 풀었을 때(또는 컴포지터가 잠금을 끝냈을 때)만 지운다.
+#                     풀리지 않은 채 죽으면 남는다 → lock-now 의 감시자가 보고 다시 띄운다
 #  sekai-lock --fg    앞에서 실행 (디버그)
 #  sekai-lock --demo  잠그지 않는 보통 창으로 모양만 본다 (비밀번호 demo, "데모" 표시).
 #                     환경 변수로는 켤 수 없다 — 물려받은 환경 하나로 가짜 잠금 화면이 되면 안 된다
 # ═══════════════════════════════════════════════════════════════
-import atexit
 import fcntl
 import json
 import os
 import pwd
+import select
+import signal
 import subprocess
 import sys
 import threading
@@ -82,6 +86,9 @@ FALLBACK_WALL = "/usr/share/backgrounds/sekai/hatsune.jpg"
 PAM_SERVICE = "sekai-lock"
 WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"]
 IDLE_BACK = 30          # 로그인 단계에서 이만큼(초) 가만히 있으면 커튼으로
+# 이 안에 잠그지 못하면 포기하고 1 — 절전 직전 잠금(before-sleep)은 logind 가 기다려 주는 시간
+#   (InhibitDelayMaxSec, 기본 5초) 안에 대체 잠금(swaylock)까지 끝나야 한다
+READY_TIMEOUT = 3.0
 
 
 def single_instance():
@@ -122,13 +129,27 @@ def wait_other_locked(timeout=10.0):
 
 def daemonize():
     """자식이 화면을 잠그면 부모가 0 으로 끝난다 (swaylock -f 와 같은 약속).
-    잠금에 실패하면 1."""
+    잠금에 실패하면 1. 자식이 READY_TIMEOUT 안에 답하지 않으면(잠그기 전에 멈췄다) 자식을 치우고 1 —
+    그냥 기다리면 부르는 쪽의 대체 잠금(|| swaylock)이 돌지 않고, 절전 직전이면 logind 가 기다리다 말고
+    잠기지 않은 채 절전에 들어간다."""
     r, w = os.pipe()
     pid = os.fork()
     if pid > 0:
         os.close(w)
-        with os.fdopen(r, "rb") as f:
-            got = f.read(1)
+        got = b""
+        try:
+            ready, _, _ = select.select([r], [], [], READY_TIMEOUT)
+            if ready:
+                got = os.read(r, 1)
+        except OSError:
+            pass
+        if got != b"1":
+            # 멈춘 자식을 치운다. 이미 잠갔다가 죽은 것이라면 컴포지터는 잠긴 채로 두고,
+            #   대체 잠금(swaylock)이 이어받는다 (hyprland.conf: misc:allow_session_lock_restore)
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
         sys.exit(0 if got == b"1" else 1)
     os.close(r)
     os.setsid()
@@ -200,10 +221,11 @@ def accent_color():
 def signal_ready(ok):
     global READY_FD
     if ok:
+        # 잠김 표시 — 풀었을 때만 지운다(clear_mark). 풀리지 않은 채 죽으면 남아서
+        #   lock-now 의 감시자가 "죽었다"를 알아본다 (그래서 atexit 로 지우지 않는다)
         try:
             with open(LOCKED_MARK, "w") as f:
                 f.write(str(os.getpid()))
-            atexit.register(lambda: os.path.exists(LOCKED_MARK) and os.remove(LOCKED_MARK))
         except OSError:
             pass
     if READY_FD is not None:
@@ -213,6 +235,13 @@ def signal_ready(ok):
         except OSError:
             pass
         READY_FD = None
+
+
+def clear_mark():
+    try:
+        os.remove(LOCKED_MARK)
+    except OSError:
+        pass
 
 
 CSS = """
@@ -492,17 +521,9 @@ class Locker:
         self.views = []
         self.windows = []
         self.anim = None
-
-        try:                                     # 설정 파일이 이상해도 잠금은 걸려야 한다
-            path = (settings().get("wallpaper") or {}).get("path") or FALLBACK_WALL
-        except Exception:
-            path = FALLBACK_WALL
-        if not os.path.exists(path):
-            path = FALLBACK_WALL
-        try:
-            self.wall = GdkPixbuf.Pixbuf.new_from_file(path)
-        except Exception:
-            self.wall = None
+        # 배경은 잠금을 건 뒤에 따로 읽는다 (_load_wall) — 큰 그림을 푸는 동안 잠금이 늦어지지 않게.
+        #   그 사이에는 어두운 바탕으로 그린다
+        self.wall = None
 
         display = Gdk.Display.get_default()
         if DEMO:
@@ -531,6 +552,31 @@ class Locker:
             display.connect("monitor-added", lambda _d, m: self._monitor_added(m))
             display.connect("monitor-removed", lambda _d, m: self._monitor_removed(m))
         GLib.timeout_add_seconds(1, self._tick)
+        threading.Thread(target=self._load_wall, daemon=True).start()
+
+    def _load_wall(self):
+        """배경화면 — 따로 푼 뒤 메인 스레드에서 붙인다. 설정이 이상해도 기본 그림으로."""
+        try:
+            path = (settings().get("wallpaper") or {}).get("path") or FALLBACK_WALL
+            if not isinstance(path, str) or not os.path.exists(path):
+                path = FALLBACK_WALL
+        except Exception:
+            path = FALLBACK_WALL
+        try:
+            pb = GdkPixbuf.Pixbuf.new_from_file(path)
+        except Exception:
+            try:
+                pb = GdkPixbuf.Pixbuf.new_from_file(FALLBACK_WALL)
+            except Exception:
+                return
+        GLib.idle_add(self._set_wall, pb)
+
+    def _set_wall(self, pb):
+        self.wall = pb
+        for v in self.views:
+            v.imgs = None                       # 흐린 그림을 새로 만들게
+            v.back.queue_draw()
+        return False
 
     def _add_view(self, m, primary):
         win = Gtk.Window()
@@ -580,9 +626,12 @@ class Locker:
                 self._make_primary(0)
 
     def _finished(self, *_):
-        # 다른 잠금 프로그램이 이미 잠갔거나, 컴포지터가 거부했다
-        print("잠금이 거부되었습니다.", file=sys.stderr)
+        # 다른 잠금 프로그램이 이미 잠갔거나 컴포지터가 거부했다 — 또는 컴포지터가 잠금을 끝냈다
+        #   (어느 쪽이든 이 프로그램이 잡은 잠금은 없다 → 표시를 지운다. 감시자가 다시 띄우지 않게)
+        print("잠금이 거부되었거나 끝났습니다.", file=sys.stderr)
         signal_ready(False)
+        clear_mark()
+        self.exit_code = 2
         Gtk.main_quit()
 
     def _tick(self):
@@ -697,27 +746,53 @@ class Locker:
         # PAM 은 틀리면 몇 초 기다리게 한다 → 화면이 멈추지 않게 따로 돈다
         if DEMO:
             time.sleep(0.6)
-            ok = password == "demo"
+            code = 0 if password == "demo" else 7
         else:
             try:
                 import pam
                 svc = PAM_SERVICE if os.path.exists(f"/etc/pam.d/{PAM_SERVICE}") else "login"
-                ok = pam.pam().authenticate(self.user, password, service=svc)
+                p = pam.pam()
+                code = 0 if p.authenticate(self.user, password, service=svc) else int(p.code or 7)
+                if code:
+                    print("PAM:", code, p.reason, file=sys.stderr)
             except Exception as e:
                 print("PAM 오류:", e, file=sys.stderr)
-                ok = False
-        GLib.idle_add(self._done, ok)
+                code = -1
+        GLib.idle_add(self._done, code)
 
-    def _done(self, ok):
+    # PAM 이 돌려준 까닭 → 보여 줄 말. python-pam 의 authenticate 는 비밀번호 확인(pam_authenticate) 뒤
+    #   계정 확인(pam_acct_mgmt)까지 해서, 만료·잠김도 "틀림"과 똑같이 False 였다
+    PAM_NEW_AUTHTOK_REQD, PAM_ACCT_EXPIRED, PAM_AUTHTOK_EXPIRED = 12, 13, 27
+    PAM_MESSAGES = {
+        13: "계정이 만료됐습니다 — 관리자에게 문의하세요.",
+        6: "이 계정은 지금 잠금을 풀 수 없습니다 (권한 거부).",
+        11: "시도 횟수를 넘었습니다 — 잠시 뒤 다시 해 보세요.",
+        9: "인증 정보를 확인할 수 없습니다 — 잠시 뒤 다시 해 보세요.",
+        -1: "인증 모듈 오류 — 잠금을 풀 수 없습니다.",
+    }
+
+    def _done(self, code):
         self.busy = False
-        if ok:
+        if code == 0:
+            self.unlock()
+            return False
+        if code in (self.PAM_NEW_AUTHTOK_REQD, self.PAM_AUTHTOK_EXPIRED):
+            # 비밀번호는 맞았다(pam_acct_mgmt 는 인증에 성공한 뒤에만 불린다) — 이미 로그인한 사람이니
+            #   잠금은 풀고 바꾸라고 알린다. 잠금 화면에서 바꾸게 하면 영영 못 들어갈 수 있다
+            try:
+                subprocess.Popen(["notify-send", "-a", "보안", "-u", "critical", "-i", "dialog-password",
+                                  "비밀번호가 만료됐습니다",
+                                  "새 비밀번호로 바꿔 주세요 — 설정 → 계정, 또는 터미널에서 passwd"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except OSError:
+                pass
             self.unlock()
             return False
         self.fails += 1
         self.main.pw.set_sensitive(True)
         self.main.go.set_sensitive(True)
         self.main.pw.set_text("")
-        self.main.set_msg("비밀번호가 올바르지 않습니다." +
+        self.main.set_msg(self.PAM_MESSAGES.get(code, "비밀번호가 올바르지 않습니다.") +
                           (f" ({self.fails}번째)" if self.fails > 1 else ""))
         self.main.pw.grab_focus()
         self.poke()
@@ -736,6 +811,8 @@ class Locker:
         if self.lock is not None:
             self.lock.unlock_and_destroy()
             Gdk.Display.get_default().sync()
+        clear_mark()                            # 사용자가 풀었다 — 감시자가 다시 띄우지 않는다
+        self.exit_code = 0
         Gtk.main_quit()
 
 
@@ -766,9 +843,11 @@ def main():
     # 세션 잠금을 먼저 건다 — 설정 파일이 깨져 있어도 잠그기 전에 죽지 않게
     #   (예전엔 스타일을 먼저 만들다 "appearance": null·잘못된 강조색에서 예외로 끝나,
     #    절전 직전 잠금이 실패한 채 절전에 들어갔다)
-    Locker()
+    #   종료 코드 (--fg 로 앞에서 돌릴 때 의미가 있다): 0 풀림 · 1 잠그지 못함 · 2 컴포지터가 잠금을 끝냄
+    locker = Locker()
     apply_style()
     Gtk.main()
+    sys.exit(getattr(locker, "exit_code", 1))
 
 
 if __name__ == "__main__":

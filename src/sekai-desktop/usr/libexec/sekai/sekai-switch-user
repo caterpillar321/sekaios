@@ -50,7 +50,8 @@ def caller_locked(uid, timeout=5.0):
             if os.stat(f"/proc/{pid}").st_uid == uid:
                 with open(f"/proc/{pid}/cmdline", "rb") as f:
                     cmd = f.read()
-                if b"sekai-lock" in cmd or b"xsecurelock" in cmd:
+                # swaylock — lock-now 가 sekai-lock 대신 쓴 대체 잠금 (그때도 표시를 남긴다)
+                if b"sekai-lock" in cmd or b"xsecurelock" in cmd or b"swaylock" in cmd:
                     return True
         except (OSError, ValueError):
             pass

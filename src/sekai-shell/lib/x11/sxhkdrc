@@ -19,7 +19,7 @@ super + {n,a}
 super + v
 	sekai-ctl clipboard
 super + l
-	sekai-lock
+	/usr/libexec/sekai/lock-now
 
 # Alt+Tab 창 전환기 — Alt 를 떼면 전환기가 직접 받아 고른 창으로 간다
 alt + Tab

@@ -21,10 +21,11 @@ import time
 
 CFG = os.path.expanduser("~/.config/sekai/settings.json")
 DEFAULTS = {"screen_off": 600, "lock": 900, "suspend": 0}
-# 잠금이 실패하면(설정 파일이 깨졌다거나) 검증된 swaylock 으로 넘어간다 — swayidle 은 명령의
-#   종료 코드를 보지 않아, before-sleep 에서 잠금이 실패해도 그대로 절전에 들어가 잠기지 않은 채 깨어났다.
-#   (sekai-lock 은 잠금이 실제로 걸리면 0, 못 걸면 1 로 끝난다. swaylock -f 도 잠긴 뒤 돌아온다)
-LOCK = "sekai-lock || swaylock -f -c 151517"
+# 잠금은 lock-now 로 — 잠금이 실패하면(설정 파일이 깨졌다거나) 검증된 swaylock 으로 넘어가고,
+#   잠금 화면이 풀리지 않은 채 죽으면 다시 띄운다. swayidle 은 명령의 종료 코드를 보지 않아,
+#   before-sleep 에서 잠금이 실패해도 그대로 절전에 들어가 잠기지 않은 채 깨어났다.
+#   (lock-now 는 잠금이 실제로 걸린 뒤 돌아온다)
+LOCK = "/usr/libexec/sekai/lock-now"
 DPMS_OFF = "hyprctl dispatch dpms off"
 DPMS_ON = "hyprctl dispatch dpms on"
 
@@ -155,7 +156,7 @@ def main_x11():
     subprocess.run(["xset", "s", str(lock), str(lock)] if lock else ["xset", "s", "off"])
     off = p["screen_off"]
     subprocess.run(["xset", "dpms", str(off), str(off), str(off)] if off else ["xset", "-dpms"])
-    os.execvp("xss-lock", ["xss-lock", "--transfer-sleep-lock", "--", "sekai-lock"])
+    os.execvp("xss-lock", ["xss-lock", "--transfer-sleep-lock", "--", "/usr/libexec/sekai/lock-now"])
 
 
 def main():

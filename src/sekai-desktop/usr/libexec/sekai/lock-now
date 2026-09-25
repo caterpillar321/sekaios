@@ -1,0 +1,61 @@
+#!/bin/sh
+# SekaiOS — 지금 잠그기. Super+L, 패널 "잠금", 자리 비움·절전 직전(sekai-idle)이 모두 이것을 부른다.
+#   잠기면 곧바로 0 으로 돌아온다 (swaylock -f 와 같은 약속 — 절전 직전 잠금에 쓸 수 있게).
+#
+#   · sekai-lock 이 잠그지 못하면(설정이 깨졌거나, 3초 안에 못 잠갔거나) 검증된 swaylock 으로.
+#   · 감시자: 잠금 프로그램이 풀리지 않은 채 죽으면 다시 띄운다. Hyprland 는 잠금 프로그램이 죽어도
+#     화면을 잠긴 채로 두고("lockscreen died"), hyprland.conf 의 misc:allow_session_lock_restore = true
+#     덕분에 새 잠금 프로그램이 그 잠금을 이어받을 수 있다. 풀었는지 죽었는지는 sekai-lock 의
+#     잠김 표시로 안다 — 사용자가 풀었을 때만 지워진다. 1분에 세 번 넘게 죽으면 swaylock 으로.
+#   · 기본 화면 모드(X11)에선 sekai-lock 이 xsecurelock 으로 잠그고 풀릴 때까지 돈다
+#     (xss-lock 이 넘긴 절전 지연 fd 도 그대로 물려준다).
+RUN="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+PIDF="$RUN/sekai-lock.pid"
+MARK="$PIDF.locked"
+
+if [ -z "${WAYLAND_DISPLAY:-}" ] || [ "${XDG_SESSION_TYPE:-}" = x11 ]; then
+    exec sekai-lock
+fi
+
+# 대체 잠금 — swaylock -f 도 잠긴 뒤 돌아온다. 사용자 전환(sekai-switch-user)이 잠긴 것을
+#   알아보게 표시를 남긴다 (swaylock 은 그 표시를 모른다)
+fallback() {
+    swaylock -f -c 151517 || return 1
+    p=$(pgrep -n -u "$(id -u)" -x swaylock) && echo "$p" > "$MARK"
+    return 0
+}
+
+# 이미 swaylock 으로 잠겨 있으면 그대로 (sekai-lock 은 컴포지터가 거부해 실패로 끝나고 표시만 지운다)
+pgrep -u "$(id -u)" -x swaylock >/dev/null 2>&1 && exit 0
+
+# 9번 fd(감시자 잠금)가 sekai-lock 에 물려가지 않게 닫고 부른다
+sekai-lock 9>&- || { fallback; exit $?; }
+
+# ── 감시자 (한 번에 하나 — flock) ──
+(
+    exec 9>"$RUN/sekai-lock.watch"
+    flock -n 9 || exit 0
+    n=0
+    first=$(date +%s)
+    while :; do
+        pid=$(cat "$PIDF" 2>/dev/null)
+        case "$pid" in ''|*[!0-9]*) exit 0 ;; esac
+        while kill -0 "$pid" 2>/dev/null; do
+            sleep 1
+        done
+        # 표시가 없으면 사용자가 풀었다(또는 컴포지터가 잠금을 끝냈다) — 할 일 끝
+        [ "$(cat "$MARK" 2>/dev/null)" = "$pid" ] || exit 0
+        now=$(date +%s)
+        if [ $((now - first)) -gt 60 ]; then
+            n=0
+            first=$now
+        fi
+        n=$((n + 1))
+        # 풀리지 않은 채 죽었다 — 다시 잠금 화면을. 자꾸 죽으면 swaylock 으로
+        if [ $n -gt 3 ] || ! sekai-lock 9>&-; then
+            fallback
+            exit 0
+        fi
+    done
+) </dev/null >/dev/null 2>&1 &
+exit 0
