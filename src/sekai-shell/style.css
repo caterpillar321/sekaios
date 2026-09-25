@@ -533,7 +533,8 @@ button.snap-card:hover { background: @hover; border-color: @accent; }
 
 /* 작업 표시줄에 고정한 앱 (실행 중이 아닐 때) — 아이콘만 */
 /* 윈도우 7 이후 식 — 앱마다 아이콘 하나, 아래 막대로 상태 (실행 중 = 짧게, 초점 = 길게 강조색) */
-.task-btn.app-btn { min-width: 44px; min-height: 40px; padding: 0 10px; margin: 0 1px; }
+/* 윈도우 11 과 같은 촘촘함: 40px 칸, 칸 사이 4px */
+.task-btn.app-btn { min-width: 24px; min-height: 40px; padding: 0 8px; margin: 0 2px; }
 .task-btn.app-btn.running {
     background-image: linear-gradient(@text3, @text3);
     background-size: 6px 3px;
@@ -546,6 +547,27 @@ button.snap-card:hover { background: @hover; border-color: @accent; }
     background-size: 16px 3px;
 }
 .task-btn.app-btn.minimized { background-color: transparent; }
-.task-list-active { font-weight: 600; }
-.task-list-min { color: @text3; }
+
+/* 창 미리보기 (앱 버튼에 마우스를 올리면) */
+.task-preview-root { padding: 8px; border-radius: 10px; }
+.preview-close {
+    background: transparent;
+    background-image: none;
+    box-shadow: none;
+    text-shadow: none;
+    color: @fg;
+}
+.preview-card {
+    background-color: alpha(@fg, 0.04);
+    border-radius: 8px;
+    padding: 6px 8px 8px 8px;
+    border: 1px solid transparent;
+}
+.preview-card.hover { background-color: @hover; }
+.preview-card.active { border-color: alpha(@accent, 0.6); }
+.preview-title { font-size: 12px; color: @fg; }
+.preview-close { min-width: 22px; min-height: 22px; padding: 0; border: none; border-radius: 6px; opacity: 0.7; }
+.preview-close:hover { background-color: @danger; opacity: 1; }
+.preview-close:hover image { color: #ffffff; }
+.preview-thumb { border-radius: 4px; }
 menu.task-menu, .task-menu menuitem { font-size: 13px; }

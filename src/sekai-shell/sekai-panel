@@ -29,6 +29,7 @@ from sekaishell.shell import ShellService                # noqa: E402
 from sekaishell.updates import UpdateNotifier            # noqa: E402
 from sekaishell.gpuhint import GpuHint                   # noqa: E402
 from sekaishell import pins                               # noqa: E402
+from sekaishell.taskpreview import TaskPreview           # noqa: E402
 
 # 시작 버튼 로고: layers / world / diamond / blockS / nested / slashes
 DEBUG = os.environ.get("SEKAI_DEBUG") == "1"
@@ -732,6 +733,23 @@ class TaskbarMixin:
     모니터가 여럿이면 각 작업 표시줄에는 그 모니터에 있는 창만. 고정한 앱은 모든 작업 표시줄에.
     """
 
+    _preview = None
+
+    @property
+    def preview(self):
+        """창 미리보기 — 모든 작업 표시줄이 하나를 같이 쓴다"""
+        if TaskbarMixin._preview is None:
+            TaskbarMixin._preview = TaskPreview(self.hypr)
+        return TaskbarMixin._preview
+
+    def _hook_preview(self):
+        if getattr(self, "_pv_hooked", False):
+            return
+        self._pv_hooked = True
+        self.add_events(Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        self.connect("leave-notify-event",
+                     lambda _w, ev: ev.detail != Gdk.NotifyType.INFERIOR and self.preview.schedule_hide() and False)
+
     def _my_clients(self, clients):
         disp = Gdk.Display.get_default()
         if disp.get_n_monitors() < 2 or self.gdk_monitor is None:
@@ -741,6 +759,7 @@ class TaskbarMixin:
         return [c for c in clients if origins.get(c.get("monitor")) == (g.x, g.y)]
 
     def rebuild_tasks(self):
+        self._hook_preview()
         for c in self.tasks.get_children():
             self.tasks.remove(c)
         clients = self._my_clients(self.hypr.query("clients") or [])
@@ -781,13 +800,8 @@ class TaskbarMixin:
                 ctx.add_class("active")
             elif all(self._minimized(c) for c in wins):
                 ctx.add_class("minimized")
-        if len(wins) == 1:
-            title = (wins[0].get("title") or "").strip()
-            btn.set_tooltip_text(title if title and title.lower() != name.lower() else name)
-        elif wins:
-            btn.set_tooltip_text(f"{name} — 창 {len(wins)}개")
-        else:
-            btn.set_tooltip_text(name)
+        if not wins:
+            btn.set_tooltip_text(name)             # 창이 있으면 미리보기가 대신한다
 
         if info is not None and info.get_icon() is not None:
             img = Gtk.Image.new_from_gicon(info.get_icon(), Gtk.IconSize.DIALOG)
@@ -796,8 +810,15 @@ class TaskbarMixin:
             img = app_icon((wins[0].get("class") if wins else None) or app_id or "", 24)
         btn.add(img)
 
-        btn.connect("clicked", self.on_app_click, app_id, wins, active_addr)
-        btn.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        btn.connect("clicked", self.on_app_click, key, app_id, wins, active_addr)
+        btn.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.ENTER_NOTIFY_MASK
+                       | Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        if wins:
+            btn.connect("enter-notify-event", lambda b, _e: self.preview.show_later(
+                key, b, wins, active_addr, self._preview_pick, self._preview_close) and False)
+        else:
+            btn.connect("enter-notify-event", lambda *_: self.preview.schedule_hide() and False)
+        btn.connect("leave-notify-event", lambda *_: self.preview.schedule_hide() and False)
         btn.connect("button-press-event", self.on_app_press, app_id, wins, name)
         self.tasks.pack_start(btn, False, False, 0)
 
@@ -806,19 +827,32 @@ class TaskbarMixin:
         # 워크스페이스 id 가 음수 = 특수 워크스페이스 = 우리 기준 "최소화"
         return (c.get("workspace", {}) or {}).get("id", 0) < 0
 
-    def on_app_click(self, btn, app_id, wins, active_addr):
+    def on_app_click(self, btn, key, app_id, wins, active_addr):
         """윈도우 작업 표시줄과 같은 동작:
              창 없음     → 앱 실행
              창 하나     → 최소화됨: 복원 / 초점 있음: 최소화 / 그 외: 초점
-             창 여럿     → 창 목록"""
+             창 여럿     → 창 미리보기 (골라서 전환)"""
         if not wins:
+            self.preview.hide_now()
             if app_id:
                 launch_app_id(app_id)
             return
         if len(wins) > 1:
-            self._window_list(btn, wins, active_addr)
+            self.preview.show_for(key, btn, wins, active_addr, self._preview_pick, self._preview_close)
             return
+        self.preview.hide_now()
         self.activate_window(wins[0], active_addr)
+
+    def _preview_pick(self, c):
+        """미리보기에서 고름 — 최소화돼 있으면 복원, 아니면 초점 (초점이 있어도 최소화하지 않는다)"""
+        if self._minimized(c):
+            self.restore_window(c.get("address"))
+        else:
+            self.hypr.dispatch(f"focuswindow address:{c.get('address')}")
+            GLib.timeout_add(120, self.rebuild_tasks)
+
+    def _preview_close(self, c):
+        self.hypr.dispatch(f"closewindow address:{c.get('address')}")
 
     def activate_window(self, c, active_addr):
         addr = c.get("address")
@@ -838,32 +872,10 @@ class TaskbarMixin:
         self.hypr.dispatch(f"focuswindow address:{addr}")
         GLib.timeout_add(120, self.rebuild_tasks)
 
-    def _window_list(self, btn, wins, active_addr):
-        """같은 앱의 창이 여럿 — 버튼 위에 창 목록"""
-        m = Gtk.Menu()
-        for c in wins:
-            title = (c.get("title") or "").strip() or (c.get("class") or "?")
-            if len(title) > 48:
-                title = title[:47] + "…"
-            it = Gtk.MenuItem()
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-            row.pack_start(app_icon(c.get("class") or "", 16), False, False, 0)
-            lbl = Gtk.Label(label=title, xalign=0)
-            if c.get("address") == active_addr:
-                lbl.get_style_context().add_class("task-list-active")
-            elif self._minimized(c):
-                lbl.get_style_context().add_class("task-list-min")
-            row.pack_start(lbl, True, True, 0)
-            it.add(row)
-            it.connect("activate", lambda _i, c=c: self.activate_window(c, active_addr))
-            m.append(it)
-        m.get_style_context().add_class("task-menu")
-        m.attach_to_widget(self, None)
-        m.show_all()
-        m.popup_at_widget(btn, Gdk.Gravity.NORTH, Gdk.Gravity.SOUTH, None)
-
     # ── 우클릭 메뉴 (윈도우의 점프 목록처럼) · 가운데 클릭 = 새 창 ──
     def on_app_press(self, _w, ev, app_id, wins, name):
+        if ev.button in (2, 3):
+            self.preview.hide_now()
         if ev.button == 2:
             if app_id:
                 launch_app_id(app_id)
@@ -936,7 +948,7 @@ class SecondaryPanel(Gtk.Window, TaskbarMixin):
         start.connect("clicked", lambda *_: main_panel.toggle_menu(monitor=gdk_monitor))
         bar.pack_start(start, False, False, 0)
 
-        self.tasks = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self.tasks = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self.tasks.get_style_context().add_class("tasks")
         bar.pack_start(self.tasks, True, True, 0)
 
@@ -1005,7 +1017,7 @@ class Panel(Gtk.Window, TaskbarMixin):
         bar.pack_start(self.start_btn, False, False, 0)
 
         # ── 작업 표시줄 ──
-        self.tasks = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self.tasks = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self.tasks.get_style_context().add_class("tasks")
         bar.pack_start(self.tasks, True, True, 0)
 
