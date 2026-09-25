@@ -145,6 +145,9 @@ if [ "$1" = "configure" ]; then
     # 그래픽 로그인 화면으로 부팅한다 (greetd = display-manager)
     [ -d /run/systemd/system ] && systemctl daemon-reload >/dev/null 2>&1 || true
     systemctl enable greetd.service >/dev/null 2>&1 || true
+    # 부팅 화면·콘솔을 바탕화면과 같은 모니터 모드로 (sekai-bootmode — 모드가 바뀔 때마다 신호가 끊긴다)
+    systemctl enable sekai-bootmode.path >/dev/null 2>&1 || true
+    [ -d /run/systemd/system ] && systemctl start sekai-bootmode.path >/dev/null 2>&1 || true
     systemctl set-default graphical.target >/dev/null 2>&1 || true
     # 로그인 화면 해상도 공유 폴더 (usr/lib/tmpfiles.d/sekai.conf)
     systemd-tmpfiles --create /usr/lib/tmpfiles.d/sekai.conf >/dev/null 2>&1 \

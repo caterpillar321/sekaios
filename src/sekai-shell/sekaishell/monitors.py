@@ -70,3 +70,44 @@ def primary_hypr_name(hmons=None):
     if name and any(m.get("name") == name for m in hmons):
         return name
     return hmons[0].get("name") if hmons else ""
+
+
+def publish_modes(hmons=None):
+    """지금 쓰는 모니터 모드를 공용 폴더에 적는다 — sekai-bootmode(root)가 읽어 부팅 옵션(video=)으로.
+    부팅 화면·콘솔·로그인 화면·바탕화면이 모두 같은 모드면 모니터 신호가 끊기지 않는다
+    (모드가 바뀔 때마다 연결을 다시 맺느라 화면이 꺼졌다 켜진다).
+    형식: "DP-1 2560x1440@164.96" 한 줄에 하나. 바뀌었을 때만 쓴다 (그래야 path 유닛이 헛돌지 않는다)."""
+    d = "/var/lib/sekai/displays"
+    if not os.path.isdir(d) or not os.access(d, os.W_OK):
+        return
+    hmons = hmons if hmons is not None else hypr_monitors()
+    lines = []
+    for m in hmons:
+        if m.get("disabled"):
+            continue
+        try:
+            lines.append(f"{m['name']} {int(m['width'])}x{int(m['height'])}@{float(m['refreshRate']):.2f}\n")
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not lines:
+        return
+    import pwd
+    path = os.path.join(d, pwd.getpwuid(os.getuid()).pw_name + ".modes")
+    text = "".join(lines)
+    try:
+        with open(path, encoding="utf-8") as f:
+            if f.read() == text:
+                return
+    except OSError:
+        pass
+    try:
+        old = os.umask(0o022)
+        try:
+            tmp = f"{path}.{os.getpid()}.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(text)
+            os.replace(tmp, path)
+        finally:
+            os.umask(old)
+    except OSError:
+        pass

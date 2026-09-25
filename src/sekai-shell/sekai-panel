@@ -1310,6 +1310,9 @@ class Panel(Gtk.Window, TaskbarMixin):
                 p.show_all()
                 self.others.append(p)
         self.rebuild_all_tasks()
+        # 지금 모니터 모드를 부팅 옵션용으로 알린다 (monitors.publish_modes) — 모드가 자리 잡은 뒤에
+        if _layer.WAYLAND:
+            GLib.timeout_add(2500, lambda: monitors.publish_modes() and False)
         return False
 
     # ── 시스템 정보 ──
@@ -1491,6 +1494,9 @@ def main():
             apply_mode()                    # 다크/라이트가 바뀌었을 수 있다 (아이콘 테마)
             if primary_monitor() != panel.gdk_monitor:
                 panel.sync_monitors()       # 주 디스플레이가 바뀌었다 — 작업 표시줄을 옮긴다
+            elif _layer.WAYLAND:
+                # 해상도·주사율을 바꿨을 수 있다 — 부팅 옵션용으로 다시 알린다
+                GLib.timeout_add(2500, lambda: monitors.publish_modes() and False)
             panel.tray.refresh_icons()
             # 방해 금지는 설정 앱에서도 바꿀 수 있다 — 상태를 다시 읽는다
             try:

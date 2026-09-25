@@ -1,0 +1,10 @@
+[Unit]
+Description=SekaiOS: watch the desktop's monitor modes (boot screen uses the same mode)
+
+[Path]
+# 사용자 세션이 /var/lib/sekai/displays/<사용자>.modes 를 쓰면 (sekaishell/monitors.py)
+PathChanged=/var/lib/sekai/displays
+Unit=sekai-bootmode.service
+
+[Install]
+WantedBy=multi-user.target

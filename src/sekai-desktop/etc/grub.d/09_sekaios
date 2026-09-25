@@ -35,7 +35,11 @@ entry() {  # 제목 클래스 id 커널 옵션
 #   GRUB_CMDLINE_LINUX         모든 항목 (복구 모드 포함)
 #   GRUB_CMDLINE_LINUX_DEFAULT 보통 항목만 (데비안 기본값 "quiet" 는 겹쳐도 무해)
 ALWAYS="${GRUB_CMDLINE_LINUX:-}"
-NORMAL="$SEKAI_KERNEL_OPTS ${GRUB_CMDLINE_LINUX_DEFAULT:-} $ALWAYS"
+# 부팅 화면·콘솔을 바탕화면과 같은 모니터 모드로 — sekai-bootmode 가 적는다 (video=이름:가로x세로@주사율).
+#   source 하지 않고 형식을 확인한 값만 쓴다
+VIDEO=$(sed -n 's/^SEKAI_VIDEO_OPTS="\(.*\)"$/\1/p' /var/lib/sekai/boot-video 2>/dev/null | head -1)
+case "$VIDEO" in *[!A-Za-z0-9=:@x\ -]*) VIDEO= ;; esac
+NORMAL="$SEKAI_KERNEL_OPTS ${GRUB_CMDLINE_LINUX_DEFAULT:-} $ALWAYS $VIDEO"
 
 latest=$(echo "$KERNELS" | head -1)
 entry "SekaiOS" sekaios default "$latest" "$NORMAL"

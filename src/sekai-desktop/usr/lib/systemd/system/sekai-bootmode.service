@@ -1,0 +1,8 @@
+[Unit]
+Description=SekaiOS: boot screen and console in the same monitor mode as the desktop (video=)
+# 모드가 바뀔 때마다 모니터 신호가 끊겨 화면이 꺼졌다 켜진다 — 부팅부터 같은 모드로 (sekai-bootmode)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/sekai/sekai-bootmode
+Nice=10
