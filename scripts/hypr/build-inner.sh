@@ -18,7 +18,8 @@ REV="sekai2"
 #   hyprland sekai4: 끝날 때 모니터 출력을 끄지 않는다 — 로그인 때 화면이 꺼지지 않게 (patch-hyprland-keepoutputs.py)
 #   hyprland sekai5: 창 테두리 크기 조절을 윈도우처럼 — 커서, 안쪽 가장자리, 위쪽, 한 방향 (patch-hyprland-bordergrab.py)
 #   hyprbars sekai9: 제목줄 가장자리 4px 누름은 넘긴다 — 위쪽으로 크기 조절 (patch-hyprbars-bordergrab.py)
-rev_for() { case "$1" in hyprbars) echo sekai9 ;; hyprland) echo sekai5 ;; *) echo "$REV" ;; esac; }
+#   hyprland sekai6: 바탕화면 레이어가 창의 키보드 초점을 가로채지 않게 (patch-hyprland-layerfocus.py)
+rev_for() { case "$1" in hyprbars) echo sekai9 ;; hyprland) echo sekai6 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
@@ -140,6 +141,7 @@ PYEOF
     python3 /build/patch-hyprland-clientmove.py "$dir" || die "패치 실패 (clientmove)"
     python3 /build/patch-hyprland-keepoutputs.py "$dir" || die "패치 실패 (keepoutputs)"
     python3 /build/patch-hyprland-bordergrab.py "$dir" || die "패치 실패 (bordergrab)"
+    python3 /build/patch-hyprland-layerfocus.py "$dir" || die "패치 실패 (layerfocus)"
     ok "패치 완료"
 }
 

@@ -95,6 +95,7 @@ install -m644 "$SELF/hypr/patch-hyprbars-theme.py" "$BR/build/patch-hyprbars-the
 install -m644 "$SELF/hypr/patch-hyprland-clientmove.py" "$BR/build/patch-hyprland-clientmove.py"
 install -m644 "$SELF/hypr/patch-hyprland-keepoutputs.py" "$BR/build/patch-hyprland-keepoutputs.py"
 install -m644 "$SELF/hypr/patch-hyprland-bordergrab.py" "$BR/build/patch-hyprland-bordergrab.py"
+install -m644 "$SELF/hypr/patch-hyprland-layerfocus.py" "$BR/build/patch-hyprland-layerfocus.py"
 install -m644 "$SELF/hypr/patch-hyprbars-bordergrab.py" "$BR/build/patch-hyprbars-bordergrab.py"
 
 # ── 빌드 ─────────────────────────────────────────────
