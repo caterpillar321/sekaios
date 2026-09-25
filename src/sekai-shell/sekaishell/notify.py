@@ -83,57 +83,73 @@ def _hint(hints, *names):
     return None
 
 
-_TAG = re.compile(r"<(/?)([A-Za-z]+)([^<>]*)>")
+# 태그 이름 뒤에는 경계(공백·"/"·">")가 있어야 태그다 — "<a@x.com>", "<a1234@…>" 는 글자
+_TAG = re.compile(r"<(/?)([A-Za-z]+)(\s[^<>]*|/)?>")
+# 우리가 만든 <a href="…"> / </a> — 검사할 때만 같은 자리의 <span> 으로 바꾼다
+_A_OUT = re.compile(r'<(/?)a(?: href="[^"]*")?>')
+
+
+def _attr(attrs, name):
+    """속성 값 (엔티티를 푼 것). 없으면 None — 따옴표 없는 값도 받는다"""
+    m = re.search(r"""(?<![\w-])%s\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))""" % name, attrs or "", re.I)
+    if not m:
+        return None
+    return html.unescape(next(g for g in m.groups() if g is not None))
+
+
+def _convert(body, markup):
+    """본문을 Pango 마크업(markup=True) 또는 맨 글자로. 규격의 태그(b·i·u·a href·img alt·br)만 태그로
+    다루고, 나머지 <…> 는 글자 그대로 둔다 ("I have <a lot> of work", "if a<b and c>d" 가 지워졌다).
+    href 없는 <a …>, alt 없는 <img …>, 속성이 붙은 <b …> 도 글자다."""
+    esc = GLib.markup_escape_text if markup else (lambda t: t)
+    out, pos, open_a = [], 0, False
+
+    def text(t):
+        out.append(esc(html.unescape(t)))
+    for m in _TAG.finditer(body):
+        text(body[pos:m.start()])
+        pos = m.end()
+        close, tag, rest = m.group(1), m.group(2).lower(), (m.group(3) or "").strip()
+        href = _attr(rest, "href") if tag == "a" and not close and not open_a else None
+        alt = _attr(rest, "alt") if tag == "img" and not close else None
+        if tag in ("b", "i", "u") and not rest:
+            out.append(f"<{close}{tag}>" if markup else "")
+        elif tag == "br" and not close and rest in ("", "/"):
+            out.append("\n")
+        elif href is not None:
+            out.append('<a href="%s">' % GLib.markup_escape_text(href) if markup else "")
+            open_a = True
+        elif tag == "a" and close and not rest and open_a:
+            out.append("</a>" if markup else "")
+            open_a = False
+        elif alt is not None:
+            out.append(esc(alt))
+        else:                                   # 규격에 없는 것 — 글자 그대로
+            text(m.group(0))
+    text(body[pos:])
+    if open_a:
+        out.append("</a>" if markup else "")
+    return "".join(out)
 
 
 def body_markup(body):
-    """알림 본문(규격상 제한된 HTML: b·i·u·a·br·img) → Pango 마크업. 못 만들면 None.
+    """알림 본문(규격상 제한된 HTML: b·i·u·a·img, 덤으로 br) → 라벨에 넣을 마크업. 못 만들면 None.
     set_markup 은 틀린 마크업이어도 예외 없이 빈 글자가 된다 — "&" 나 "<" 가 든 본문이 빈칸으로 보였다.
     태그 사이 글자는 엔티티를 풀었다가 다시 이스케이프한다 (규격대로 &amp; 를 보내는 앱도, 날것 & 를
-    보내는 앱도 같게 보이게). 규격의 태그만 태그로 쓰고, 나머지 <…> 는 글자 그대로 보인다
-    ("tom <tom@x.com>", "Vec<String>" 이 지워져 "tom", "Vec" 으로 보였다). img 는 alt 글자만."""
-    out, pos, open_a = [], 0, False
-    for m in _TAG.finditer(body):
-        out.append(GLib.markup_escape_text(html.unescape(body[pos:m.start()])))
-        pos = m.end()
-        close, tag, attrs = m.group(1), m.group(2).lower(), m.group(3)
-        if tag in ("b", "i", "u"):
-            out.append(f"<{close}{tag}>")
-        elif tag == "br":
-            out.append("\n")
-        elif tag == "a":
-            if close:
-                if open_a:
-                    out.append("</a>")
-                    open_a = False
-            elif not open_a:
-                h = re.search(r"""href\s*=\s*["']([^"']*)["']""", attrs)
-                if h:
-                    out.append('<a href="%s">' % GLib.markup_escape_text(html.unescape(h.group(1))))
-                    open_a = True
-        elif tag == "img":
-            alt = re.search(r"""alt\s*=\s*["']([^"']*)["']""", attrs)
-            if alt:
-                out.append(GLib.markup_escape_text(html.unescape(alt.group(1))))
-        else:                                   # 규격에 없는 태그 — 글자 그대로
-            out.append(GLib.markup_escape_text(html.unescape(m.group(0))))
-    out.append(GLib.markup_escape_text(html.unescape(body[pos:])))
-    if open_a:
-        out.append("</a>")
-    s = "".join(out)
+    보내는 앱도 같게 보이게). img 는 alt 글자만."""
+    s = _convert(body, True)
     try:
-        # 짝이 안 맞는 <b> 같은 것. <a> 는 Pango 가 아니라 GtkLabel 이 다루므로 빼고 검사한다
-        Pango.parse_markup(re.sub(r"</?a[^>]*>", "", s), -1, "\0")
+        # 라벨에 넣을 문자열 그대로 검사한다. <a> 는 GtkLabel 이 <span> 으로 바꿔 Pango 에 넘기므로 같게 바꿔서 —
+        #   빼고 검사하면 <b><a href="x">hi</b></a> 처럼 엇갈린 짝이 통과해 본문이 빈칸이 됐다
+        Pango.parse_markup(_A_OUT.sub(r"<\1span>", s), -1, "\0")
     except GLib.Error:
         return None
     return s
 
 
 def body_plain(body):
-    """마크업을 못 쓸 때 — 규격의 태그(b·i·u·a·img)만 빼고 엔티티를 푼 글자. 나머지 <…> 는 그대로"""
-    s = re.sub(r"<br\s*/?>", "\n", body, flags=re.I)
-    s = re.sub(r"</?(?:b|i|u|a|img)(?:\s[^<>]*)?/?>", "", s, flags=re.I)
-    return html.unescape(s)
+    """마크업을 못 쓸 때 (set_text 로 넣는다) — 규격의 태그만 빼고 엔티티를 푼 글자. 나머지 <…> 는 그대로"""
+    return _convert(body, False)
 
 
 def pixbuf_from_image_data(v):
@@ -473,6 +489,7 @@ class NotificationService:
         self.live = {}                 # id -> Notification (아직 안 닫힌 것)
         self.history = []
         self.unread = 0
+        self._unread_ids = set()       # 읽지 않음으로 센 알림 — 같은 알림을 갱신(replaces_id)할 때 또 세지 않게
         self.on_count_changed = on_count_changed
         self.dnd = bool(config.state("dnd", False))
         # 설정 앱에서 "기록 지우기"를 누른 시각 — 이보다 새 값이 오면 메모리의 기록도 비운다
@@ -555,7 +572,10 @@ class NotificationService:
             if len(self.history) > keep:
                 self.history = self.history[-keep:]
             self._save_history()
-            self.unread += 1
+            # 갱신(진행률 등)마다 늘리면 센터엔 1건인데 배지는 갱신 횟수만큼 커졌다
+            if nid not in self._unread_ids:
+                self._unread_ids.add(nid)
+                self.unread += 1
             self._changed()
 
         if self.toasts is not None and not self.dnd:
@@ -620,7 +640,13 @@ class NotificationService:
     def clear_history(self):
         self.history = []
         self.unread = 0
+        self._unread_ids.clear()
         self._save_history()
+        # 떠 있는 알림은 규격대로 닫는다 (사용자가 닫음) — 토스트만 걷으면 NotificationClosed 가 안 나가
+        #   notify-send --wait/--action 으로 기다리는 쪽(sekai-screenshot 등)이 영영 끝나지 않았다.
+        #   기록까지 지웠으니 나중에 눌러 줄 길도 없다 — 방해 금지로 토스트 없이 살아 있는 것도 닫는다
+        for nid in list(self.live):
+            self.close(nid, DISMISSED)
         if self.toasts:
             self.toasts.clear()
         if self.center:
@@ -647,6 +673,7 @@ class NotificationService:
             self._changed()
 
     def mark_read(self):
+        self._unread_ids.clear()
         if self.unread:
             self.unread = 0
             self._changed()
@@ -655,7 +682,14 @@ class NotificationService:
         self.dnd = bool(on)
         config.set_state("dnd", self.dnd)
         if self.dnd and self.toasts:
-            self.toasts.clear()
+            # 떠 있던 토스트를 닫는다 (사용자가 닫음 — 닫힘 신호를 보내고 live 에서 뺀다).
+            #   resident 는 방해 금지 중에 온 것처럼 토스트만 걷는다 — 센터에서 눌러 동작을 부를 수 있게
+            for nid in list(self.toasts.cards):
+                n = self.live.get(nid)
+                if n is not None and n.resident and not n.transient:
+                    self.toasts.drop(nid)
+                else:
+                    self.close(nid, DISMISSED)
         self._changed()
 
     def _changed(self):

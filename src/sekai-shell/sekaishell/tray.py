@@ -244,6 +244,7 @@ class TrayItem:
 
     # ── 입력 ──
     def _press(self, widget, ev):
+        self.box.click_gen += 1                # 늦게 온 옛 클릭의 응답은 버린다 (_call)
         x, y = self._screen_xy(widget)
         if ev.button == 1 and self.is_hangul_ime():
             self._toggle_hangul()
@@ -320,10 +321,16 @@ class TrayItem:
     def _call(self, method, x, y):
         """Activate 류는 실패하는 앱이 많아서 성공 여부를 알려 준다."""
         ok = {"v": True}
+        gen = self.box.click_gen
 
         def reply(out):
             if out is None:
                 ok["v"] = False
+                # 응답이 멈춘 앱이면 시간 제한(1.2초) 뒤에야 실패가 온다 — 그사이 사용자가 트레이를 또 눌렀거나
+                #   아이콘을 떠났으면 메뉴를 띄우지 않는다 (다른 창에 치던 키보드 초점을 빼앗았다)
+                if gen != self.box.click_gen or not self._pointer_here():
+                    dbg(f"{method} 실패 — 사용자가 떠나 메뉴는 띄우지 않는다")
+                    return
                 dbg(f"{method} 실패 → 메뉴로 대체")
                 GLib.idle_add(lambda: (self.box.show_menu(self, self.button), False)[1])
 
@@ -331,6 +338,10 @@ class TrayItem:
                GLib.Variant("(ii)", (int(x), int(y))), reply, timeout=1200)
         # 비동기라 즉시 판정할 수 없다. ItemIsMenu 가 아니면 일단 보냈다고 본다.
         return True
+
+    def _pointer_here(self):
+        """커서가 아직 이 아이콘 위에 있나 (GTK 가 아는 마우스 올림 상태)"""
+        return bool(self.button.get_state_flags() & Gtk.StateFlags.PRELIGHT)
 
     def destroy(self):
         for s in self._subs:
@@ -345,13 +356,21 @@ class TrayItem:
         self.button.destroy()
 
 
+def _note(text):
+    """메뉴 자리의 안내 한 줄 (불러오는 중 · 못 읽음 · 메뉴 없음)"""
+    lbl = Gtk.Label(label=text, xalign=0)
+    lbl.get_style_context().add_class("menu-note")
+    return lbl
+
+
 # ───────────────────────────────────────────────────────────────
 class TrayMenuPopup(PanelPopup):
     """트레이 항목의 컨텍스트 메뉴를 그리는 레이어 창."""
 
     def __init__(self):
         super().__init__(dim=False)
-        self._gen = 0              # 메뉴를 빨리 두 번 열면 늦게 온 옛 응답이 새 메뉴를 덮었다 — 세대로 거른다
+        # 메뉴를 빨리 두 번 열면 늦게 온 옛 응답이 새 메뉴를 덮었다 — 세대로 거른다. 닫을 때도 올린다
+        self._gen = 0
         self.get_style_context().add_class("tray-menu")
         self.list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.root.pack_start(self.list, True, True, 0)
@@ -377,25 +396,49 @@ class TrayMenuPopup(PanelPopup):
         self.list.pack_start(head, False, False, 0)
 
         if item.menu_client is None:
-            self.list.pack_start(
-                Gtk.Label(label="이 앱은 메뉴를 제공하지 않습니다.", xalign=0),
-                False, False, 0)
+            self.list.pack_start(_note("이 앱은 메뉴를 제공하지 않습니다."), False, False, 0)
             self.open()
             return
 
+        # 응답을 기다렸다 열면(AboutToShow 1.5초 + GetLayout 3초) 사용자가 다른 창에서 글을 쓰는 중에
+        #   팝업이 떠 키보드 초점과 다음 클릭을 빼앗았다 → 곧 안 오면 "불러오는 중" 으로 먼저 연다.
+        #   열려 있으면 바깥을 눌러 닫을 수 있고, 닫은 뒤에 온 응답은 세대로 버린다 (close).
+        #   (곧바로 열지 않는 것은 금방 답하는 대부분의 앱에서 "불러오는 중" 이 깜빡이지 않게)
+        loading = _note("불러오는 중…")
+        wait = {"src": 0}
+
+        def show_loading():
+            wait["src"] = 0
+            if gen == self._gen:
+                self.list.pack_start(loading, False, False, 0)
+                self.list.show_all()
+                self.open()
+            return False
+        wait["src"] = GLib.timeout_add(150, show_loading)
+
         def ready(node):
-            if gen != self._gen:           # 그사이 다른 메뉴를 열었다
+            if wait["src"]:
+                GLib.source_remove(wait["src"])
+                wait["src"] = 0
+            if gen != self._gen:           # 그사이 닫았거나 다른 메뉴를 열었다
                 return
+            if loading.get_parent() is not None:
+                self.list.remove(loading)
             if node is None or not node.children:
-                self.list.pack_start(
-                    Gtk.Label(label="메뉴를 읽지 못했습니다.", xalign=0),
-                    False, False, 0)
+                self.list.pack_start(_note("메뉴를 읽지 못했습니다."), False, False, 0)
             else:
                 build_rows(node, item.menu_client, self.close, self.list)
             self.list.show_all()
-            self.open()
+            if self.get_visible():
+                self.resize(1, 1)          # 불러오는 중 줄보다 좁아질 수도 있다
+            else:
+                self.open()
 
         item.menu_client.fetch(ready)
+
+    def close(self):
+        self._gen += 1                     # 닫힌 뒤에 온 응답은 버린다 (다시 열지 않게)
+        super().close()
 
 
 # ───────────────────────────────────────────────────────────────
@@ -411,6 +454,7 @@ class TrayBox(Gtk.Box):
         self.host_registered = False
         self.menu = None
         self.ime = None
+        self.click_gen = 0         # 트레이를 누를 때마다 — 늦게 온 Activate 실패로 메뉴를 띄울지 가린다
 
         try:
             self.conn = D.bus()

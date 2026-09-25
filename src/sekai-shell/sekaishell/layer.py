@@ -41,6 +41,7 @@ else:
             self.auto_exclusive = False
             self.monitor = None
             self.namespace = ""
+            self.screen_hid = 0
 
     class _X11LayerShell:
         Edge = _Enum(LEFT=0, RIGHT=1, TOP=2, BOTTOM=3)
@@ -70,7 +71,16 @@ else:
             win.connect("size-allocate", lambda w, _a: GLib.idle_add(cls._place, w))
             win.connect("map", lambda w: (cls._place(w), cls._focus(w)))
             scr = Gdk.Screen.get_default()
-            scr.connect("monitors-changed", lambda *_: cls._place(win))
+            if not st.screen_hid:
+                st.screen_hid = scr.connect("monitors-changed", lambda *_: cls._place(win))
+
+                # Screen 은 프로세스 내내 산다 — 창이 없어질 때 끊지 않으면 람다가 창을 붙잡아
+                #   열 때마다 새로 만들고 destroy 하는 창(다른 모니터의 ClickCatcher 등)이 풀리지 않았다
+                def unhook(*_):
+                    if st.screen_hid:
+                        scr.disconnect(st.screen_hid)
+                        st.screen_hid = 0
+                win.connect("destroy", unhook)
             return st
 
         @classmethod

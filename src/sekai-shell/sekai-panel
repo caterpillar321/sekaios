@@ -267,6 +267,24 @@ def app_dirs():
     return out
 
 
+# 지금 데스크톱 — Hyprland 세션은 "Hyprland", 기본 화면 모드(X11, xfwm4)는 "SekaiOS:XFCE"
+CURRENT_DESKTOPS = [d for d in os.environ.get("XDG_CURRENT_DESKTOP", "").split(":") if d]
+
+
+def shown_here(entry):
+    """OnlyShowIn/NotShowIn — GIO(g_desktop_app_info_get_show_in)와 같은 규칙.
+    지금 데스크톱을 앞에서부터 보며 OnlyShowIn 에 있으면 보이고 NotShowIn 에 있으면 숨는다.
+    (Hyprland 에서 아무 효과 없는 xfwm4 설정(OnlyShowIn=XFCE)이 보였다)"""
+    only = [x for x in entry.get("OnlyShowIn", "").split(";") if x]
+    never = [x for x in entry.get("NotShowIn", "").split(";") if x]
+    for d in CURRENT_DESKTOPS:
+        if d in only:
+            return True
+        if d in never:
+            return False
+    return not only
+
+
 def load_apps():
     dirs = app_dirs()
     apps, seen = [], set()
@@ -295,6 +313,8 @@ def load_apps():
             # 숨김 — 앞 폴더에서 숨긴 이름은 뒤 폴더의 같은 이름도 숨는다 (seen 에 먼저 넣었다)
             if entry.get("NoDisplay", "").lower() == "true" or entry.get("Hidden", "").lower() == "true":
                 continue
+            if not shown_here(entry):
+                continue
             if fn[:-len(".desktop")].lower() in HIDDEN_APPS:
                 continue
             if entry.get("Type", "Application") != "Application":
@@ -305,7 +325,9 @@ def load_apps():
             # %f %u %U %F %i %c %k 같은 필드 코드 제거
             exe = " ".join(t for t in exe.split() if not (len(t) == 2 and t[0] == "%"))
             apps.append({
-                "id": fn[:-len(".desktop")].lower(),
+                # 파일 이름 그대로 — Gio 는 데스크톱 id 의 대소문자를 가린다 (org.gnome.Evince).
+                #   찾을 때는 대소문자를 가리지 않는다 (소문자로 적힌 예전 고정 목록도 찾게)
+                "id": fn[:-len(".desktop")],
                 "name": name,
                 "exec": exe,
                 "icon": entry.get("Icon", "application-x-executable"),
@@ -329,6 +351,14 @@ def desktop_dir():
         p = os.path.expanduser("~/Desktop")
     os.makedirs(p, exist_ok=True)
     return p
+
+
+def user_dir(kind):
+    """사용자 폴더(문서 등) — xdg-user-dirs 가 정한 곳(한국어면 ~/문서). 없으면 홈.
+    ~/Documents 로 고정해 두어 한국어 사용자에겐 없는 폴더를 열었다."""
+    GLib.reload_user_special_dirs_cache()           # 패널이 뜬 뒤에 폴더 이름이 바뀌었을 수 있다 (OOBE 언어)
+    p = GLib.get_user_special_dir(kind)
+    return p if p and os.path.isdir(p) else os.path.expanduser("~")
 
 
 def make_desktop_shortcut(app):
@@ -497,13 +527,16 @@ class StartMenu(Gtk.Window):
             b.connect("clicked", lambda *_: cb())
             return b
 
+        # 폴더는 인자 목록으로 넘긴다 — 문자열로 이으면 공백이 든 경로가 둘로 갈렸다
+        def files_at(path):
+            return shlex.split(sekai_conf("apps", "files", "thunar") or "thunar") + [path]
+
         rail.pack_start(rail_btn(["user-home-symbolic", "go-home-symbolic"],
                                  os.environ.get("USER", "user"),
-                                 lambda: self._run(sekai_conf("apps", "files", "thunar"))), False, False, 0)
+                                 lambda: self._run(files_at(os.path.expanduser("~")))), False, False, 0)
         rail.pack_start(rail_btn(["folder-documents-symbolic", "folder-symbolic"],
                                  "문서",
-                                 lambda: self._run(sekai_conf("apps", "files", "thunar") + " "
-                                                   + os.path.expanduser("~/Documents"))),
+                                 lambda: self._run(files_at(user_dir(GLib.UserDirectory.DIRECTORY_DOCUMENTS)))),
                         False, False, 0)
         rail.pack_start(rail_btn(["emblem-system-symbolic", "preferences-system-symbolic"],
                                  "설정",
@@ -621,9 +654,10 @@ class StartMenu(Gtk.Window):
 
     # ── 동작 ─────────────────────────────────────────────
     def _run(self, cmd):
+        """cmd: 명령 문자열 또는 인자 목록"""
         self.close()
         try:
-            subprocess.Popen(shlex.split(cmd), start_new_session=True,
+            subprocess.Popen(cmd if isinstance(cmd, list) else shlex.split(cmd), start_new_session=True,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             pass
@@ -673,8 +707,9 @@ class StartMenu(Gtk.Window):
         self.search.grab_focus()
 
     def _start_defaults(self):
-        """고정 타일 기본값 → (id 목록, id → (짧은 이름, 아이콘)) — 설치된 것 중 후보 순서대로"""
-        by_id = {a["id"]: a for a in self.apps}
+        """고정 타일 기본값 → (id 목록, id → (짧은 이름, 아이콘)) — 설치된 것 중 후보 순서대로.
+        시작 메뉴 고정(startpins)은 id 를 소문자로 적으므로 여기서도 소문자로"""
+        by_id = {a["id"].lower(): a for a in self.apps}
         ids, labels = [], {}
         for label, cands, icons in DEFAULT_PINS:
             aid = next((c for c in cands if c in by_id), None)
@@ -686,13 +721,13 @@ class StartMenu(Gtk.Window):
     def fill_tiles(self):
         for c in self.flow.get_children():
             self.flow.remove(c)
-        by_id = {a["id"]: a for a in self.apps}
+        by_id = {a["id"].lower(): a for a in self.apps}      # 앱 id 는 파일 이름 그대로 — 대소문자 무시로 찾는다
         defaults, labels = self._start_defaults()
         for aid in startpins.load(defaults):
-            app = by_id.get(aid)
+            app = by_id.get(aid.lower())
             if not app:
                 continue                                     # 지운 앱
-            label, icon = labels.get(aid, (app["name"], "application-x-executable"))
+            label, icon = labels.get(aid.lower(), (app["name"], "application-x-executable"))
             btn = Gtk.Button()
             btn.get_style_context().add_class("tile")
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -790,15 +825,15 @@ _apps_cache = {"t": 0, "apps": {}}
 
 
 def apps_by_id():
-    """시작 메뉴의 앱 목록을 id 로 (30초 동안 다시 읽지 않는다)"""
+    """시작 메뉴의 앱 목록을 소문자 id 로 (30초 동안 다시 읽지 않는다)"""
     if time.monotonic() - _apps_cache["t"] > 30:
-        _apps_cache["apps"] = {a["id"]: a for a in load_apps()}
+        _apps_cache["apps"] = {a["id"].lower(): a for a in load_apps()}
         _apps_cache["t"] = time.monotonic()
     return _apps_cache["apps"]
 
 
 def launch_app_id(app_id):
-    a = apps_by_id().get(app_id)
+    a = apps_by_id().get((app_id or "").lower())
     if a:
         launch(a)
         return
@@ -1396,19 +1431,48 @@ class Panel(Gtk.Window, TaskbarMixin):
         run_limited(["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{pct}%"], done)
 
     def _on_vol_scroll(self, _w, ev):
-        step = 0
+        """휠 한 칸 = 5%. 터치패드는 작은 dy 를 초당 수십 번 보낸다 — 모아서 1.0 마다 한 칸
+        (이벤트마다 5% 로 치면 살짝 쓸어도 100% 로 튀었다). 한 이벤트는 많아야 한 칸 (휠 한 칸의 dy 가 1.5 여도)"""
+        steps = 0
         if ev.direction == Gdk.ScrollDirection.UP:
-            step = 5
+            steps = 1
         elif ev.direction == Gdk.ScrollDirection.DOWN:
-            step = -5
+            steps = -1
         elif ev.direction == Gdk.ScrollDirection.SMOOTH:
-            ok, _dx, dy = ev.get_scroll_deltas()
-            step = -5 if dy > 0 else (5 if dy < 0 else 0)
-        if step:
-            subprocess.Popen(["wpctl", "set-volume", "-l", "1.0", "@DEFAULT_AUDIO_SINK@",
-                              f"{abs(step)}%{'+' if step > 0 else '-'}"])
-            self.refresh_sys(120)
+            _ok, _dx, dy = ev.get_scroll_deltas()
+            d = max(-1.0, min(1.0, -dy))
+            acc = getattr(self, "_vol_acc", 0.0)
+            if acc * d < 0:
+                acc = 0.0                          # 방향을 바꿨다 — 반대쪽 나머지는 버린다
+            acc += d
+            steps = int(acc + (1e-6 if acc > 0 else -1e-6))   # 0 쪽으로 자른다 (0.1 열 번이 0.999… 여도 한 칸)
+            self._vol_acc = acc - steps
+            try:
+                if ev.is_scroll_stop_event():      # 손가락을 뗐다
+                    self._vol_acc = 0.0
+            except AttributeError:
+                pass
+        if steps:
+            self._step_volume(steps * 5)
         return True
+
+    def _step_volume(self, delta):
+        """휠 음량 — 슬라이더(_set_volume)처럼 wpctl 은 한 번에 하나만. 도는 동안 온 칸은 모았다가
+        끝난 뒤 한 번에 (이벤트마다 띄우면 wpctl 이 이벤트 수만큼 쌓였다)"""
+        self._vol_delta = getattr(self, "_vol_delta", 0) + delta
+        if getattr(self, "_vol_stepping", False) or not self._vol_delta:
+            return
+        d, self._vol_delta = self._vol_delta, 0
+        self._vol_stepping = True
+
+        def done(_out):
+            self._vol_stepping = False
+            if self._vol_delta:
+                self._step_volume(0)
+            else:
+                self.refresh_sys(0)
+        run_limited(["wpctl", "set-volume", "-l", "1.0", "@DEFAULT_AUDIO_SINK@",
+                     f"{abs(d)}%{'+' if d > 0 else '-'}"], done)
 
     def _on_mute(self, btn):
         if getattr(self, "_vol_guard", False):
@@ -1498,16 +1562,46 @@ class Panel(Gtk.Window, TaskbarMixin):
                 fn(name, _arg)
             except Exception as e:
                 dbg("이벤트 훅 오류", name, e)
+        # 초점 창의 제목·클래스만 바뀌어도 Hyprland 는 activewindow(v2) 를 다시 보낸다 — 같은 창이면
+        #   초점이 옮겨 간 게 아니다. (activewindow 는 늘 v2 와 함께 오므로 v2 만 본다.
+        #   X11 흉내는 주소 없이 보낸다 — 그땐 옮겨 간 것으로 본다)
+        same_focus = (name == "activewindowv2" and bool(_arg.strip())
+                      and "0x" + _arg.strip() == getattr(self, "_last_active", None))
         # 폴백: 사용자가 다른 창을 클릭하면 포커스 이벤트가 온다 → 메뉴 닫기
-        if name in ("activewindow", "activewindowv2", "openwindow") and self.menu.get_visible():
+        if name in ("activewindowv2", "openwindow") and not same_focus and self.menu.get_visible():
             GLib.idle_add(self.menu.close)
-        if name in ("openwindow", "closewindow", "activewindow", "activewindowv2",
-                    "movewindow", "movewindowv2", "windowtitle", "windowtitlev2",
-                    "workspace", "activespecial", "fullscreen", "changefloatingmode",
-                    "focusedmon", "moveworkspace", "monitoradded", "monitorremoved"):
+        if name in ("windowtitle", "windowtitlev2") or same_focus:
+            # 제목만 바뀌었다 — 버튼은 아이콘뿐이라 다시 만들지 않고 제목을 쓰는 곳(미리보기)만 고친다.
+            #   제목이 계속 바뀌는 창(터미널·웹 페이지)이 있으면 누르고 떼는 사이에 버튼이 새로 만들어져 클릭이 씹혔다
+            self.queue_title_refresh()
+        elif name in ("openwindow", "closewindow", "activewindowv2",
+                      "movewindow", "movewindowv2",
+                      "workspace", "activespecial", "fullscreen", "changefloatingmode",
+                      "focusedmon", "moveworkspace", "monitoradded", "monitorremoved"):
             # 창 하나를 열거나 옮기면 이벤트가 여럿 한꺼번에 온다 — 모아서 한 번에.
-            #   제목만 바뀐 것(터미널은 명령마다 바뀐다)은 조금 더 느긋하게
-            self.queue_rebuild_all(250 if name in ("windowtitle", "windowtitlev2") else 50)
+            self.queue_rebuild_all(50)
+
+    def queue_title_refresh(self, delay=250):
+        """창 제목 바뀜을 모은다 — 이미 걸려 있으면 그대로 둔다"""
+        if not getattr(self, "_title_src", 0):
+            self._title_src = GLib.timeout_add(delay, self._refresh_titles)
+
+    def _refresh_titles(self):
+        """버튼이 쥔 창 정보의 제목을 제자리에서 고치고, 떠 있는 미리보기 카드의 제목도 고친다.
+        창이 사라졌거나 클래스가 바뀌었으면(묶음이 달라진다) 그때만 다시 만든다."""
+        self._title_src = 0
+        now = {c.get("address"): c for c in self.hypr.query("clients") or []}
+        for p in [self] + self.others:
+            for _btn, wins in getattr(p, "_task_btns", {}).values():
+                for c in wins:
+                    n = now.get(c.get("address"))
+                    if n is None or (n.get("class") or "") != (c.get("class") or ""):
+                        self.queue_rebuild_all(50)
+                        return False
+                    if n.get("title") != c.get("title"):
+                        c["title"] = n.get("title")     # 버튼·미리보기가 같은 dict 를 쥐고 있다
+                        self.preview.update_title(c)
+        return False
 
     def queue_rebuild_all(self, delay=50):
         """작업 표시줄 다시 그리기를 모은다. 이미 걸려 있으면 더 이른 쪽만 남긴다."""
@@ -1528,6 +1622,7 @@ class Panel(Gtk.Window, TaskbarMixin):
             GLib.source_remove(self._rebuild_src)
             self._rebuild_src = 0
         snap = self.task_snapshot()                 # Hyprland 조회는 한 번 — 모든 작업 표시줄이 같이 쓴다
+        self._last_active = snap["active"]          # 초점이 정말 옮겨 갔는지 가리려고 (on_hypr_event)
         self.rebuild_tasks(snap)
         for p in self.others:
             p.rebuild_tasks(snap)
@@ -1745,10 +1840,11 @@ def main():
             new_h = int(sekai_conf("panel", "height", PANEL_HEIGHT))
             osd.set_bottom(new_h + 24)
             clip.set_panel_height(new_h)
-            if new_h != panel.get_size_request()[1]:
-                dbg("패널 높이 변경", new_h)
-                panel.set_size_request(-1, new_h)
-                GtkLayerShell.auto_exclusive_zone_enable(panel)
+            for p in [panel] + panel.others:        # 다른 모니터의 작업 표시줄도 (예전엔 주 모니터 것만 바뀌었다)
+                if new_h != p.get_size_request()[1]:
+                    dbg("패널 높이 변경", new_h)
+                    p.set_size_request(-1, new_h)
+                    GtkLayerShell.auto_exclusive_zone_enable(p)
             load_css()
             apply_mode()                    # 다크/라이트가 바뀌었을 수 있다 (아이콘 테마)
             if primary_monitor() != panel.gdk_monitor:

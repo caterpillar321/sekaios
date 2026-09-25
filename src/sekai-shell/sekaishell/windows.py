@@ -50,6 +50,11 @@ class WindowManager:
         self._poll_src = 0         # 끄는 동안 커서 위치를 읽는 타이머
         self._bar_hit = None       # 바에서 가리킨 (영역, 나머지 칸들)
         self._drag_mons = []
+        self._drag_addr = None     # 끄는 창 — 끄는 중에 닫히면 놓기 이벤트가 안 온다
+        self._drag_t0 = 0          # 끌기 시작 시각 (µs)
+        self._drag_pos = None      # 마지막으로 본 커서 자리와 그때부터 멈춰 있던 시각
+        self._drag_still = 0
+        self._poll_one_src = 0
         self.mon_ws = {}           # 모니터 이름 → 보이던 워크스페이스 id (모니터가 빠질 때 창을 옮기려고)
         self.sizes = self._load()
         GLib.timeout_add_seconds(3, self._poll)
@@ -239,10 +244,15 @@ class WindowManager:
         c = self._client(addr)
         if not c:
             return False
-        if self.topbar is not None and not self._poll_src:
+        self._drag_addr = addr
+        if self.topbar is not None:
+            # 새 끌기 — 멈추지 못한 옛 폴링이 남아 있어도 기준은 새로 잡는다
+            self._drag_t0 = self._drag_still = GLib.get_monotonic_time()
+            self._drag_pos = None
             self._drag_mons = self.hypr.query("monitors") or []
-            self._bar_hit = None
-            self._poll_src = GLib.timeout_add(33, self._drag_poll)
+            if not self._poll_src:
+                self._bar_hit = None
+                self._poll_src = GLib.timeout_add(33, self._drag_poll)
         if c.get("fullscreen", 0) == 1:
             self.hypr.dispatch(f"focuswindow address:{addr}")
             self.hypr.dispatch("fullscreen 1")            # 최대화된 창을 끌면 먼저 최대화를 푼다
@@ -253,9 +263,22 @@ class WindowManager:
     # 위쪽 가운데로 끌면 내려오는 레이아웃 바 — 커서가 이 띠 안에 있으면 보인다
     BAND_Y, BAND_X = 150, 0.25      # 위에서 150px, 가운데에서 모니터 너비의 25% 안
     LEAVE_Y, LEAVE_X = 260, 0.32    # 이만큼 벗어나면 다시 올라간다
+    # 놓기 이벤트(sekaisnapdrop)를 놓쳤을 때의 안전장치 (초) — Hyprland 에 버튼이 눌려 있는지 물을 방법이
+    #   없다. 커서가 이만큼 멈춰 있거나 끌기가 이만큼 길어지면 끝난 것으로 본다 (그대로 두면 끌지 않아도
+    #   위쪽 가운데에서 바와 미리보기가 뜨고 초당 30번 cursorpos 를 묻는다)
+    DRAG_IDLE, DRAG_MAX = 10, 60
 
     def _drag_poll(self):
         cur = self.hypr.query("cursorpos") or {}
+        now = GLib.get_monotonic_time()
+        pos = (cur.get("x"), cur.get("y")) if isinstance(cur, dict) else None
+        if pos != self._drag_pos:
+            self._drag_pos, self._drag_still = pos, now
+        if now - self._drag_still > self.DRAG_IDLE * 1000000 or now - self._drag_t0 > self.DRAG_MAX * 1000000:
+            dbg("[win] 끌기 놓기 이벤트를 못 받았다 — 스냅 폴링을 멈춘다")
+            self._poll_src = 0                 # 이 타이머는 False 를 돌려주며 스스로 끝난다
+            self._drag_abort()
+            return False
         if not isinstance(cur, dict) or "x" not in cur:
             return True
         x, y = cur["x"], cur["y"]
@@ -310,6 +333,21 @@ class WindowManager:
         self._bar_hit = None
         return bar_open, hit
 
+    def _drag_abort(self):
+        """끌기가 놓기 없이 끝났다 (끄는 창이 닫힘 등) — 폴링·레이아웃 바·스냅 미리보기를 걷는다"""
+        self._stop_poll()
+        if self.preview is not None:
+            self.preview.hide_now()
+        if self._drag_addr:
+            self.drag_start.pop(self._drag_addr, None)
+        self._drag_addr = None
+
+    def _drag_closed(self, addr):
+        if addr == self._drag_addr:
+            dbg(f"[win] 끄던 창 {addr} 이 닫혔다 — 스냅 폴링을 멈춘다")
+            self._drag_abort()
+        return False
+
     def _drag_zone(self, zone, mon_name):
         if self.topbar is not None and self.topbar.get_visible():
             return False                                 # 바가 내려와 있으면 미리보기는 바 쪽이 정한다
@@ -322,6 +360,7 @@ class WindowManager:
 
     def _drag_drop(self, zone, mon_name, addr):
         bar_open, hit = self._stop_poll()
+        self._drag_addr = None
         if self.preview is not None:
             self.preview.hide_now()
         if bar_open:
@@ -405,13 +444,19 @@ class WindowManager:
             GLib.timeout_add(60, self._opened, addr)
         elif name == "closewindow":
             addr = "0x" + arg.strip()
+            # 끄는 중에 닫히면 Hyprland 는 놓기(sekaisnapdrop)를 보내지 않는다 — 끌기 이벤트와 같은 순서로(idle)
+            GLib.idle_add(self._drag_closed, addr)
             c = self.known.pop(addr, None)
             self.saved.pop(addr, None)
             self.snapped.pop(addr, None)
             if c:
                 self._closed(c)
-        elif name in ("movewindow", "movewindowv2", "windowtitle", "windowtitlev2", "activewindowv2"):
-            GLib.idle_add(self._poll_one)
+        elif name in ("movewindow", "movewindowv2", "activewindowv2"):
+            # 창 정보를 봐 둔다 — 한꺼번에 오는 이벤트는 한 번으로 모은다. 제목 이벤트는 뺐다: 크기 기억과
+            #   상관없고, 제목이 계속 바뀌는 창이 있으면 이벤트마다 동기 조회를 했다
+            #   (초점 창의 제목이 바뀌면 activewindowv2 도 오지만 이렇게 모이면 200ms 에 한 번이다)
+            if not self._poll_one_src:
+                self._poll_one_src = GLib.timeout_add(200, self._poll_one)
         if name == "monitorremoved":
             GLib.timeout_add(300, self._monitor_gone, arg.strip())
         elif name in ("workspace", "workspacev2", "focusedmon", "moveworkspace", "moveworkspacev2",
@@ -419,6 +464,7 @@ class WindowManager:
             GLib.idle_add(self._note_monitors)
 
     def _poll_one(self):
+        self._poll_one_src = 0
         a = self._active()
         if a:
             self.known[a["address"]] = a

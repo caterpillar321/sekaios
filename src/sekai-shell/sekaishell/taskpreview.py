@@ -23,6 +23,10 @@ SPACING, PAD = 6, 8                # 카드 사이, 테두리 안쪽
 SHOW_DELAY, HIDE_DELAY = 350, 300  # ms — 올리고 잠시 뒤에 뜨고, 벗어나고 잠시 뒤에 닫힌다
 
 
+def _title_of(c):
+    return (c.get("title") or "").strip() or (c.get("class") or "?")
+
+
 class TaskPreview(Gtk.Window):
     def __init__(self, hypr=None):
         super().__init__(type=Gtk.WindowType.TOPLEVEL)
@@ -80,8 +84,8 @@ class TaskPreview(Gtk.Window):
             self._show_src = 0
         self._pending = None
 
-    # 작업 표시줄은 창 제목만 바뀌어도 버튼을 새로 만든다 — 기다리던 미리보기를 새 버튼으로 옮긴다
-    #   (그냥 취소하면 제목이 자주 바뀌는 터미널에선 미리보기가 영영 안 뜬다)
+    # 작업 표시줄은 창이 열리고 닫히거나 초점·자리가 바뀌면 버튼을 새로 만든다 — 기다리던 미리보기를 새 버튼으로 옮긴다
+    #   (그냥 취소하면 창이 자주 바뀔 때 미리보기가 영영 안 뜬다). 제목만 바뀌면 update_title 로 제자리에서.
     def pending(self):
         """기다리는 미리보기의 (앱 묶음, 버튼) — 없으면 None"""
         return (self._pending[0], self._pending[1]) if self._pending else None
@@ -145,6 +149,15 @@ class TaskPreview(Gtk.Window):
         if ev.detail != Gdk.NotifyType.INFERIOR:
             self.schedule_hide()
         return False
+
+    def update_title(self, c):
+        """창 제목이 바뀜 — 떠 있는 카드의 제목만 고친다 (c 는 제목을 고친 창 정보)"""
+        if self.flow is None:
+            return
+        for child in self.flow.get_children():
+            card = child.get_child()
+            if getattr(card, "_sekai_addr", None) == c.get("address"):
+                card._sekai_title.set_text(_title_of(c))
 
     # ── 내용 ──
     def show_for(self, key, btn, wins, active_addr, on_pick, on_close):
@@ -221,8 +234,8 @@ class TaskPreview(Gtk.Window):
 
         head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         head.pack_start(app_icon(c.get("class") or "", 16), False, False, 0)
-        title = (c.get("title") or "").strip() or (c.get("class") or "?")
-        lbl = Gtk.Label(label=title, xalign=0)
+        lbl = Gtk.Label(label=_title_of(c), xalign=0)
+        card._sekai_title = lbl
         lbl.set_ellipsize(Pango.EllipsizeMode.END)
         lbl.set_max_width_chars(1)                    # 카드 너비를 넘지 않게 (남는 만큼 늘어난다)
         lbl.set_hexpand(True)
