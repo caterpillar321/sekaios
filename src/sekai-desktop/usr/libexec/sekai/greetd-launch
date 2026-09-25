@@ -1,6 +1,6 @@
 #!/bin/sh
 # greetd 실행기
-#   greetd-launch        기본 로그인 화면 (가상 터미널 7) — greetd.service
+#   greetd-launch        기본 로그인 화면 (가상 터미널 1) — greetd.service
 #   greetd-launch <번호> 사용자 전환용 로그인 화면 (가상 터미널 8~) — sekai-greetd@<번호>.service
 #   라이브 USB 로 켰으면 기본 화면은 로그인 없이 바로 바탕화면으로
 CONF=/etc/sekai/greetd.toml

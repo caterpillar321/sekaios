@@ -27,6 +27,7 @@ if os.path.isdir(os.path.join(HERE, "sekaishell")):
 
 from sekaishell.layer import GtkLayerShell  # noqa: E402  (X11 기본 화면 모드에선 흉내)
 from sekaishell import logo as sekai_logo          # noqa: E402
+from sekaishell.monitors import primary_gdk         # noqa: E402
 from sekaishell.greetd import Greetd, GreetdError   # noqa: E402
 
 DEMO = os.environ.get("SEKAI_GREETER_DEMO") == "1"
@@ -185,6 +186,11 @@ class Greeter(Gtk.Window):
             GtkLayerShell.set_anchor(self, e, True)
         GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.EXCLUSIVE)
         GtkLayerShell.set_exclusive_zone(self, -1)
+        # 주 디스플레이에 — 마지막 사용자가 고른 것(SEKAI_PRIMARY), 없으면 가장 큰 모니터.
+        #   안 정하면 Hyprland 가 처음 초점을 준 모니터(보조 모니터일 수도)에 뜬다
+        mon = primary_gdk()
+        if mon is not None:
+            GtkLayerShell.set_monitor(self, mon)
 
         self.bg = None
         try:

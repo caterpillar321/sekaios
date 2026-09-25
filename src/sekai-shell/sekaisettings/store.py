@@ -349,6 +349,9 @@ class Store:
         try:
             with open(HYPR_FRAG, encoding="utf-8") as f:
                 mon = [ln for ln in f if ln.startswith("monitor = ")]
+            prim = self.get("layout", "primary") or ""
+            if prim:
+                mon.append(f"# primary = {prim}\n")      # 로그인 화면이 입력 칸을 주 디스플레이에
             path = os.path.join(d, pwd.getpwuid(os.getuid()).pw_name + ".conf")
             old = os.umask(0o022)
             try:

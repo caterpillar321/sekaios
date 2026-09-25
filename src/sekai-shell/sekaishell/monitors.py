@@ -17,11 +17,24 @@ SETTINGS = os.path.expanduser("~/.config/sekai/settings.json")
 
 
 def primary_name():
+    """사용자가 고른 주 디스플레이 이름. 로그인 화면(_greetd)은 설정을 못 읽으므로
+    sekai-greeter-session 이 넘겨주는 SEKAI_PRIMARY 를 쓴다."""
     try:
         with open(SETTINGS, encoding="utf-8") as f:
-            return str((json.load(f).get("layout") or {}).get("primary") or "")
+            v = str((json.load(f).get("layout") or {}).get("primary") or "")
+            if v:
+                return v
     except (OSError, ValueError, AttributeError):
-        return ""
+        pass
+    return os.environ.get("SEKAI_PRIMARY", "")
+
+
+def _largest(hmons):
+    """고른 게 없을 때의 주 디스플레이 — 가장 큰(화소가 많은) 모니터. 같으면 먼저 연결된 것"""
+    live = [m for m in hmons if not m.get("disabled")]
+    if not live:
+        return None
+    return max(live, key=lambda m: (int(m.get("width", 0)) * int(m.get("height", 0)), -int(m.get("id", 0))))
 
 
 def hypr_monitors():
@@ -53,13 +66,12 @@ def primary_gdk(disp=None, hmons=None):
     disp = disp or Gdk.Display.get_default()
     if disp is None or disp.get_n_monitors() == 0:
         return None
+    hmons = hmons if hmons is not None else hypr_monitors()
     name = primary_name()
-    if name:
-        hm = next((m for m in (hmons if hmons is not None else hypr_monitors())
-                   if m.get("name") == name), None)
-        g = gdk_for(hm, disp)
-        if g is not None:
-            return g
+    hm = next((m for m in hmons if m.get("name") == name), None) if name else None
+    g = gdk_for(hm or _largest(hmons), disp)
+    if g is not None:
+        return g
     return disp.get_primary_monitor() or disp.get_monitor(0)
 
 
@@ -69,7 +81,8 @@ def primary_hypr_name(hmons=None):
     name = primary_name()
     if name and any(m.get("name") == name for m in hmons):
         return name
-    return hmons[0].get("name") if hmons else ""
+    big = _largest(hmons)
+    return big.get("name", "") if big else ""
 
 
 def publish_modes(hmons=None):

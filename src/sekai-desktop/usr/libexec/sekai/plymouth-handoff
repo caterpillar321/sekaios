@@ -1,0 +1,19 @@
+#!/bin/sh
+# SekaiOS — 로그인 화면이 화면을 넘겨받은 뒤에 부팅 화면(Plymouth)을 끝낸다 (GDM 과 같은 순서).
+#   Plymouth 는 끝날 때 자기 화면 버퍼를 지운다(drmModeRmFB) — 그때 아무도 화면을 잡고 있지 않으면
+#   출력이 꺼져 모니터 신호가 끊긴다. 그래서 greetd 를 띄우기 전엔 "비활성화"만 해서 로고를 남겨 두고
+#   (greetd.service 의 ExecStartPre), 로그인 화면의 Hyprland 가 뜬 다음 --retain-splash 로 끝낸다.
+command -v plymouth >/dev/null 2>&1 || exit 0
+plymouth --ping 2>/dev/null || exit 0
+i=0
+while [ $i -lt 50 ]; do                     # 최대 10초
+    # 로그인 화면(_greetd)의 Hyprland 가 떴다 — 첫 화면을 그릴 틈을 조금 준다
+    if ls /run/user/*/hypr/*/.socket.sock >/dev/null 2>&1; then
+        sleep 1.5
+        break
+    fi
+    sleep 0.2
+    i=$((i + 1))
+done
+plymouth quit --retain-splash 2>/dev/null || true
+exit 0
