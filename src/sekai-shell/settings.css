@@ -304,3 +304,8 @@ window.identify-win { background: transparent; }
     border-radius: 18px;
     padding: 8px 52px;
 }
+
+/* ── 블루투스 ─────────────────────────────────────────────── */
+/* 짝 맺기 숫자 (장치 화면의 숫자와 견주기 좋게 크게) */
+label.bt-code { color: @accent; margin: 6px 0; }
+button.bt-scan:disabled { opacity: 0.45; }

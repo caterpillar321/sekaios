@@ -10,8 +10,9 @@ sections 는 이 페이지가 화면에 보여 주는 설정(store) 섹션 — �
 """
 from . import (about, display, graphics, personalize, devices, network,  # noqa: F401
                notifications, locale, apps, users, update)
+from . import bluetooth  # noqa: F401
 
-MODULES = [about, display, graphics, personalize, devices, network,
+MODULES = [about, display, graphics, personalize, devices, bluetooth, network,
            notifications, locale, apps, users, update]
 
 
