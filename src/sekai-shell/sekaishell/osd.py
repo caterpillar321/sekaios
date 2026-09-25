@@ -3,7 +3,6 @@
 윈도우 11 처럼: [아이콘] ━━━━━━━○──── 57
 입력은 받지 않는다 (키보드 초점을 뺏지 않는다).
 """
-import queue
 import subprocess
 import threading
 
@@ -38,16 +37,13 @@ def volume_get():
     return v, "MUTED" in out
 
 
-def volume_do(action):
-    if action == "up":
+def volume_steps(n):
+    """음량 n 단계(5%) — 양수면 올리고(음소거도 푼다) 음수면 내린다"""
+    if n > 0:
         _run(["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "0"])
-        _run(["wpctl", "set-volume", "-l", "1.0", "@DEFAULT_AUDIO_SINK@", "5%+"])
-    elif action == "down":
-        _run(["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", "5%-"])
-    elif action == "mute":
-        _run(["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"])
-    elif action == "mic-mute":
-        _run(["wpctl", "set-mute", "@DEFAULT_AUDIO_SOURCE@", "toggle"])
+        _run(["wpctl", "set-volume", "-l", "1.0", "@DEFAULT_AUDIO_SINK@", f"{5 * n}%+"])
+    elif n < 0:
+        _run(["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{5 * -n}%-"])
 
 
 def mic_muted():
@@ -64,12 +60,12 @@ def brightness_get():
         return None
 
 
-def brightness_do(action):
-    if action == "up":
-        _run(["brightnessctl", "-q", "set", "5%+"])
-    elif action == "down":
+def brightness_steps(n):
+    if n > 0:
+        _run(["brightnessctl", "-q", "set", f"{5 * n}%+"])
+    elif n < 0:
         # 0 이 되면 화면이 완전히 꺼지는 패널이 있다 → 1% 아래로는 내리지 않는다
-        _run(["brightnessctl", "-q", "-n1", "set", "5%-"])
+        _run(["brightnessctl", "-q", "-n1", "set", f"{5 * -n}%-"])
 
 
 def vol_icon(v, muted):
@@ -119,7 +115,12 @@ class Osd(Gtk.Window):
         box.pack_start(self.text, False, False, 0)
         self.add(box)
         self._timer = None
-        self._jobs = None
+        # 작업 스레드가 처리할 몫 — 키를 누르고 있으면(초당 수십 번) 하나씩 처리하다 밀려서, 손을 뗀 뒤에도
+        #   한참 음량이 바뀌었다. 쌓인 입력을 합쳐 한 번에 한다 (올림 12번 → 60%+ 한 번)
+        self._lock = threading.Lock()
+        self._wake = None
+        self._want = {"vol": 0, "mute": 0, "mic": 0, "bright": 0}
+        self._last = None          # 마지막에 누른 종류 — 그것을 보여 준다
         self.on_volume = None      # 음량을 바꾼 뒤 부른다 (작업 표시줄 아이콘 새로 고침) — 메인 스레드에서
 
     def set_bottom(self, px):
@@ -162,51 +163,69 @@ class Osd(Gtk.Window):
 
     # ── 동작 + 표시 ──
     #   wpctl·brightnessctl 은 메인 스레드 밖에서 (PipeWire 가 바쁘면 몇 초씩 멈춰 패널 전체가 굳었다).
-    #   키를 누른 차례대로 하나의 작업 스레드가 처리하고, 표시는 메인 스레드에서.
-    def _run_bg(self, work, show):
-        if self._jobs is None:
-            self._jobs = queue.Queue()
-            threading.Thread(target=self._worker, daemon=True).start()
-        self._jobs.put((work, show))
+    #   작업 스레드 하나가 그동안 쌓인 입력을 합쳐 처리하고, 표시는 메인 스레드에서.
+    def _add(self, kind, n):
+        with self._lock:
+            self._want[kind] += n
+            self._last = kind
+            if self._wake is None:
+                self._wake = threading.Event()
+                threading.Thread(target=self._worker, daemon=True).start()
+            self._wake.set()
 
     def _worker(self):
         while True:
-            work, show = self._jobs.get()
+            self._wake.wait()
+            with self._lock:
+                self._wake.clear()
+                want, last = dict(self._want), self._last
+                for k in self._want:
+                    self._want[k] = 0
             try:
-                res = work()
+                if want["mute"] % 2:                      # 켜고 끄기 — 짝수 번이면 그대로
+                    _run(["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"])
+                if want["mic"] % 2:
+                    _run(["wpctl", "set-mute", "@DEFAULT_AUDIO_SOURCE@", "toggle"])
+                volume_steps(want["vol"])
+                brightness_steps(want["bright"])
+                if last == "mic":
+                    res = ("mic", mic_muted())
+                elif last == "bright":
+                    res = ("bright", brightness_get())
+                else:
+                    res = ("vol",) + volume_get()
             except Exception as e:
                 dbg("osd 작업 실패", e)
                 continue
-            GLib.idle_add(lambda r=res, s=show: (s(r), False)[1])
+            GLib.idle_add(lambda r=res: (self._show_result(r), False)[1])
+
+    def _show_result(self, r):
+        if r[0] == "mic":
+            m = r[1]
+            self.show_text("microphone-sensitivity-muted-symbolic" if m
+                           else "audio-input-microphone-symbolic",
+                           "마이크 꺼짐" if m else "마이크 켜짐")
+        elif r[0] == "bright":
+            if r[1] is None:
+                self.show_text("display-brightness-symbolic", "밝기를 바꿀 수 없는 화면입니다")
+            else:
+                self.show_level("display-brightness-symbolic", r[1])
+            return
+        else:
+            v, muted = r[1], r[2]
+            self.show_level(vol_icon(v, muted), v, dimmed=muted)
+        if self.on_volume:
+            self.on_volume()
 
     def volume(self, action):
-        def work():
-            volume_do(action)
-            if action == "mic-mute":
-                return ("mic", mic_muted(), None)
-            return ("vol",) + volume_get()
-
-        def show(r):
-            if r[0] == "mic":
-                m = r[1]
-                self.show_text("microphone-sensitivity-muted-symbolic" if m
-                               else "audio-input-microphone-symbolic",
-                               "마이크 꺼짐" if m else "마이크 켜짐")
-            else:
-                v, muted = r[1], r[2]
-                self.show_level(vol_icon(v, muted), v, dimmed=muted)
-            if self.on_volume:
-                self.on_volume()
-        self._run_bg(work, show)
+        if action == "up":
+            self._add("vol", 1)
+        elif action == "down":
+            self._add("vol", -1)
+        elif action == "mute":
+            self._add("mute", 1)
+        elif action == "mic-mute":
+            self._add("mic", 1)
 
     def brightness(self, action):
-        def work():
-            brightness_do(action)
-            return brightness_get()
-
-        def show(b):
-            if b is None:
-                self.show_text("display-brightness-symbolic", "밝기를 바꿀 수 없는 화면입니다")
-                return
-            self.show_level("display-brightness-symbolic", b)
-        self._run_bg(work, show)
+        self._add("bright", 1 if action == "up" else -1)

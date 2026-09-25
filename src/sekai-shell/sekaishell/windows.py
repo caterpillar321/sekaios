@@ -45,7 +45,6 @@ class WindowManager:
         self.known = {}            # 주소 → 마지막으로 본 창 정보 (닫힐 때 크기를 알려고)
         self.drag_start = {}       # 주소 → 끌기 시작 때 ((x, y), (w, h))
         self.preview = None        # 끌어서 스냅 미리보기 (sekai-panel 이 넣어 준다)
-        self.layouts = None        # 스냅 레이아웃 팝업 (sekai-panel 이 넣어 준다)
         self.assist = None         # 스냅 도우미 (sekai-panel 이 넣어 준다)
         self.topbar = None         # 위쪽에서 내려오는 레이아웃 바 (sekai-panel 이 넣어 준다)
         self._poll_src = 0         # 끄는 동안 커서 위치를 읽는 타이머
@@ -397,12 +396,6 @@ class WindowManager:
         elif name == "sekaisnap":
             zone, _, mon = arg.partition(",")
             GLib.idle_add(self._drag_zone, zone, mon.strip())
-        elif name == "sekaimaxhover" and self.layouts is not None:
-            p = arg.strip().split(",")
-            if p[0] == "on" and len(p) == 4:
-                GLib.idle_add(lambda: self.layouts.hover(True, "0x" + p[1], int(p[2]), int(p[3])) and False)
-            elif p[0] == "off":
-                GLib.idle_add(lambda: self.layouts.hover(False, None) and False)
         elif name == "sekaisnapdrop":
             parts = arg.strip().split(",")
             if len(parts) == 3:

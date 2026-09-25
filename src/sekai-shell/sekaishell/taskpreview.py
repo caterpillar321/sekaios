@@ -50,6 +50,7 @@ class TaskPreview(Gtk.Window):
         self._gen = 0               # 찍기 결과가 늦게 오면 버리려고
         self._hide_src = 0
         self._show_src = 0
+        self._pending = None           # show_later 가 기다리는 (앱 묶음, 버튼, 창들, 초점 창, 고름, 닫음)
         self._cb = None
         self.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK)
         self.connect("enter-notify-event", lambda *_: self.cancel_hide())
@@ -63,17 +64,38 @@ class TaskPreview(Gtk.Window):
         if self.get_visible():
             self.show_for(*args)
         else:
-            self._show_src = GLib.timeout_add(SHOW_DELAY, self._show_timeout, args)
+            self._pending = list(args)
+            self._show_src = GLib.timeout_add(SHOW_DELAY, self._show_timeout)
 
-    def _show_timeout(self, args):
+    def _show_timeout(self):
         self._show_src = 0
-        self.show_for(*args)
+        args, self._pending = self._pending, None
+        if args:
+            self.show_for(*args)
         return False
 
     def cancel_show(self):
         if self._show_src:
             GLib.source_remove(self._show_src)
             self._show_src = 0
+        self._pending = None
+
+    # 작업 표시줄은 창 제목만 바뀌어도 버튼을 새로 만든다 — 기다리던 미리보기를 새 버튼으로 옮긴다
+    #   (그냥 취소하면 제목이 자주 바뀌는 터미널에선 미리보기가 영영 안 뜬다)
+    def pending(self):
+        """기다리는 미리보기의 (앱 묶음, 버튼) — 없으면 None"""
+        return (self._pending[0], self._pending[1]) if self._pending else None
+
+    def retarget(self, btn, wins, active_addr):
+        if self._pending:
+            self._pending[1:4] = [btn, wins, active_addr]
+
+    @staticmethod
+    def _attached(btn):
+        """버튼이 아직 작업 표시줄 창에 붙어 있나. 떨어진 위젯의 get_toplevel() 은 None 이 아니라
+        자기 자신이다 — 창(Gtk.Window)인지로 본다"""
+        top = btn.get_toplevel()
+        return isinstance(top, Gtk.Window) and top is not btn and top.get_visible()
 
     def schedule_hide(self, ms=HIDE_DELAY):
         self.cancel_show()
@@ -129,7 +151,7 @@ class TaskPreview(Gtk.Window):
         """key: 앱 묶음, btn: 작업 표시줄 버튼, wins: 그 앱의 창들 (hyprctl clients 항목)"""
         self.cancel_show()
         self.cancel_hide()
-        if not wins or btn.get_toplevel() is None:
+        if not wins or not self._attached(btn):
             self.hide_now()
             return
         self._cb = (on_pick, on_close)

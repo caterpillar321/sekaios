@@ -78,21 +78,41 @@ def pixmap_to_pixbuf(pixmaps, want=22):
     pb = GdkPixbuf.Pixbuf.new_from_bytes(
         GLib.Bytes.new(bytes(out)), GdkPixbuf.Colorspace.RGB, True, 8,
         w, h, w * 4)
-    if w != want:
-        pb = pb.scale_simple(want, want, GdkPixbuf.InterpType.BILINEAR)
-    return pb
+    return _fit(pb, want)
+
+
+def _fit(pb, want):
+    """want×want 칸에 비율을 지켜 맞춘다. 예전엔 정사각형으로 늘리고(비율이 깨졌다)
+    BILINEAR 로 크게 줄여 계단이 졌다 — HYPER 로 (줄일 때 가장 깨끗하다)"""
+    w, h = pb.get_width(), pb.get_height()
+    if max(w, h) == want:
+        return pb
+    f = want / max(w, h)
+    return pb.scale_simple(max(1, round(w * f)), max(1, round(h * f)), GdkPixbuf.InterpType.HYPER)
+
+
+def _icon_from_file(path, size):
+    """IconName 이 파일 경로일 때 (ibus 는 엔진 아이콘을 /usr/share/ibus-hangul/icons/…svg 처럼 준다) —
+    원하는 크기로 새로 그린다 (SVG 는 선명하게)"""
+    if not path or not path.startswith("/") or not os.path.isfile(path):
+        return None
+    try:
+        return GdkPixbuf.Pixbuf.new_from_file_at_scale(path, size, size, True)
+    except Exception:
+        return None
 
 
 def _icon_from_theme_path(theme_path, name, size):
     """appindicator 는 자기 아이콘을 테마 밖 디렉터리에 두기도 한다."""
     if not theme_path or not name:
         return None
-    for ext in (".png", ".svg", ".xpm", ""):
-        for sub in ("", f"{size}x{size}/apps/", "hicolor/scalable/apps/"):
+    for ext in (".svg", ".png", ".xpm", ""):
+        for sub in ("", f"{size}x{size}/apps/", f"hicolor/{size}x{size}/apps/", "hicolor/scalable/apps/",
+                    "scalable/apps/", "hicolor/48x48/apps/", "hicolor/32x32/apps/", "hicolor/22x22/apps/"):
             p = os.path.join(theme_path, sub, name + ext)
             if os.path.isfile(p):
                 try:
-                    return GdkPixbuf.Pixbuf.new_from_file_at_size(p, size, size)
+                    return GdkPixbuf.Pixbuf.new_from_file_at_scale(p, size, size, True)
                 except Exception:
                     pass
     return None
@@ -153,16 +173,22 @@ class TrayItem:
         if status == "NeedsAttention" and p.get("AttentionIconName"):
             name = p["AttentionIconName"]
 
-        pb = _icon_from_theme_path(p.get("IconThemePath"), name, size)
+        # 그림은 화면 배율만큼 크게 그려 붙인다 (HiDPI 에서 흐리거나 깨지지 않게)
+        sf = max(1, self.image.get_scale_factor())
+        pixmap = p.get("IconPixmap")
+        if status == "NeedsAttention" and p.get("AttentionIconPixmap"):
+            pixmap = p["AttentionIconPixmap"]
+        pb = _icon_from_file(name, size * sf) or \
+            _icon_from_theme_path(p.get("IconThemePath"), name, size * sf)
         if pb is not None:
-            self.image.set_from_pixbuf(pb)
-        elif name and Gtk.IconTheme.get_default().has_icon(name):
+            self._set_pixbuf(pb, sf)
+        elif name and not name.startswith("/") and Gtk.IconTheme.get_default().has_icon(name):
             self.image.set_from_icon_name(name, Gtk.IconSize.MENU)
             self.image.set_pixel_size(size)
         else:
-            pb = pixmap_to_pixbuf(p.get("IconPixmap"), size)
+            pb = pixmap_to_pixbuf(pixmap, size * sf)
             if pb is not None:
-                self.image.set_from_pixbuf(pb)
+                self._set_pixbuf(pb, sf)
             else:
                 self.image.set_from_icon_name("application-x-executable",
                                               Gtk.IconSize.MENU)
@@ -183,6 +209,12 @@ class TrayItem:
         if menu_path and (self.menu_client is None
                           or self.menu_client.path != menu_path):
             self.menu_client = DBusMenuClient(self.conn, self.service, menu_path)
+
+    def _set_pixbuf(self, pb, sf):
+        if sf > 1:
+            self.image.set_from_surface(Gdk.cairo_surface_create_from_pixbuf(pb, sf, None))
+        else:
+            self.image.set_from_pixbuf(pb)
 
     # ── 입력 ──
     def _press(self, widget, ev):
@@ -259,11 +291,14 @@ class TrayMenuPopup(PanelPopup):
 
     def __init__(self):
         super().__init__(dim=False)
+        self._gen = 0              # 메뉴를 빨리 두 번 열면 늦게 온 옛 응답이 새 메뉴를 덮었다 — 세대로 거른다
         self.get_style_context().add_class("tray-menu")
         self.list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.root.pack_start(self.list, True, True, 0)
 
     def present_for(self, item, widget):
+        self._gen += 1
+        gen = self._gen
         for c in self.list.get_children():
             self.list.remove(c)
 
@@ -289,6 +324,8 @@ class TrayMenuPopup(PanelPopup):
             return
 
         def ready(node):
+            if gen != self._gen:           # 그사이 다른 메뉴를 열었다
+                return
             if node is None or not node.children:
                 self.list.pack_start(
                     Gtk.Label(label="메뉴를 읽지 못했습니다.", xalign=0),
@@ -366,6 +403,14 @@ class TrayBox(Gtk.Box):
         return None
 
     def _on_call(self, _conn, sender, _path, _iface, method, params, inv):
+        # 예외가 나도 곧바로 답한다 (안 그러면 부른 앱이 D-Bus 시간 제한까지 멈춘다)
+        try:
+            self._handle_call(sender, method, params, inv)
+        except Exception as e:
+            dbg("트레이 D-Bus 처리 실패", method, e)
+            inv.return_dbus_error("org.freedesktop.DBus.Error.Failed", f"{method}: {e}")
+
+    def _handle_call(self, sender, method, params, inv):
         if method == "RegisterStatusNotifierItem":
             arg = params.unpack()[0]
             if arg.startswith("/"):

@@ -29,6 +29,7 @@ from sekaishell.shell import ShellService                # noqa: E402
 from sekaishell.updates import UpdateNotifier            # noqa: E402
 from sekaishell.gpuhint import GpuHint                   # noqa: E402
 from sekaishell import pins                               # noqa: E402
+from sekaishell import startpins                          # noqa: E402
 from sekaishell import monitors                           # noqa: E402
 from sekaishell.taskpreview import TaskPreview           # noqa: E402
 
@@ -151,7 +152,12 @@ class Hypr:
             pass
 
     def subscribe(self, on_event):
-        """이벤트 소켓을 GLib 메인루프에 연결"""
+        """이벤트 소켓을 GLib 메인루프에 연결. 끊기면 잠시 뒤 다시 붙는다
+        (예전엔 한 번 끊기면 그대로라 작업 표시줄이 창 변화를 더는 몰랐다)"""
+        self._on_event = on_event
+        self._connect_events()
+
+    def _connect_events(self):
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.connect(f"{self.dir}/.socket2.sock")
         s.setblocking(False)
@@ -162,7 +168,12 @@ class Hypr:
                 data = sock.recv(8192)
             except BlockingIOError:
                 return True
-            if not data:
+            except OSError:
+                data = b""
+            if not data:                       # 끊겼다
+                sock.close()
+                self._evsock = None
+                GLib.timeout_add(1000, self._reconnect_events)
                 return False
             self._buf += data
             while b"\n" in self._buf:
@@ -170,11 +181,22 @@ class Hypr:
                 text = line.decode("utf-8", "replace")
                 if ">>" in text:
                     name, _, arg = text.partition(">>")
-                    on_event(name, arg)
+                    self._on_event(name, arg)
             return True
 
-        GLib.io_add_watch(s, GLib.IO_IN | GLib.IO_HUP, reader)
+        GLib.io_add_watch(s, GLib.IO_IN | GLib.IO_HUP | GLib.IO_ERR, reader)
         self._evsock = s
+
+    def _reconnect_events(self):
+        """다시 붙기 — 안 되면(Hyprland 가 아직/이미 없다) 2초마다 다시. 붙으면 그동안 놓친 변화를 한 번 알린다"""
+        try:
+            self._connect_events()
+        except OSError:
+            GLib.timeout_add(2000, self._reconnect_events)
+            return False
+        dbg("Hyprland 이벤트 소켓 다시 연결")
+        self._on_event("monitoradded", "")     # 작업 표시줄·모니터를 다시 맞추게
+        return False
 
 
 # ───────────────────────────────────────────────────────────────
@@ -230,12 +252,23 @@ def sort_key(name):
 HIDDEN_APPS = {"foot-server", "footclient"}
 
 
+def app_dirs():
+    """앱(.desktop) 폴더 — XDG 규칙 순서 (앞 폴더의 같은 이름이 이긴다).
+    XDG_DATA_HOME(~/.local/share) → XDG_DATA_DIRS. SekaiOS 는 XDG_DATA_DIRS 맨 앞에
+    /usr/share/sekai/data 를 둬서 데비안 항목을 덮어쓴다 (kitty → sekai-terminal, foot-server 숨김 등).
+    예전엔 세 폴더를 고정해 둬서 덮어쓰기를 무시했다 — 시작 메뉴 "터미널"이 설정 없는 맨 kitty 를 띄웠다."""
+    home = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    rest = os.environ.get("XDG_DATA_DIRS") or "/usr/share/sekai/data:/usr/local/share:/usr/share"
+    out = []
+    for d in [home] + rest.split(":"):
+        d = os.path.join(d, "applications") if d else ""
+        if d and d not in out:
+            out.append(d)
+    return out
+
+
 def load_apps():
-    dirs = [
-        os.path.expanduser("~/.local/share/applications"),
-        "/usr/local/share/applications",
-        "/usr/share/applications",
-    ]
+    dirs = app_dirs()
     apps, seen = [], set()
     for d in dirs:
         if not os.path.isdir(d):
@@ -259,7 +292,8 @@ def load_apps():
                         entry[k] = v
             except OSError:
                 continue
-            if entry.get("NoDisplay", "").lower() == "true":
+            # 숨김 — 앞 폴더에서 숨긴 이름은 뒤 폴더의 같은 이름도 숨는다 (seen 에 먼저 넣었다)
+            if entry.get("NoDisplay", "").lower() == "true" or entry.get("Hidden", "").lower() == "true":
                 continue
             if fn[:-len(".desktop")].lower() in HIDDEN_APPS:
                 continue
@@ -278,9 +312,63 @@ def load_apps():
                 "terminal": entry.get("Terminal", "").lower() == "true",
                 "comment": localized(entry, "Comment"),
                 "name_en": entry.get("Name", name),      # 영어 이름으로도 검색되게
+                "path": os.path.join(d, fn),              # 바탕 화면 바로 가기를 만들 때 복사한다
             })
     apps.sort(key=lambda a: sort_key(a["name"]))
     return apps
+
+
+def desktop_dir():
+    """바탕 화면 폴더 — sekai-desk 가 보여 주는 곳과 같게 (xdg-user-dir DESKTOP, 없으면 ~/Desktop)"""
+    try:
+        p = subprocess.run(["xdg-user-dir", "DESKTOP"], capture_output=True,
+                           text=True, timeout=2).stdout.strip()
+    except Exception:
+        p = ""
+    if not p or p == os.path.expanduser("~"):
+        p = os.path.expanduser("~/Desktop")
+    os.makedirs(p, exist_ok=True)
+    return p
+
+
+def make_desktop_shortcut(app):
+    """시작 메뉴 → 바탕 화면에 바로 가기: 앱의 .desktop 파일을 바탕 화면 폴더에 복사.
+    같은 이름이 있으면 덮어쓰지 않는다 (내용이 같으면 이미 있는 것, 다르면 이름-2 …).
+    실행 권한과 신뢰 표시(metadata::trusted)를 붙인다 — 파일 관리자(Thunar)에서 열어도 묻지 않게."""
+    src = app.get("path")
+    if not src:
+        return
+    try:
+        with open(src, "rb") as f:
+            data = f.read()
+        ddir = desktop_dir()
+    except OSError as e:
+        dbg("바로 가기 만들기 실패", e)
+        return
+    base = os.path.basename(src)
+    stem = base[:-len(".desktop")] if base.endswith(".desktop") else base
+    dst, n = os.path.join(ddir, base), 2
+    while os.path.lexists(dst):
+        try:
+            with open(dst, "rb") as f:
+                if f.read() == data:
+                    return                                  # 이미 있다
+        except OSError:
+            pass
+        dst = os.path.join(ddir, f"{stem}-{n}.desktop")
+        n += 1
+    try:
+        with open(dst, "xb") as f:                          # 새로 만들 때만 (그사이 생긴 파일을 덮지 않게)
+            f.write(data)
+        os.chmod(dst, 0o755)
+    except OSError as e:
+        dbg("바로 가기 만들기 실패", e)
+        return
+    try:
+        subprocess.Popen(["gio", "set", dst, "metadata::trusted", "true"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        pass
 
 
 def launch(app):
@@ -333,6 +421,7 @@ def icon_image(names, size):
 # ───────────────────────────────────────────────────────────────
 
 # 고정 타일 기본값: (표시이름, .desktop 이름 후보들, 아이콘 후보들)
+#   사용자가 고치면 ~/.config/sekai/start-pins.json (sekaishell/startpins.py) 을 쓴다
 DEFAULT_PINS = [
     ("파일",     ["thunar", "pcmanfm", "org.gnome.nautilus"],               ["system-file-manager", "folder"]),
     ("웹",       ["google-chrome", "chromium", "firefox-esr"],             ["chromium", "web-browser"]),
@@ -346,8 +435,10 @@ DEFAULT_PINS = [
 # 사용자 전환: 먼저 이 화면을 잠그고 로그인 화면으로 간다.
 #   Wayland 의 sekai-lock 은 잠긴 뒤 곧바로 0 으로 끝난다 (swaylock -f 와 같은 약속).
 #   X11 의 sekai-lock 은 xsecurelock 이 잠금이 풀릴 때까지 앞에서 돈다 → 뒤로 돌리고 잠시 뒤 전환.
-SWITCH_USER_CMD = ("sekai-lock && pkexec /usr/libexec/sekai/sekai-switch-user" if _layer.WAYLAND else
-                   "sekai-lock & sleep 1.5; pkexec /usr/libexec/sekai/sekai-switch-user")
+#   lock-now: sekai-lock 이 실패하면 swaylock 으로 대신 잠그고, 잠금 프로그램이 죽으면 다시 띄운다.
+#   (X11 은 잠긴 채 앞에서 돈다 — 전환은 sekai-switch-user 가 잠김을 직접 확인한 뒤에만 한다)
+SWITCH_USER_CMD = ("/usr/libexec/sekai/lock-now && pkexec /usr/libexec/sekai/sekai-switch-user" if _layer.WAYLAND else
+                   "/usr/libexec/sekai/lock-now & sleep 1.5; pkexec /usr/libexec/sekai/sekai-switch-user")
 
 
 class StartMenu(Gtk.Window):
@@ -495,7 +586,7 @@ class StartMenu(Gtk.Window):
         pop.get_style_context().add_class("power-pop")
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         groups = (
-            (("잠금",        "pw-lock",    "system-lock-screen-symbolic", lambda: subprocess.Popen(["sekai-lock"])),
+            (("잠금",        "pw-lock",    "system-lock-screen-symbolic", lambda: subprocess.Popen(["/usr/libexec/sekai/lock-now"])),
              ("사용자 전환", "pw-switch",  "system-switch-user-symbolic",
               lambda: subprocess.Popen(["sh", "-c", SWITCH_USER_CMD])),
              ("로그아웃",    "pw-exit",    "system-log-out-symbolic",     lambda: self.hypr.dispatch("exit"))),
@@ -581,29 +672,40 @@ class StartMenu(Gtk.Window):
         self.present()
         self.search.grab_focus()
 
+    def _start_defaults(self):
+        """고정 타일 기본값 → (id 목록, id → (짧은 이름, 아이콘)) — 설치된 것 중 후보 순서대로"""
+        by_id = {a["id"]: a for a in self.apps}
+        ids, labels = [], {}
+        for label, cands, icons in DEFAULT_PINS:
+            aid = next((c for c in cands if c in by_id), None)
+            if aid and aid not in ids:
+                ids.append(aid)
+                labels[aid] = (label, icons[0])
+        return ids, labels
+
     def fill_tiles(self):
         for c in self.flow.get_children():
             self.flow.remove(c)
-        # 표시 이름만으로 찾으면 'Thunar File Manager' 같은 걸 놓친다.
-        # .desktop 파일 ID(thunar, org.xfce.mousepad …)를 먼저 본다.
-        by_key = {}
-        for a in self.apps:
-            by_key.setdefault(a["name"].lower(), a)
-            by_key[a["id"]] = a
-        for label, cands, icons in DEFAULT_PINS:
-            app = next((by_key[c] for c in cands if c in by_key), None)
+        by_id = {a["id"]: a for a in self.apps}
+        defaults, labels = self._start_defaults()
+        for aid in startpins.load(defaults):
+            app = by_id.get(aid)
             if not app:
-                continue
+                continue                                     # 지운 앱
+            label, icon = labels.get(aid, (app["name"], "application-x-executable"))
             btn = Gtk.Button()
             btn.get_style_context().add_class("tile")
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-            box.pack_start(icon_image(app["icon"] or icons[0], 32), False, False, 0)
+            box.pack_start(icon_image(app["icon"] or icon, 32), False, False, 0)
             t = Gtk.Label(label=label)
             t.set_ellipsize(Pango.EllipsizeMode.END)
+            t.set_max_width_chars(10)
             box.pack_start(t, False, False, 0)
             btn.add(box)
             btn.set_tooltip_text(app["name"])
             btn.connect("clicked", lambda _w, a=app: (self.close(), launch(a)))
+            btn.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+            btn.connect("button-press-event", lambda _w, ev, a=app: self._app_menu(a, ev))
             self.flow.add(btn)
         self.flow.show_all()
 
@@ -629,16 +731,31 @@ class StartMenu(Gtk.Window):
         self.listbox.show_all()
 
     def _row_menu(self, lb, ev):
-        """앱 목록 우클릭 — 작업 표시줄에 고정/해제"""
+        """앱 목록 우클릭"""
         if ev.button != 3:
             return False
         row = lb.get_row_at_y(int(ev.y))
         if row is None or not hasattr(row, "app"):
             return False
-        aid = row.app["id"]
+        return self._app_menu(row.app, ev)
+
+    def _app_menu(self, app, ev):
+        """앱 우클릭 메뉴 (목록·고정 타일 같이) — 열기 · 시작 메뉴 고정 · 작업 표시줄 고정 · 바탕 화면 바로 가기"""
+        if ev.button != 3:
+            return False
+        aid = app["id"]
+        defaults = self._start_defaults()[0]
         m = Gtk.Menu()
         it = Gtk.MenuItem(label="열기")
-        it.connect("activate", lambda *_: (self.close(), launch(row.app)))
+        it.connect("activate", lambda *_: (self.close(), launch(app)))
+        m.append(it)
+        m.append(Gtk.SeparatorMenuItem())
+        if startpins.is_pinned(aid, defaults):
+            it = Gtk.MenuItem(label="시작 메뉴에서 고정 해제")
+            it.connect("activate", lambda *_: (startpins.unpin(aid, defaults), self.fill_tiles()))
+        else:
+            it = Gtk.MenuItem(label="시작 메뉴에 고정")
+            it.connect("activate", lambda *_: (startpins.pin(aid, defaults), self.fill_tiles()))
         m.append(it)
         if pins.is_pinned(aid):
             it = Gtk.MenuItem(label="작업 표시줄에서 고정 해제")
@@ -646,6 +763,10 @@ class StartMenu(Gtk.Window):
         else:
             it = Gtk.MenuItem(label="작업 표시줄에 고정")
             it.connect("activate", lambda *_: pins.pin(aid))
+        m.append(it)
+        it = Gtk.MenuItem(label="바탕 화면에 바로 가기 만들기")
+        it.set_sensitive(bool(app.get("path")))
+        it.connect("activate", lambda *_: make_desktop_shortcut(app))
         m.append(it)
         popup_menu(m, self, ev)
         return True
@@ -722,24 +843,60 @@ def popup_menu(menu, widget, ev):
     menu.popup_at_pointer(ev)
 
 
+def run_limited(argv, done, secs=3, capture=False):
+    """명령을 기다리지 않고 돌린다 — 끝나면 done(출력 또는 None) 을 메인 스레드에서 한 번.
+    secs 초 안에 안 끝나면 죽이고 done(None) (PipeWire 가 멈추면 wpctl 이 안 끝나
+    음량 아이콘이 영원히 멈춰 있었다)."""
+    flags = Gio.SubprocessFlags.STDERR_SILENCE | (Gio.SubprocessFlags.STDOUT_PIPE if capture
+                                                  else Gio.SubprocessFlags.STDOUT_SILENCE)
+    try:
+        proc = Gio.Subprocess.new(argv, flags)
+    except GLib.Error:
+        done(None)
+        return
+    st = {"done": False}
+
+    def finish(out):
+        if st["done"]:
+            return
+        st["done"] = True
+        if st.get("src"):
+            GLib.source_remove(st["src"])
+        done(out)
+
+    def timeout():
+        st["src"] = 0
+        proc.force_exit()
+        finish(None)
+        return False
+    st["src"] = GLib.timeout_add_seconds(secs, timeout)
+
+    def fin(p, res):
+        try:
+            if capture:
+                _ok, out, _err = p.communicate_utf8_finish(res)
+            else:
+                p.wait_finish(res)
+                out = ""
+            finish(out if p.get_successful() else None)
+        except GLib.Error:
+            finish(None)
+    if capture:
+        proc.communicate_utf8_async(None, None, fin)
+    else:
+        proc.wait_async(None, fin)
+
+
 def query_volume(cb):
     """wpctl get-volume 을 기다리지 않고 — cb((0~1 음량, 음소거)) 또는 cb(None) 을 메인 스레드에서.
     동기로 부르면 PipeWire 가 바쁠 때 작업 표시줄 전체가 굳었다."""
-    try:
-        proc = Gio.Subprocess.new(["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"],
-                                  Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE)
-    except GLib.Error:
-        cb(None)
-        return
-
-    def done(p, res):
+    def done(out):
         try:
-            _ok, out, _err = p.communicate_utf8_finish(res)
             parts = (out or "").split()
-            cb((float(parts[1]) if len(parts) > 1 else 0.0, "MUTED" in (out or "")))
-        except (GLib.Error, ValueError):
+            cb((float(parts[1]), "MUTED" in out) if out and len(parts) > 1 else None)
+        except ValueError:
             cb(None)
-    proc.communicate_utf8_async(None, None, done)
+    run_limited(["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"], done, capture=True)
 
 
 class TaskbarMixin:
@@ -792,8 +949,12 @@ class TaskbarMixin:
         self._hook_preview()
         if snap is None:
             snap = self.task_snapshot()
+        # 미리보기가 이 작업 표시줄의 버튼으로 뜨길 기다리는 중이면 — 새 버튼으로 옮긴다 (아래)
+        pend = self.preview.pending()
+        pend = pend if pend and pend[1].get_toplevel() is self else None
         for c in self.tasks.get_children():
             self.tasks.remove(c)
+        self._task_btns = {}                                # 앱 묶음 → (버튼, 창들)
         clients = self._my_clients(snap["clients"], snap["origins"])
         clients = [c for c in clients if c.get("mapped", True) and c.get("address")]  # 연 순서
         active_addr = snap["active"]
@@ -811,6 +972,12 @@ class TaskbarMixin:
         for key in pinned + [k for k in order if k not in pinned]:
             self._app_button(key, groups.get(key, []), active_addr)
         self.tasks.show_all()
+        if pend:
+            new = self._task_btns.get(pend[0])
+            if new and new[1]:
+                self.preview.retarget(new[0], new[1], active_addr)
+            else:
+                self.preview.cancel_show()                  # 그 앱의 창이 없어졌다
         return False
 
     def _app_button(self, key, wins, active_addr):
@@ -852,6 +1019,7 @@ class TaskbarMixin:
         btn.connect("leave-notify-event", lambda *_: self.preview.schedule_hide() and False)
         btn.connect("button-press-event", self.on_app_press, app_id, wins, name)
         self.tasks.pack_start(btn, False, False, 0)
+        self._task_btns[key] = (btn, wins)
 
     @staticmethod
     def _minimized(c):
@@ -1209,10 +1377,23 @@ class Panel(Gtk.Window, TaskbarMixin):
     def _on_vol_scale(self, sc):
         if getattr(self, "_vol_guard", False):
             return
-        subprocess.Popen(["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@",
-                          f"{int(sc.get_value())}%"])
+        self._set_volume(int(sc.get_value()))
         self.vol_value.set_text(f"{int(sc.get_value())}%")
         self.refresh_sys(150)
+
+    def _set_volume(self, pct):
+        """슬라이더 음량 — 마지막 값만. wpctl 은 한 번에 하나만 띄우고, 도는 동안 바뀐 값은 끝난 뒤
+        한 번 더 (값마다 따로 띄우면 늦게 끝난 옛 값이 이겨 슬라이더와 실제 음량이 어긋났다)"""
+        self._vol_want = pct
+        if getattr(self, "_vol_setting", False):
+            return
+        self._vol_setting = True
+
+        def done(_out, sent=pct):
+            self._vol_setting = False
+            if self._vol_want != sent:
+                self._set_volume(self._vol_want)
+        run_limited(["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{pct}%"], done)
 
     def _on_vol_scroll(self, _w, ev):
         step = 0
@@ -1511,13 +1692,12 @@ def main():
     if _layer.WAYLAND:
         # 끌어서 스냅 미리보기 (X11 기본 화면 모드에선 xfwm4 가 가장자리 스냅을 직접 한다)
         from sekaishell.snappreview import SnapPreview
-        from sekaishell.snaplayouts import SnapLayouts
         from sekaishell.snapassist import SnapAssist
         wm.preview = SnapPreview()
         wm.assist = SnapAssist(wm)            # 스냅한 뒤 남은 칸에 둘 창 고르기
         from sekaishell.snaplayouts import TopLayoutBar
         wm.topbar = TopLayoutBar()            # 위쪽 가운데로 끌면 내려오는 레이아웃 바
-        wm.layouts = SnapLayouts(wm)          # 최대화 버튼에 마우스를 올리면 뜨는 배치 그림
+        # (최대화 버튼에 마우스를 올리면 뜨던 배치 그림은 없앴다 — 위쪽 레이아웃 바와 겹쳐 방해됐다)
     panel.event_hooks.append(wm.on_event)
 
     # 음량 키 — OSD 가 작업 스레드에서 바꾸고, 끝나면 작업 표시줄 아이콘도 새로

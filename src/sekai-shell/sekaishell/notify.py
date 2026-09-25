@@ -90,7 +90,8 @@ def body_markup(body):
     """알림 본문(규격상 제한된 HTML: b·i·u·a·br·img) → Pango 마크업. 못 만들면 None.
     set_markup 은 틀린 마크업이어도 예외 없이 빈 글자가 된다 — "&" 나 "<" 가 든 본문이 빈칸으로 보였다.
     태그 사이 글자는 엔티티를 풀었다가 다시 이스케이프한다 (규격대로 &amp; 를 보내는 앱도, 날것 & 를
-    보내는 앱도 같게 보이게). 허용하지 않은 태그(img 등)는 뺀다."""
+    보내는 앱도 같게 보이게). 규격의 태그만 태그로 쓰고, 나머지 <…> 는 글자 그대로 보인다
+    ("tom <tom@x.com>", "Vec<String>" 이 지워져 "tom", "Vec" 으로 보였다). img 는 alt 글자만."""
     out, pos, open_a = [], 0, False
     for m in _TAG.finditer(body):
         out.append(GLib.markup_escape_text(html.unescape(body[pos:m.start()])))
@@ -110,6 +111,12 @@ def body_markup(body):
                 if h:
                     out.append('<a href="%s">' % GLib.markup_escape_text(html.unescape(h.group(1))))
                     open_a = True
+        elif tag == "img":
+            alt = re.search(r"""alt\s*=\s*["']([^"']*)["']""", attrs)
+            if alt:
+                out.append(GLib.markup_escape_text(html.unescape(alt.group(1))))
+        else:                                   # 규격에 없는 태그 — 글자 그대로
+            out.append(GLib.markup_escape_text(html.unescape(m.group(0))))
     out.append(GLib.markup_escape_text(html.unescape(body[pos:])))
     if open_a:
         out.append("</a>")
@@ -123,8 +130,10 @@ def body_markup(body):
 
 
 def body_plain(body):
-    """마크업을 못 쓸 때 — 태그를 빼고 엔티티를 푼 글자"""
-    return html.unescape(re.sub(r"<[^<>]*>", "", re.sub(r"<br\s*/?>", "\n", body, flags=re.I)))
+    """마크업을 못 쓸 때 — 규격의 태그(b·i·u·a·img)만 빼고 엔티티를 푼 글자. 나머지 <…> 는 그대로"""
+    s = re.sub(r"<br\s*/?>", "\n", body, flags=re.I)
+    s = re.sub(r"</?(?:b|i|u|a|img)(?:\s[^<>]*)?/?>", "", s, flags=re.I)
+    return html.unescape(s)
 
 
 def pixbuf_from_image_data(v):
@@ -498,6 +507,14 @@ class NotificationService:
 
     # ── D-Bus ──────────────────────────────────────────────
     def _on_call(self, _conn, _sender, _path, _iface, method, params, inv):
+        # 여기서 예외가 나면 답을 못 보내, 알림을 보낸 앱이 D-Bus 시간 제한(25초)까지 멈췄다 — 곧바로 오류로 답한다
+        try:
+            self._handle_call(method, params, inv)
+        except Exception as e:
+            dbg("알림 D-Bus 처리 실패", method, e)
+            inv.return_dbus_error("org.freedesktop.DBus.Error.Failed", f"{method}: {e}")
+
+    def _handle_call(self, method, params, inv):
         if method == "GetCapabilities":
             inv.return_value(GLib.Variant("(as)", (
                 ["body", "body-markup", "body-hyperlinks", "icon-static",

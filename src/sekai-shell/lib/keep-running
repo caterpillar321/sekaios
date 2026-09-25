@@ -16,8 +16,12 @@ alive() {
 }
 fails=0
 while alive; do
+    started=$(date +%s)
     "$@" && exit 0
-    # 계속 곧바로 죽으면 (설정 오류 등) 조금씩 더 기다린다
+    # 계속 곧바로 죽으면 (설정 오류 등) 조금씩 더 기다린다.
+    #   한동안(30초) 잘 돌다 죽은 것이면 처음부터 센다 — 안 그러면 몇 시간에 한 번씩 죽어도
+    #   여섯 번째부터는 매번 5초씩 작업 표시줄이 비었다
+    [ $(( $(date +%s) - started )) -ge 30 ] && fails=0
     fails=$((fails + 1))
     [ "$fails" -gt 5 ] && sleep 5 || sleep 1
 done
