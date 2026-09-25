@@ -144,6 +144,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if os.path.isdir(os.path.join(HERE, "sekaishell")):
     sys.path.insert(0, HERE)
 from sekaishell import logo as sekai_logo  # noqa: E402
+from sekaishell.monitors import primary_gdk  # noqa: E402
 
 
 def settings():
@@ -470,7 +471,7 @@ class Locker:
 
         self.main = None
         self.mons = []                  # 창마다 붙은 모니터 (views·windows 와 같은 순서)
-        prim = display.get_primary_monitor() or (monitors[0] if monitors else None)
+        prim = primary_gdk(display) if monitors else None
         for m in monitors:
             self._add_view(m, primary=(m == prim))
         if self.main is None and self.views:

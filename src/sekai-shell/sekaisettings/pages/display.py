@@ -1,4 +1,4 @@
-"""디스플레이 — 해상도 / 주사율 / 배율 / 회전.
+"""디스플레이 — 배치 / 주 디스플레이 / 해상도 / 주사율 / 배율 / 회전.
 
 바꾸면 바로 적용하고 "유지할까요?"를 15초 동안 묻는다. 답이 없으면 되돌린다
 (모니터가 못 받아들이는 모드라 화면이 안 보여도 저절로 돌아오게).
@@ -10,7 +10,8 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib  # noqa: E402
 
 from ..util import hyprctl, keyword, spawn
-from ..widgets import Page, button, combo, info, row, switch
+from ..widgets import Page, button, combo, row, switch
+from .arrange import ArrangeView
 
 
 TRANSFORMS = [(0, "가로 (기본)"), (1, "세로 90°"), (2, "가로 180°"), (3, "세로 270°"),
@@ -135,16 +136,42 @@ def build(store):
         finally:
             quiet["on"] = False
 
+    def snapshot():
+        """모니터 위치와, 그때 떠 있던 창들의 위치 — 배치를 바꾸기 직전에 찍어 둔다"""
+        mons_ = {m.get("id"): (m.get("x", 0), m.get("y", 0)) for m in (hyprctl("monitors", js=True) or [])}
+        wins = [(c.get("address"), c.get("monitor"), tuple(c.get("at", [0, 0])))
+                for c in (hyprctl("clients", js=True) or [])
+                if c.get("floating") and not c.get("fullscreen")]
+        return mons_, wins
+
+    def carry_windows(before):
+        """모니터가 옮겨 간 만큼 그 모니터의 떠 있는 창도 옮긴다 (윈도우처럼 창이 제 화면을 따라가게).
+        Hyprland 는 창을 전체 좌표 그대로 두어서, 창이 엉뚱한 화면으로 넘어가거나 화면 밖에 남는다.
+        바꾸기 전에 있던 창만, 그때 좌표에서 옮긴다 (그 뒤에 열린 확인 창은 이미 새 자리에 뜬다)."""
+        mons_before, wins = before
+        after = {m.get("id"): (m.get("x", 0), m.get("y", 0)) for m in (hyprctl("monitors", js=True) or [])}
+        for addr, mid, (x, y) in wins:
+            if mid not in mons_before or mid not in after:
+                continue
+            dx, dy = after[mid][0] - mons_before[mid][0], after[mid][1] - mons_before[mid][1]
+            if dx or dy:
+                spawn(["hyprctl", "dispatch", "movewindowpixel", f"exact {int(x + dx)} {int(y + dy)},address:{addr}"])
+        return False
+
     def restore(snap):
         cur = store.get("display")
+        before = snapshot()
         store.data["display"] = snap
         store.save()
         store.apply_display()
+        GLib.timeout_add(400, carry_windows, before)
         # 이번에 처음 설정한 모니터는 설정이 없던 상태(권장 모드)로
         for n in cur:
             if n not in snap:
                 keyword("monitor", f"{n}, preferred, auto, 1")
         sync_widgets()
+        if arrange["view"] is not None:          # 배치 그림도 실제 위치로
+            GLib.timeout_add(400, refresh_arrange)
 
     def confirm(snap):
         dlg = Gtk.MessageDialog(transient_for=p.get_toplevel() if p.get_toplevel().is_toplevel()
@@ -183,6 +210,71 @@ def build(store):
         if ask:
             confirm(snap)
 
+    arrange = {"view": None}
+    prim_sw = {}                   # 모니터 이름 → "주 디스플레이로 사용" 스위치
+
+    def refresh_arrange():
+        now = hyprctl("monitors", js=True) or []
+        if arrange["view"] is not None:
+            arrange["view"].set_positions({m.get("name"): (m.get("x", 0), m.get("y", 0)) for m in now})
+        return False
+
+    def apply_layout(pos):
+        """배치 적용 — 모든 모니터의 위치를 한꺼번에 적고 적용, 그리고 유지할지 묻는다"""
+        snap = copy.deepcopy(store.get("display"))
+        before = snapshot()
+        disp = store.data.setdefault("display", {})
+        for n, (x, y) in pos.items():
+            d = dict(disp.get(n, {}))
+            d["position"] = f"{int(x)}x{int(y)}"
+            disp[n] = d
+        store.save()
+        store.apply_display()
+
+        def verify(tries=[0]):
+            # 옮기는 도중 잠깐 겹치면 Hyprland 가 자리를 밀어낸다 — 다르면 한 번 더 보낸다
+            now = {m.get("name"): (m.get("x"), m.get("y")) for m in (hyprctl("monitors", js=True) or [])}
+            if any(now.get(n) != tuple(v) for n, v in pos.items() if n in now) and tries[0] < 1:
+                tries[0] += 1
+                store.apply_display()
+                GLib.timeout_add(300, verify)
+                return False
+            carry_windows(before)
+            return False
+        GLib.timeout_add(300, verify)
+        confirm(snap)
+
+    def current_primary():
+        names = [m.get("name") for m in mons]
+        want = store.get("layout", "primary") or ""
+        return want if want in names else (names[0] if names else "")
+
+    def on_primary(v, n):
+        if quiet["on"]:
+            return
+        if not v:                     # 끌 수는 없다 — 다른 모니터를 주 디스플레이로 고르면 옮겨 간다
+            quiet["on"] = True
+            prim_sw[n].set_active(True)
+            quiet["on"] = False
+            return
+        store.set("layout", "primary", n)
+        quiet["on"] = True
+        try:
+            for k, sw in prim_sw.items():
+                sw.set_active(k == n)
+        finally:
+            quiet["on"] = False
+        if arrange["view"] is not None:
+            arrange["view"].set_primary(n)
+
+    if len(mons) > 1:
+        title = Gtk.Label(label="배치", xalign=0)
+        title.get_style_context().add_class("section-title")
+        p.add_widget(title)
+        view = ArrangeView(mons, current_primary(), store.get("appearance", "accent"), apply_layout)
+        arrange["view"] = view
+        p.add_widget(view)
+
     if not mons:
         w = Gtk.Label(label="모니터 정보를 읽지 못했습니다. "
                             "Hyprland 세션 안에서 실행해 주세요.", xalign=0)
@@ -190,11 +282,18 @@ def build(store):
         p.add_widget(w)
         return p
 
-    for mon in mons:
+    for num, mon in enumerate(mons, 1):
         name = mon.get("name", "?")
         saved = store.get("display").get(name, {})
 
-        s = p.section(f"{_monitor_title(mon)}  ·  {name}")
+        s = p.section(f"{num}.  {_monitor_title(mon)}  ·  {name}" if len(mons) > 1
+                      else f"{_monitor_title(mon)}  ·  {name}")
+        if len(mons) > 1:
+            sw = switch(name == current_primary(), lambda v, n=name: on_primary(v, n))
+            prim_sw[name] = sw
+            row(s, "주 디스플레이로 사용",
+                "작업 표시줄의 알림 영역·바탕화면 아이콘·알림이 이 화면에 뜨고, 로그인하면 창이 여기서 열립니다",
+                icon=["video-display", "preferences-desktop-display"], control=sw)
 
         cur_mode = _nice_mode(mon.get("width", 0), mon.get("height", 0), mon.get("refreshRate", 0.0))
         rates = _by_res(_modes(mon))
@@ -355,8 +454,6 @@ def build(store):
         ctl[name] = {"res": res_combo, "rate": rate_combo, "fill": fill_rates, "scale": scale_combo,
                      "tr": tr_combo, "en": en_switch, "vrr": vrr_combo}
 
-        row(s, "위치", "다중 모니터 배치 (auto 는 자동 배열)",
-            control=info(saved.get("position") or "auto"))
 
     s = p.section("기타")
     def reset():

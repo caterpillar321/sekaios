@@ -59,9 +59,12 @@ DEFAULTS = {
         "natural_scroll": False,
         "tp_natural_scroll": True,
         "tp_tap": True,
-        "follow_mouse": 1,
+        "follow_mouse": 2,       # 2 = 윈도우처럼 클릭해야 초점 이동 (1 = 마우스를 따라)
     },
     "display": {},               # {"DP-1": {...}}
+    "layout": {
+        "primary": "",           # 주 디스플레이 (모니터 이름). 비면 첫 모니터
+    },
     "panel": {
         "height": 48,
         "clock_format": "%H:%M",
@@ -293,6 +296,10 @@ class Store:
             if m.get("vrr"):
                 line += f", vrr, {int(m['vrr'])}"       # 1 = 켜기, 2 = 전체 화면일 때만
             lines.append(line)
+        prim = self.get("layout", "primary")
+        if prim and self.get("display").get(prim, {}).get("enabled", True):
+            # 주 디스플레이 — 로그인하면 첫 워크스페이스(창이 처음 뜨는 곳)가 여기
+            lines.append(f"workspace = 1, monitor:{prim}, default:true")
         lines.append("")
 
         os.makedirs(HYPR_DIR, exist_ok=True)

@@ -296,6 +296,12 @@ class ToastStack(Gtk.Window):
         self.cards = {}      # id -> (widget, timeout_source)
 
     def push(self, n):
+        if not self.get_visible():
+            # 주 디스플레이에 (윈도우처럼). 떠 있는 동안 옮기면 깜빡이므로 처음 뜰 때만
+            from .monitors import primary_gdk
+            m = primary_gdk()
+            if m is not None:
+                GtkLayerShell.set_monitor(self, m)
         self.drop(n.id)
         w = build_card(n, self.service.invoke_action, self.service.dismiss)
         self.box.pack_end(w, False, False, 0)

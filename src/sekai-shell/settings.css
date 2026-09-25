@@ -290,3 +290,17 @@ button.mode-card {
 }
 button.mode-card:hover { background: @hover; }
 button.mode-card.mode-on { border-color: @accent; }
+
+/* 디스플레이 배치 */
+.arrange-frame { border-radius: 10px; }
+.arrange-frame > border { border-radius: 10px; }
+window.identify-win { background: transparent; }
+.identify-num {
+    font-size: 110px;
+    font-weight: 800;
+    color: #ffffff;
+    background-color: rgba(21, 21, 23, 0.88);
+    border: 2px solid alpha(@accent, 0.8);
+    border-radius: 18px;
+    padding: 8px 52px;
+}

@@ -114,8 +114,8 @@ def build_input(store):
         control=switch(i["natural_scroll"],
                        lambda v: store.set("input", "natural_scroll", v)))
     row(s, "마우스를 따라 포커스", "커서가 올라간 창이 활성화됩니다",
-        control=switch(bool(i["follow_mouse"]),
-                       lambda v: store.set("input", "follow_mouse", 1 if v else 0)))
+        control=switch(int(i["follow_mouse"]) == 1,
+                       lambda v: store.set("input", "follow_mouse", 1 if v else 2)))
 
     s = p.section("터치패드")
     row(s, "스크롤 방향 반대로",

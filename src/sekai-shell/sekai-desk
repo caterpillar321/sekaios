@@ -34,6 +34,7 @@ if os.path.isdir(os.path.join(HERE, "sekaishell")):
     sys.path.insert(0, HERE)
 from sekaishell.layer import GtkLayerShell  # noqa: E402  (X11 기본 화면 모드에선 흉내)
 from sekaishell.popup import PanelPopup, make_translucent  # noqa: E402,F401
+from sekaishell.monitors import primary_gdk  # noqa: E402
 
 CFG = os.path.expanduser("~/.config/sekai/settings.json")
 FALLBACK_WALL = "/usr/share/backgrounds/sekai/hatsune.jpg"
@@ -824,7 +825,7 @@ def main():
             d.destroy()
         desks.clear()
         n = disp.get_n_monitors()
-        prim = disp.get_primary_monitor() or (disp.get_monitor(0) if n else None)
+        prim = primary_gdk(disp) if n else None
         for i in range(n):
             m = disp.get_monitor(i)
             d = Desk(m, primary=(m == prim))
@@ -848,6 +849,10 @@ def main():
     disp.connect("monitor-removed", later)
 
     def on_hup(*_):
+        # 주 디스플레이가 바뀌었으면 아이콘을 옮긴다 (다시 만든다)
+        prim = primary_gdk(disp)
+        if any(d.primary != (d.monitor == prim) for d in desks if hasattr(d, "primary")):
+            later()
         for d in desks:
             GLib.idle_add(lambda d=d: (d.reload_settings(), False)[1])
         return True
