@@ -271,7 +271,7 @@ Depends: sekai-shell (= ${FULL}),
  papirus-icon-theme, adwaita-icon-theme,
  gnome-keyring, libpam-gnome-keyring, libpam-runtime,
  ibus, ibus-wayland, ibus-hangul, ibus-gtk3, ibus-gtk4, locales, greetd,
- plymouth, plymouth-themes,
+ plymouth (>= 24.004.60-5+sekai1), plymouth-themes,
  dbus-user-session,
  libgl1-mesa-dri, libegl-mesa0, mesa-utils
 Recommends: htop, tmux, tree, ncdu, vim, nano, git, curl, wget,
