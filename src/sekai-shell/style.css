@@ -532,5 +532,20 @@ button.snap-card:hover { background: @hover; border-color: @accent; }
 .snap-zone-cell.hot { background: @accent; }
 
 /* 작업 표시줄에 고정한 앱 (실행 중이 아닐 때) — 아이콘만 */
-.task-btn.pin-btn { min-width: 40px; padding: 0 8px; }
+/* 윈도우 7 이후 식 — 앱마다 아이콘 하나, 아래 막대로 상태 (실행 중 = 짧게, 초점 = 길게 강조색) */
+.task-btn.app-btn { min-width: 44px; min-height: 40px; padding: 0 10px; margin: 0 1px; }
+.task-btn.app-btn.running {
+    background-image: linear-gradient(@text3, @text3);
+    background-size: 6px 3px;
+    background-position: 50% 96%;
+    background-repeat: no-repeat;
+}
+.task-btn.app-btn.active {
+    background-color: @raised;
+    background-image: linear-gradient(@accent, @accent);
+    background-size: 16px 3px;
+}
+.task-btn.app-btn.minimized { background-color: transparent; }
+.task-list-active { font-weight: 600; }
+.task-list-min { color: @text3; }
 menu.task-menu, .task-menu menuitem { font-size: 13px; }
