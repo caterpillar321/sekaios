@@ -648,6 +648,12 @@ class StartMenu(Gtk.Window):
         pop.set_relative_to(self.power_btn)
         pop.set_position(Gtk.PositionType.RIGHT)
         pop.get_style_context().add_class("power-pop")
+        # 바로 뜨고 바로 닫힌다 — GTK3 팝오버의 여닫기 효과(150ms 동안 옮기며 흐려지기)는 GTK 가 매 프레임
+        #   CPU 로 다시 그린다(그림자 흐림까지). 반투명·흐림 처리된 시작 메뉴 위라 실제 PC 에선 버벅였다
+        pop.set_transitions_enabled(False)
+        # 열려 있는 동안 전원 버튼의 "전원" 풍선 도움말이 메뉴에 겹쳐 떠 있지 않게
+        pop.connect("show", lambda *_: self.power_btn.set_has_tooltip(False))
+        pop.connect("closed", lambda *_: self.power_btn.set_has_tooltip(True))
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         groups = (
             (("잠금",        "pw-lock",    "system-lock-screen-symbolic", lambda: subprocess.Popen(["/usr/libexec/sekai/lock-now"])),
