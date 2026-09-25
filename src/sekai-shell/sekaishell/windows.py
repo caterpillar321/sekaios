@@ -51,6 +51,7 @@ class WindowManager:
         self._poll_src = 0         # 끄는 동안 커서 위치를 읽는 타이머
         self._bar_hit = None       # 바에서 가리킨 (영역, 나머지 칸들)
         self._drag_mons = []
+        self.mon_ws = {}           # 모니터 이름 → 보이던 워크스페이스 id (모니터가 빠질 때 창을 옮기려고)
         self.sizes = self._load()
         GLib.timeout_add_seconds(3, self._poll)
 
@@ -355,7 +356,40 @@ class WindowManager:
         for c in self.hypr.query("clients") or []:
             if c.get("address"):
                 self.known[c["address"]] = c
+        self._note_monitors()
         return True
+
+    def _note_monitors(self):
+        mons = self.hypr.query("monitors") or []
+        # 덮어쓰지 않고 갱신 — 빠진 모니터의 기록은 _monitor_gone 이 쓸 때까지 남긴다
+        #   (빠진 뒤에 온 다른 이벤트로 여기가 먼저 불릴 수 있다)
+        for m in mons:
+            self.mon_ws[m.get("name")] = (m.get("activeWorkspace") or {}).get("id")
+        return False
+
+    def _monitor_gone(self, name):
+        """모니터가 빠졌다 — 윈도우처럼 그 화면에 보이던 창을 남은 화면으로 옮긴다.
+        Hyprland 는 워크스페이스만 옮겨서, 창이 안 보이는 워크스페이스에 화면 밖 좌표로 남는다."""
+        ws = self.mon_ws.pop(name, None)
+        mons = self.hypr.query("monitors") or []
+        if not mons:
+            return False
+        target = next((m for m in mons if m.get("focused")), mons[0])
+        tws = (target.get("activeWorkspace") or {}).get("id")
+        for c in self.hypr.query("clients") or []:
+            addr = c.get("address")
+            if not addr:
+                continue
+            if ws is not None and tws is not None and (c.get("workspace") or {}).get("id") == ws:
+                self.hypr.dispatch(f"movetoworkspacesilent {tws},address:{addr}")
+            zone = self.snapped.get(addr)
+            if zone:
+                GLib.timeout_add(150, lambda a=addr, z=zone: self.snap_to(a, z, mon_name=target.get("name"),
+                                                                           assist=False) and False)
+            else:
+                GLib.timeout_add(150, self._keep_visible, addr)
+        GLib.timeout_add(300, self._note_monitors)
+        return False
 
     def on_event(self, name, arg):
         if name == "sekaisnapstart":
@@ -385,6 +419,11 @@ class WindowManager:
                 self._closed(c)
         elif name in ("movewindow", "movewindowv2", "windowtitle", "windowtitlev2", "activewindowv2"):
             GLib.idle_add(self._poll_one)
+        if name == "monitorremoved":
+            GLib.timeout_add(300, self._monitor_gone, arg.strip())
+        elif name in ("workspace", "workspacev2", "focusedmon", "moveworkspace", "moveworkspacev2",
+                      "monitoradded", "monitoraddedv2"):
+            GLib.idle_add(self._note_monitors)
 
     def _poll_one(self):
         a = self._active()

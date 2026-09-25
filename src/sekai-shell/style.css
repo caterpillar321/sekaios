@@ -530,3 +530,7 @@ button.snap-card:hover { background: @hover; border-color: @accent; }
 /* 위에서 내려오는 레이아웃 바의 칸 (끄는 중이라 셸이 직접 강조한다) */
 .snap-zone-cell { background: alpha(@fg, 0.20); border-radius: 4px; }
 .snap-zone-cell.hot { background: @accent; }
+
+/* 작업 표시줄에 고정한 앱 (실행 중이 아닐 때) — 아이콘만 */
+.task-btn.pin-btn { min-width: 40px; padding: 0 8px; }
+menu.task-menu, .task-menu menuitem { font-size: 13px; }

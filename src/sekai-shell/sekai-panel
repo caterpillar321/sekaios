@@ -28,6 +28,7 @@ from sekaishell.windows import WindowManager             # noqa: E402
 from sekaishell.shell import ShellService                # noqa: E402
 from sekaishell.updates import UpdateNotifier            # noqa: E402
 from sekaishell.gpuhint import GpuHint                   # noqa: E402
+from sekaishell import pins                               # noqa: E402
 
 # 시작 버튼 로고: layers / world / diamond / blockS / nested / slashes
 DEBUG = os.environ.get("SEKAI_DEBUG") == "1"
@@ -368,6 +369,7 @@ class StartMenu(Gtk.Window):
         self.set_size_request(self.W, self.H)
 
         self.catcher = ClickCatcher(self.close)
+        self.other_catchers = []     # 다른 모니터를 눌러도 닫히게 (어둡게 하진 않는다)
 
         root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         root.get_style_context().add_class("menu-root")
@@ -444,6 +446,8 @@ class StartMenu(Gtk.Window):
         self.listbox.get_style_context().add_class("app-list")
         self.listbox.set_header_func(self._letter_header, None)
         self.listbox.connect("row-activated", self.on_row)
+        self.listbox.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.listbox.connect("button-press-event", self._row_menu)
         scroll.add(self.listbox)
         col.pack_start(scroll, True, True, 0)
         return col
@@ -548,8 +552,22 @@ class StartMenu(Gtk.Window):
         self.power_box.hide()
         self.hide()
         self.catcher.hide()
+        for c in self.other_catchers:
+            c.destroy()
+        self.other_catchers = []
 
-    def present_menu(self):
+    def present_menu(self, monitor=None):
+        if monitor is not None:
+            GtkLayerShell.set_monitor(self, monitor)
+            GtkLayerShell.set_monitor(self.catcher, monitor)
+            disp = Gdk.Display.get_default()
+            for i in range(disp.get_n_monitors()):
+                m = disp.get_monitor(i)
+                if m != monitor:
+                    c = ClickCatcher(self.close, dim=False)
+                    GtkLayerShell.set_monitor(c, m)
+                    c.show_all()
+                    self.other_catchers.append(c)
         self.apps = load_apps()
         self.search.set_text("")
         self.refill()
@@ -608,6 +626,31 @@ class StartMenu(Gtk.Window):
         self.listbox.invalidate_headers()
         self.listbox.show_all()
 
+    def _row_menu(self, lb, ev):
+        """앱 목록 우클릭 — 작업 표시줄에 고정/해제"""
+        if ev.button != 3:
+            return False
+        row = lb.get_row_at_y(int(ev.y))
+        if row is None or not hasattr(row, "app"):
+            return False
+        aid = row.app["id"]
+        m = Gtk.Menu()
+        it = Gtk.MenuItem(label="열기")
+        it.connect("activate", lambda *_: (self.close(), launch(row.app)))
+        m.append(it)
+        if pins.is_pinned(aid):
+            it = Gtk.MenuItem(label="작업 표시줄에서 고정 해제")
+            it.connect("activate", lambda *_: pins.unpin(aid))
+        else:
+            it = Gtk.MenuItem(label="작업 표시줄에 고정")
+            it.connect("activate", lambda *_: pins.pin(aid))
+        m.append(it)
+        m.get_style_context().add_class("task-menu")
+        m.attach_to_widget(self, None)
+        m.show_all()
+        m.popup_at_pointer(ev)
+        return True
+
     def on_row(self, _lb, row):
         if not hasattr(row, "app"):
             return
@@ -623,7 +666,288 @@ class StartMenu(Gtk.Window):
 # ───────────────────────────────────────────────────────────────
 # 패널
 # ───────────────────────────────────────────────────────────────
-class Panel(Gtk.Window):
+_apps_cache = {"t": 0, "apps": {}}
+
+
+def apps_by_id():
+    """시작 메뉴의 앱 목록을 id 로 (30초 동안 다시 읽지 않는다)"""
+    if time.monotonic() - _apps_cache["t"] > 30:
+        _apps_cache["apps"] = {a["id"]: a for a in load_apps()}
+        _apps_cache["t"] = time.monotonic()
+    return _apps_cache["apps"]
+
+
+def launch_app_id(app_id):
+    a = apps_by_id().get(app_id)
+    if a:
+        launch(a)
+        return
+    info = pins.app_info(app_id)                  # 시작 메뉴에 안 보이는 앱 (NoDisplay)
+    if info is not None:
+        try:
+            info.launch([], None)
+        except Exception:
+            pass
+
+
+def hypr_monitor_origins(hypr):
+    """Hyprland 모니터 id → (x, y). 창이 어느 모니터에 있는지 Gdk 모니터와 맞춰 보려고"""
+    return {m.get("id"): (m.get("x"), m.get("y")) for m in (hypr.query("monitors") or [])}
+
+
+def primary_monitor():
+    """주 모니터 — Gdk 가 정한 것, 없으면 (0,0) 에 있는 것, 그것도 없으면 첫째"""
+    disp = Gdk.Display.get_default()
+    if disp is None or disp.get_n_monitors() == 0:
+        return None
+    p = disp.get_primary_monitor()
+    if p is not None:
+        return p
+    for i in range(disp.get_n_monitors()):
+        g = disp.get_monitor(i).get_geometry()
+        if (g.x, g.y) == (0, 0):
+            return disp.get_monitor(i)
+    return disp.get_monitor(0)
+
+
+def focused_gdk_monitor(hypr):
+    """Hyprland 에서 초점이 있는 모니터의 Gdk 모니터 (Win 키로 시작 메뉴를 열 때)"""
+    disp = Gdk.Display.get_default()
+    for m in hypr.query("monitors") or []:
+        if m.get("focused"):
+            for i in range(disp.get_n_monitors()):
+                g = disp.get_monitor(i).get_geometry()
+                if (g.x, g.y) == (m.get("x"), m.get("y")):
+                    return disp.get_monitor(i)
+    return primary_monitor()
+
+
+class TaskbarMixin:
+    """작업 버튼 — 주 작업 표시줄과 다른 모니터의 작업 표시줄이 함께 쓴다.
+
+    필요한 속성: self.hypr, self.tasks(Gtk.Box), self.gdk_monitor (이 작업 표시줄의 모니터)
+    순서 (윈도우와 같다): 고정한 앱 → (실행 중이면 그 자리에 창 버튼) → 고정 안 한 창들.
+    모니터가 여럿이면 각 작업 표시줄에는 그 모니터에 있는 창만. 고정한 앱은 모든 작업 표시줄에.
+    """
+
+    def _my_clients(self, clients):
+        disp = Gdk.Display.get_default()
+        if disp.get_n_monitors() < 2 or self.gdk_monitor is None:
+            return clients
+        g = self.gdk_monitor.get_geometry()
+        origins = hypr_monitor_origins(self.hypr)
+        return [c for c in clients if origins.get(c.get("monitor")) == (g.x, g.y)]
+
+    def rebuild_tasks(self):
+        for c in self.tasks.get_children():
+            self.tasks.remove(c)
+        clients = self._my_clients(self.hypr.query("clients") or [])
+        active = self.hypr.query("activewindow") or {}
+        active_addr = active.get("address") if isinstance(active, dict) else None
+        placed = set()
+        for pid in pins.load():
+            wins = [c for c in clients if pins.app_id_for_class(c.get("class") or "") == pid]
+            if wins:
+                for c in wins:
+                    self._window_button(c, active_addr, pid)
+                    placed.add(c.get("address"))
+            elif pins.app_info(pid) is not None:
+                self._pin_button(pid)
+        for c in clients:
+            if c.get("address") not in placed:
+                self._window_button(c, active_addr, None)
+        self.tasks.show_all()
+        return False
+
+    def _pin_button(self, pid):
+        """실행 중이 아닌 고정 앱 — 아이콘만"""
+        info = pins.app_info(pid)
+        btn = Gtk.Button()
+        btn.get_style_context().add_class("task-btn")
+        btn.get_style_context().add_class("pin-btn")
+        btn.set_valign(Gtk.Align.CENTER)
+        btn.set_tooltip_text(info.get_display_name() if info else pid)
+        img = Gtk.Image.new_from_gicon(info.get_icon(), Gtk.IconSize.DIALOG) if info and info.get_icon() \
+            else app_icon(pid, 22)
+        img.set_pixel_size(22)
+        btn.add(img)
+        btn.connect("clicked", lambda *_: launch_app_id(pid))
+        btn.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        btn.connect("button-press-event", self._pin_press, pid)
+        self.tasks.pack_start(btn, False, False, 0)
+
+    def _window_button(self, c, active_addr, pid):
+        ws = c.get("workspace", {}) or {}
+        # 워크스페이스 id 가 음수 = 특수 워크스페이스 = 우리 기준 "최소화"
+        minimized = ws.get("id", 0) < 0
+        cls = c.get("class") or ""
+        title = (c.get("title") or "").strip()
+        # 제목이 비었거나 클래스와 같으면 클래스를 보기 좋게
+        label = title if title and title.lower() != cls.lower() else (cls[:1].upper() + cls[1:])
+        addr = c.get("address")
+
+        btn = Gtk.Button()
+        btn.get_style_context().add_class("task-btn")
+        if minimized:
+            btn.get_style_context().add_class("minimized")
+        elif addr == active_addr:
+            btn.get_style_context().add_class("active")
+        btn.set_valign(Gtk.Align.CENTER)
+        btn.set_tooltip_text(f"{cls}\n{title}" if title else cls)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        box.pack_start(app_icon(cls, 20), False, False, 0)
+        lbl = Gtk.Label(label=label or "?", xalign=0)
+        lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        lbl.set_max_width_chars(20)
+        box.pack_start(lbl, True, True, 0)
+        btn.add(box)
+
+        btn.connect("clicked", self.on_task_activate, addr, minimized, addr == active_addr)
+        btn.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        btn.connect("button-press-event", self.on_task_click, addr,
+                    pid or pins.app_id_for_class(cls))
+        self.tasks.pack_start(btn, False, False, 0)
+
+    def on_task_activate(self, _w, addr, minimized, is_active):
+        """윈도우 작업 표시줄과 같은 동작:
+             최소화됨   → 복원 + 포커스
+             활성 창     → 최소화
+             그 외       → 포커스
+        """
+        if minimized:
+            self.restore_window(addr)
+        elif is_active:
+            self.hypr.dispatch(f"movetoworkspacesilent special:min,address:{addr}")
+        else:
+            self.hypr.dispatch(f"focuswindow address:{addr}")
+        GLib.timeout_add(120, self.rebuild_tasks)
+
+    def restore_window(self, addr):
+        """최소화(special:min)된 창을 지금 워크스페이스로 되돌리고 초점"""
+        cur = self.hypr.query("activeworkspace") or {}
+        wid = cur.get("id", 1)
+        self.hypr.dispatch(f"movetoworkspace {wid},address:{addr}")
+        self.hypr.dispatch(f"focuswindow address:{addr}")
+        GLib.timeout_add(120, self.rebuild_tasks)
+
+    # ── 우클릭 메뉴 (윈도우처럼: 고정/해제, 창 닫기) · 가운데 클릭 = 새 창 ──
+    def on_task_click(self, _w, ev, addr, app_id):
+        if ev.button == 2:
+            if app_id:
+                launch_app_id(app_id)
+            return True
+        if ev.button != 3:
+            return False
+        m = Gtk.Menu()
+        if app_id:
+            it = Gtk.MenuItem(label="새 창 열기")
+            it.connect("activate", lambda *_: launch_app_id(app_id))
+            m.append(it)
+            if pins.is_pinned(app_id):
+                it = Gtk.MenuItem(label="작업 표시줄에서 고정 해제")
+                it.connect("activate", lambda *_: pins.unpin(app_id))
+            else:
+                it = Gtk.MenuItem(label="작업 표시줄에 고정")
+                it.connect("activate", lambda *_: pins.pin(app_id))
+            m.append(it)
+            m.append(Gtk.SeparatorMenuItem())
+        it = Gtk.MenuItem(label="창 닫기")
+        it.connect("activate", lambda *_: self.hypr.dispatch(f"closewindow address:{addr}"))
+        m.append(it)
+        self._popup(m, ev)
+        return True
+
+    def _pin_press(self, _w, ev, pid):
+        if ev.button == 2:
+            launch_app_id(pid)
+            return True
+        if ev.button != 3:
+            return False
+        m = Gtk.Menu()
+        it = Gtk.MenuItem(label="열기")
+        it.connect("activate", lambda *_: launch_app_id(pid))
+        m.append(it)
+        it = Gtk.MenuItem(label="작업 표시줄에서 고정 해제")
+        it.connect("activate", lambda *_: pins.unpin(pid))
+        m.append(it)
+        self._popup(m, ev)
+        return True
+
+    def _popup(self, menu, ev):
+        menu.get_style_context().add_class("task-menu")
+        menu.attach_to_widget(self, None)
+        menu.show_all()
+        menu.popup_at_pointer(ev)
+
+
+class SecondaryPanel(Gtk.Window, TaskbarMixin):
+    """주 모니터가 아닌 모니터의 작업 표시줄 — 시작 버튼, 그 모니터의 창, 시계 (윈도우 11 처럼).
+    알림·트레이·음량은 주 작업 표시줄만."""
+
+    def __init__(self, hypr, gdk_monitor, main_panel):
+        super().__init__(type=Gtk.WindowType.TOPLEVEL)
+        self.hypr = hypr
+        self.gdk_monitor = gdk_monitor
+        self.main = main_panel
+        self.get_style_context().add_class("panel")
+        make_translucent(self)
+        GtkLayerShell.init_for_window(self)
+        GtkLayerShell.set_namespace(self, "sekai-panel")
+        GtkLayerShell.set_layer(self, GtkLayerShell.Layer.TOP)
+        GtkLayerShell.set_monitor(self, gdk_monitor)
+        for edge in (GtkLayerShell.Edge.BOTTOM, GtkLayerShell.Edge.LEFT, GtkLayerShell.Edge.RIGHT):
+            GtkLayerShell.set_anchor(self, edge, True)
+        GtkLayerShell.auto_exclusive_zone_enable(self)
+        self.set_size_request(-1, int(sekai_conf("panel", "height", PANEL_HEIGHT)))
+
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        bar.get_style_context().add_class("bar")
+        self.add(bar)
+        start = Gtk.Button()
+        start.get_style_context().add_class("start-btn")
+        logo = Gtk.DrawingArea()
+        logo.set_size_request(24, 24)
+        logo.set_valign(Gtk.Align.CENTER)
+        logo.set_halign(Gtk.Align.CENTER)
+        logo.connect("draw", main_panel.draw_logo)
+        start.add(logo)
+        start.set_valign(Gtk.Align.CENTER)
+        start.connect("clicked", lambda *_: main_panel.toggle_menu(monitor=gdk_monitor))
+        bar.pack_start(start, False, False, 0)
+
+        self.tasks = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self.tasks.get_style_context().add_class("tasks")
+        bar.pack_start(self.tasks, True, True, 0)
+
+        clock_btn = Gtk.Button()
+        clock_btn.get_style_context().add_class("clock")
+        cb = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        cb.set_valign(Gtk.Align.CENTER)
+        self.clock = Gtk.Label(label="--:--", xalign=1)
+        self.clock.get_style_context().add_class("clock-time")
+        self.clock_date = Gtk.Label(label="", xalign=1)
+        self.clock_date.get_style_context().add_class("clock-date")
+        cb.pack_start(self.clock, False, False, 0)
+        cb.pack_start(self.clock_date, False, False, 0)
+        clock_btn.add(cb)
+        clock_btn.set_valign(Gtk.Align.CENTER)
+        clock_btn.connect("clicked", lambda *_: main_panel.cal_popup.toggle())
+        bar.pack_end(clock_btn, False, False, 0)
+
+        self.rebuild_tasks()
+        self._tick()
+        self._src = GLib.timeout_add_seconds(1, self._tick)
+        self.connect("destroy", lambda *_: GLib.source_remove(self._src))
+
+    def _tick(self):
+        t = time.localtime()
+        self.clock.set_text(time.strftime(sekai_conf("panel", "clock_format", "%H:%M") or "%H:%M", t))
+        self.clock_date.set_text(korean_date(t))
+        return True
+
+
+class Panel(Gtk.Window, TaskbarMixin):
     def __init__(self, hypr):
         super().__init__(type=Gtk.WindowType.TOPLEVEL)
         self.hypr = hypr
@@ -631,8 +955,12 @@ class Panel(Gtk.Window):
         self.get_style_context().add_class("panel")
         make_translucent(self)
 
+        self.gdk_monitor = primary_monitor()
+        self.others = []                        # 다른 모니터들의 작업 표시줄 (SecondaryPanel)
         GtkLayerShell.init_for_window(self)
         GtkLayerShell.set_namespace(self, "sekai-panel")     # 뒤를 흐리게 (hyprland layerrule)
+        if self.gdk_monitor is not None:
+            GtkLayerShell.set_monitor(self, self.gdk_monitor)
         GtkLayerShell.set_layer(self, GtkLayerShell.Layer.TOP)
         for edge in (GtkLayerShell.Edge.BOTTOM, GtkLayerShell.Edge.LEFT, GtkLayerShell.Edge.RIGHT):
             GtkLayerShell.set_anchor(self, edge, True)
@@ -911,11 +1239,14 @@ class Panel(Gtk.Window):
         draw_logo(cr, size)
         return False
 
-    def toggle_menu(self, *_):
+    def toggle_menu(self, *_, monitor=None):
+        """monitor: 그 모니터의 시작 버튼을 눌렀을 때. 없으면(Win 키) 초점이 있는 모니터에"""
         if self.menu.get_visible():
             self.menu.close()
         else:
-            self.menu.present_menu()
+            if monitor is None:
+                monitor = focused_gdk_monitor(self.hypr)
+            self.menu.present_menu(monitor)  # None 이면 모니터를 정하지 않는다
 
     # ── Hyprland 이벤트 ──
     def on_hypr_event(self, name, _arg):
@@ -929,78 +1260,33 @@ class Panel(Gtk.Window):
             GLib.idle_add(self.menu.close)
         if name in ("openwindow", "closewindow", "activewindow", "activewindowv2",
                     "movewindow", "movewindowv2", "windowtitle", "windowtitlev2",
-                    "workspace", "activespecial", "fullscreen", "changefloatingmode"):
-            GLib.idle_add(self.rebuild_tasks)
+                    "workspace", "activespecial", "fullscreen", "changefloatingmode",
+                    "focusedmon", "moveworkspace", "monitoradded", "monitorremoved"):
+            GLib.idle_add(self.rebuild_all_tasks)
 
-    def rebuild_tasks(self):
-        for c in self.tasks.get_children():
-            self.tasks.remove(c)
-        clients = self.hypr.query("clients") or []
-        active = self.hypr.query("activewindow") or {}
-        active_addr = active.get("address") if isinstance(active, dict) else None
-
-        for c in clients:
-            ws = c.get("workspace", {}) or {}
-            # 워크스페이스 id 가 음수 = 특수 워크스페이스 = 우리 기준 "최소화"
-            minimized = ws.get("id", 0) < 0
-            cls = c.get("class") or ""
-            title = (c.get("title") or "").strip()
-            # 제목이 비었거나 클래스와 같으면 클래스를 보기 좋게
-            label = title if title and title.lower() != cls.lower() else (cls[:1].upper() + cls[1:])
-            addr = c.get("address")
-
-            btn = Gtk.Button()
-            btn.get_style_context().add_class("task-btn")
-            btn.set_valign(Gtk.Align.CENTER)
-            if minimized:
-                btn.get_style_context().add_class("minimized")
-            elif addr == active_addr:
-                btn.get_style_context().add_class("active")
-            btn.set_tooltip_text(f"{cls}\n{title}" if title else cls)
-
-            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            box.pack_start(app_icon(cls, 20), False, False, 0)
-            lbl = Gtk.Label(label=label or "?", xalign=0)
-            lbl.set_ellipsize(Pango.EllipsizeMode.END)
-            lbl.set_max_width_chars(20)
-            box.pack_start(lbl, True, True, 0)
-            btn.add(box)
-
-            btn.connect("clicked", self.on_task_activate, addr, minimized,
-                        addr == active_addr)
-            # 우클릭 / 가운데클릭 = 창 닫기
-            btn.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-            btn.connect("button-press-event", self.on_task_click, addr)
-            self.tasks.pack_start(btn, False, False, 0)
-        self.tasks.show_all()
+    def rebuild_all_tasks(self):
+        self.rebuild_tasks()
+        for p in self.others:
+            p.rebuild_tasks()
         return False
 
-    def on_task_activate(self, _w, addr, minimized, is_active):
-        """윈도우 작업 표시줄과 같은 동작:
-             최소화됨   → 복원 + 포커스
-             활성 창     → 최소화
-             그 외       → 포커스
-        """
-        if minimized:
-            self.restore_window(addr)
-        elif is_active:
-            self.hypr.dispatch(f"movetoworkspacesilent special:min,address:{addr}")
-        else:
-            self.hypr.dispatch(f"focuswindow address:{addr}")
-        GLib.timeout_add(120, self.rebuild_tasks)
-
-    def restore_window(self, addr):
-        """최소화(special:min)된 창을 지금 워크스페이스로 되돌리고 초점"""
-        cur = self.hypr.query("activeworkspace") or {}
-        wid = cur.get("id", 1)
-        self.hypr.dispatch(f"movetoworkspace {wid},address:{addr}")
-        self.hypr.dispatch(f"focuswindow address:{addr}")
-        GLib.timeout_add(120, self.rebuild_tasks)
-
-    def on_task_click(self, _w, ev, addr):
-        if ev.button in (2, 3):                      # 가운데 / 오른쪽
-            self.hypr.dispatch(f"closewindow address:{addr}")
-            return True
+    def sync_monitors(self):
+        """모니터마다 작업 표시줄 — 주 모니터 말고는 SecondaryPanel"""
+        for p in self.others:
+            p.destroy()
+        self.others = []
+        disp = Gdk.Display.get_default()
+        prim = primary_monitor()
+        if prim is not None and prim != self.gdk_monitor:
+            self.gdk_monitor = prim
+            GtkLayerShell.set_monitor(self, prim)
+        for i in range(disp.get_n_monitors()):
+            m = disp.get_monitor(i)
+            if m != self.gdk_monitor:
+                p = SecondaryPanel(self.hypr, m, self)
+                p.show_all()
+                self.others.append(p)
+        self.rebuild_all_tasks()
         return False
 
     # ── 시스템 정보 ──
@@ -1094,6 +1380,21 @@ def main():
         hypr = X11Hypr()
     panel = Panel(hypr)
     panel.show_all()
+    # 모니터마다 작업 표시줄 — 꽂고 뺄 때도 다시 맞춘다
+    panel.sync_monitors()
+    _mon_src = {"id": 0}
+
+    def _monitors_changed(*_):
+        if _mon_src["id"]:
+            GLib.source_remove(_mon_src["id"])
+
+        def go():
+            _mon_src["id"] = 0
+            return panel.sync_monitors()
+        _mon_src["id"] = GLib.timeout_add(600, go)
+    Gdk.Display.get_default().connect("monitor-added", _monitors_changed)
+    Gdk.Display.get_default().connect("monitor-removed", _monitors_changed)
+    pins.on_change(lambda: GLib.idle_add(panel.rebuild_all_tasks))
 
     # ── 창 전환기 · OSD · 클립보드 · 창 배치 — org.sekai.Shell 로 부른다 (sekai-ctl) ──
     switcher = Switcher(hypr, on_restore=panel.restore_window)
