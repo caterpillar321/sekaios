@@ -39,6 +39,43 @@ def spawn(cmd):
         return False
 
 
+def run_async(cmd, on_done):
+    """명령을 백그라운드로 돌리고 끝나면 메인 스레드에서 on_done(성공, 출력, 오류)를 부른다.
+    화면이 멈추지 않는다 (관리자 확인(polkit) 창을 기다리는 동안에도). 시작조차 못 하면 곧바로 실패로."""
+    from gi.repository import Gio, GLib
+    if isinstance(cmd, str):
+        cmd = shlex.split(cmd)
+    try:
+        proc = Gio.Subprocess.new(cmd, Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE)
+    except GLib.Error as e:
+        dbg("실행 실패", cmd, e)
+        msg = e.message                   # e 는 except 를 벗어나면 사라진다
+        GLib.idle_add(lambda: (on_done(False, "", msg), False)[1])
+        return
+
+    def finished(p, res):
+        try:
+            _ok, out, err = p.communicate_utf8_finish(res)
+        except GLib.Error as e:
+            out, err = "", e.message
+        good = p.get_successful()
+        if not good:
+            dbg("실패", cmd, (err or "").strip())
+        on_done(good, out or "", err or "")
+    proc.communicate_utf8_async(None, None, finished)
+
+
+def failure_reason(err, fallback="실패했습니다"):
+    """명령의 오류 출력 → 사람이 읽을 한 줄. polkit 인증을 닫으면 '취소'로"""
+    e = (err or "").strip()
+    low = e.lower()
+    if not e:
+        return fallback
+    if "not authorized" in low or "authentication" in low or "access denied" in low or "dismissed" in low:
+        return "관리자 인증이 취소되어 바꾸지 않았습니다"
+    return e.splitlines()[-1]
+
+
 # ── Hyprland IPC ────────────────────────────────────────────
 def hyprctl(*args, js=False):
     cmd = ["hyprctl"]

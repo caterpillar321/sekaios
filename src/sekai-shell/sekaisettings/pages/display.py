@@ -123,6 +123,30 @@ def build(store):
     ctl = {}                       # 모니터 이름 → 되돌릴 때 다시 맞출 위젯들
     quiet = {"on": False}          # 되돌리며 위젯을 바꿀 땐 변경 처리를 하지 않는다
 
+    # 모니터를 켜거나 끄면 이 페이지의 구성(켜진 모니터의 해상도 등 / 꺼진 모니터의 켜기 스위치)이
+    #   달라진다 — Hyprland 가 바꿔 끼울 틈을 두고 새로 그린다
+    REBUILD_MS = 1000
+
+    def rebuild_later():
+        store.request_rebuild("display", REBUILD_MS)
+
+    def can_disable(n):
+        """켜져 있는 마지막 모니터는 끌 수 없다 — 끄면 아무것도 안 보인다 (지금 실제 상태로 본다)"""
+        live = [m.get("name") for m in (hyprctl("monitors", js=True) or []) if not m.get("disabled")]
+        return any(x != n for x in live)
+
+    def set_enabled(n, v, sw):
+        """켜기·끄기 스위치 공통 — 켜진 모니터 구역의 스위치든 꺼진 모니터 구역의 스위치든 같은 검사"""
+        if quiet["on"]:
+            return
+        if not v and not can_disable(n):
+            quiet["on"] = True
+            sw.set_active(True)
+            quiet["on"] = False
+            return
+        change(n, "enabled", bool(v))
+        rebuild_later()
+
     def sync_widgets():
         quiet["on"] = True
         try:
@@ -177,6 +201,10 @@ def build(store):
         sync_widgets()
         if arrange["view"] is not None:          # 배치 그림도 실제 위치로
             GLib.timeout_add(400, refresh_arrange)
+        # 켜고 끈 것을 되돌렸으면 페이지 구성도 되돌아가야 한다
+        if {n for n, d in snap.items() if not d.get("enabled", True)} != \
+                {n for n, d in cur.items() if not d.get("enabled", True)}:
+            rebuild_later()
 
     def confirm(snap):
         dlg = Gtk.MessageDialog(transient_for=p.get_toplevel() if p.get_toplevel().is_toplevel()
@@ -281,14 +309,12 @@ def build(store):
         p.add_widget(view)
 
     for mon in off_mons:
-        # 꺼 둔 모니터 — 다시 켜는 스위치만 (모드·배율은 켠 뒤에 이 페이지를 다시 열어 바꾼다)
+        # 꺼 둔 모니터 — 다시 켜는 스위치만 (켜면 페이지를 새로 그려 모드·배율 칸이 나온다)
         name = mon.get("name", "?")
         s = p.section(f"{_monitor_title(mon)}  ·  {name}  (꺼짐)")
 
         def on_enable_off(v, n=name):
-            if quiet["on"]:
-                return
-            change(n, "enabled", bool(v))
+            set_enabled(n, v, ctl[n]["en"])
 
         en_off = switch(False, on_enable_off)
         row(s, "이 모니터 사용", "켜면 화면이 다시 나옵니다",
@@ -456,17 +482,7 @@ def build(store):
         row(s, "화면 방향", control=tr_combo)
 
         def on_enabled(v, n=name):
-            if quiet["on"]:
-                return
-            if not v:
-                # 켜져 있는 마지막 모니터는 끌 수 없다 — 끄면 아무것도 안 보인다
-                active = [m for m in (hyprctl("monitors", js=True) or []) if not m.get("disabled")]
-                if len(active) <= 1:
-                    quiet["on"] = True
-                    ctl[n]["en"].set_active(True)
-                    quiet["on"] = False
-                    return
-            change(n, "enabled", bool(v))
+            set_enabled(n, v, ctl[n]["en"])
 
         en_switch = switch(saved.get("enabled", True), on_enabled)
         row(s, "이 모니터 사용", "끄면 화면이 꺼집니다 (마지막 남은 모니터는 끌 수 없음)",
@@ -484,6 +500,8 @@ def build(store):
             if n:
                 keyword("monitor", f"{n}, preferred, auto, 1")
         sync_widgets()
+        # reset_section 이 곧바로 다시 그리지만, 꺼 뒀던 모니터가 켜지기까지 틈이 있다 — 한 번 더
+        rebuild_later()
 
     row(s, "기본값으로 되돌리기", "모든 모니터 설정을 지웁니다",
         control=button("되돌리기", reset))

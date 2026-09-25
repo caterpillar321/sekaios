@@ -62,6 +62,8 @@ class SettingsWindow(Gtk.Window):
 
         self._css = _load_css(store)
         store.connect(self._on_change)
+        store.on_rebuild = self._request_rebuild
+        self._rebuild_src = {}              # 페이지 아이디(None = 전부) → 예약된 다시 그리기
 
         root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self.add(root)
@@ -148,12 +150,70 @@ class SettingsWindow(Gtk.Window):
                 traceback.print_exc()
                 w = _error_page(pg["title"], e)
             w.show_all()
+            old = self.stack.get_child_by_name(page_id)
+            if old is not None:               # 다시 그리는 중 — 옛 것의 이름을 비워 준다 (rebuild_page 가 곧 없앤다)
+                self.stack.child_set_property(old, "name", page_id + "~old")
             self.stack.add_named(w, page_id)
             self._built.add(page_id)
         self.stack.set_visible_child_name(page_id)
         r = self._rows.get(page_id)
         if r and self.list.get_selected_row() is not r:
             self.list.select_row(r)
+
+    # ── 페이지 다시 그리기 ──────────────────────────────
+    #   페이지는 처음 열 때 한 번 만들어진다. 되돌리기(reset_section)나 모니터를 켜고 끄는 것처럼
+    #   화면의 구성·값이 통째로 바뀌면 새로 만들어야 옛 값·옛 구성이 남지 않는다.
+    def _request_rebuild(self, page_id=None, delay_ms=0):
+        """store.request_rebuild 가 부른다. 신호 처리 도중일 수 있으니 바로 없애지 않고 미룬다."""
+        old = self._rebuild_src.pop(page_id, 0)
+        if old:
+            GLib.source_remove(old)
+
+        def go():
+            self._rebuild_src.pop(page_id, None)
+            if page_id is None:
+                self.rebuild_all()
+            else:
+                self.rebuild_page(page_id)
+            return False
+        self._rebuild_src[page_id] = (GLib.timeout_add(delay_ms, go) if delay_ms > 0
+                                      else GLib.idle_add(go))
+
+    def rebuild_page(self, page_id):
+        """그 페이지를 새로 만든다. 보고 있던 페이지면 스크롤 위치를 지켜 다시 보여 준다."""
+        old = self.stack.get_child_by_name(page_id)
+        if old is None:
+            self._built.discard(page_id)
+            return
+        showing = self.stack.get_visible_child_name() == page_id
+        scroll = None
+        if showing and isinstance(old, Gtk.ScrolledWindow):
+            scroll = old.get_vadjustment().get_value()
+        self._built.discard(page_id)
+        if showing:
+            self._select(page_id)             # 새 페이지를 먼저 올린 뒤 옛 것을 없앤다 (빈 화면이 번쩍이지 않게)
+            new = self.stack.get_child_by_name(page_id)
+            if new is old:                    # (이름이 겹쳐 새것이 못 올라간 경우는 없지만 방어)
+                return
+        self.stack.remove(old)
+        old.destroy()
+        if showing and scroll is not None:
+            new = self.stack.get_visible_child()
+            if isinstance(new, Gtk.ScrolledWindow):
+                GLib.idle_add(lambda: (new.get_vadjustment().set_value(scroll), False)[1])
+
+    def rebuild_all(self):
+        """보고 있는 페이지는 지금, 나머지는 다음에 열 때 새로 만든다"""
+        cur = self.stack.get_visible_child_name()
+        for pid in list(self._built):
+            if pid != cur:
+                w = self.stack.get_child_by_name(pid)
+                self._built.discard(pid)
+                if w is not None:
+                    self.stack.remove(w)
+                    w.destroy()
+        if cur:
+            self.rebuild_page(cur)
 
     # ── 설정이 바뀌면 ───────────────────────────────────
     def _on_change(self, section, key, value):

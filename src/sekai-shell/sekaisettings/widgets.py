@@ -151,14 +151,22 @@ def slider(value, lo, hi, step=1, on_change=None, digits=0, width=220):
 
 
 def combo(items, active=None, on_change=None):
-    """items = [(id, 표시이름), ...]"""
+    """items = [(id, 표시이름), ...]
+    지금 값이 목록에 없으면(지운 앱, 손으로 고친 설정 등) 첫 항목이 아니라 그 값을 그대로 보인다 —
+    예전엔 첫 항목이 골라진 것처럼 보여 실제 설정과 화면이 달랐다. 목록이 비면 "없음"을 흐리게."""
     c = Gtk.ComboBoxText()
     for i, (key, label) in enumerate(items):
         c.append(str(key), label)
-    if active is not None:
+    if active is not None and str(active) != "" and not c.set_active_id(str(active)):
+        c.append(str(active), f"{active} (지금 값)")
         c.set_active_id(str(active))
-    if c.get_active() < 0 and items:
-        c.set_active(0)
+    if c.get_active() < 0:
+        if items:
+            c.set_active(0)
+        else:
+            c.append("", "없음")
+            c.set_active(0)
+            c.set_sensitive(False)
     if on_change:
         c.connect("changed", lambda w: on_change(w.get_active_id()))
     return c

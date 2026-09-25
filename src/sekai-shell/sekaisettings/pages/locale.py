@@ -1,12 +1,11 @@
 """시간 및 언어 — 표시 언어, 시간대, 한글 입력."""
 import os
-import subprocess
 
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib  # noqa: E402
 
-from ..util import run, spawn
+from ..util import failure_reason, run, run_async, spawn
 from ..widgets import Page, button, combo, info, row, switch
 
 LANGS = [("ko_KR.UTF-8", "한국어"), ("en_US.UTF-8", "English (United States)"),
@@ -34,6 +33,10 @@ def _timedate():
             k, v = line.split("=", 1)
             d[k] = v
     return d
+
+
+def _sync_text(td):
+    return "맞춰짐" if td.get("NTPSynchronized") == "yes" else "맞추는 중이거나 꺼짐"
 
 
 def build(store):
@@ -71,23 +74,64 @@ def build(store):
     tz = td.get("Timezone", "Asia/Seoul")
     zones = ZONES if any(z == tz for z, _ in ZONES) else [(tz, tz)] + ZONES
 
-    def on_zone(v):
-        # 시스템 설정이라 관리자 확인(polkit)이 뜬다
-        subprocess.Popen(["timedatectl", "set-timezone", v])
+    # 시간 설정은 시스템 설정이라 관리자 확인(polkit)이 뜬다. 끝날 때까지 기다리지 않고(화면이 멈추지 않게)
+    #   결과를 받아서, 취소·실패면 스위치·콤보를 실제 값으로 되돌리고 이유를 보여 준다
+    t_note = Gtk.Label(xalign=0)
+    t_note.get_style_context().add_class("notice")
+    t_note.set_line_wrap(True)
+    t_note.set_no_show_all(True)
+    t_quiet = {"on": False}
+    t_state = {"tz": tz}
 
+    def timedate(args, on_fail, on_ok=None):
+        t_note.hide()
+
+        def done(ok, _out, err):
+            if ok:
+                if on_ok:
+                    on_ok()
+                sync_status.set_text(_sync_text(_timedate()))
+                return
+            t_note.set_text(f"시간 설정을 바꾸지 못했습니다 — {failure_reason(err)}")
+            t_note.show()
+            t_quiet["on"] = True
+            try:
+                on_fail()
+            finally:
+                t_quiet["on"] = False
+        run_async(["timedatectl"] + args, done)
+
+    def on_zone(v):
+        if t_quiet["on"] or not v or v == t_state["tz"]:
+            return
+        timedate(["set-timezone", v],
+                 on_fail=lambda: zone_combo.set_active_id(t_state["tz"]),
+                 on_ok=lambda: t_state.update(tz=v))
+
+    def on_ntp(v):
+        if t_quiet["on"]:
+            return
+        timedate(["set-ntp", "true" if v else "false"], on_fail=lambda: ntp_sw.set_active(not v))
+
+    def on_rtc(v):
+        if t_quiet["on"]:
+            return
+        timedate(["set-local-rtc", "1" if v else "0"], on_fail=lambda: rtc_sw.set_active(not v))
+
+    zone_combo = combo(zones, tz, on_zone)
     row(s, "시간대", None,
         icon=["preferences-system-time", "clock", "preferences-system-time-symbolic"],
-        control=combo(zones, tz, on_zone))
-    row(s, "시간 자동 맞춤", "인터넷 시간 서버와 맞춥니다 (NTP)",
-        control=switch(td.get("NTP", "no") == "yes",
-                       lambda v: subprocess.Popen(["timedatectl", "set-ntp", "true" if v else "false"])))
-    row(s, "시계 동기화 상태", None,
-        control=info("맞춰짐" if td.get("NTPSynchronized") == "yes" else "맞추는 중이거나 꺼짐"))
+        control=zone_combo)
+    ntp_sw = switch(td.get("NTP", "no") == "yes", on_ntp)
+    row(s, "시간 자동 맞춤", "인터넷 시간 서버와 맞춥니다 (NTP)", control=ntp_sw)
+    sync_status = info(_sync_text(td))
+    row(s, "시계 동기화 상태", None, control=sync_status)
     # Windows 는 메인보드 시계(RTC)를 현지 시간으로 읽는다. 리눅스 기본(UTC)으로 두면
     #   Windows 로 넘어갔을 때 시간이 9시간 틀린다 (한국이면 새벽으로)
+    rtc_sw = switch(td.get("LocalRTC", "no") == "yes", on_rtc)
     row(s, "Windows 와 시간 맞추기", "Windows 와 함께 쓰면 켜 두세요 — 메인보드 시계를 현지 시간으로 씁니다",
-        control=switch(td.get("LocalRTC", "no") == "yes",
-                       lambda v: subprocess.Popen(["timedatectl", "set-local-rtc", "1" if v else "0"])))
+        control=rtc_sw)
+    p.add_widget(t_note)
 
     # ── 한글 입력 ──
     s = p.section("한글 입력")

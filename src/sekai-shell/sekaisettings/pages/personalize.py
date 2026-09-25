@@ -295,8 +295,7 @@ def build_appearance(store):
 
     s = p.section("되돌리기")
     row(s, "모양 기본값으로", "색과 창 설정을 처음 상태로 돌립니다",
-        control=button("되돌리기", lambda: (store.reset_section("appearance"),
-                                          store.apply_all())))
+        control=button("되돌리기", lambda: store.reset_section("appearance")))   # 적용·다시 그리기까지 한다
     return p
 
 

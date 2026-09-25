@@ -21,12 +21,14 @@ SHOW_MAX = 40
 
 
 def _pending():
-    """관리자 권한 없이 — 받아 둔 목록 기준으로 설치될 업데이트"""
+    """관리자 권한 없이 — 받아 둔 목록 기준으로 설치될 업데이트. 셀 수 없으면 None (없음과 구별)"""
     try:
         res = subprocess.run(["apt-get", "-s", "-q", "full-upgrade"], capture_output=True,
                              text=True, timeout=60, env=dict(os.environ, LC_ALL="C.UTF-8"))
     except Exception:
-        return []
+        return None
+    if res.returncode != 0:                      # 다른 설치가 잠금을 쥐고 있는 등
+        return None
     pk = []
     for line in res.stdout.splitlines():
         m = re.match(r"Inst (\S+) (?:\[(\S+)\] )?\((\S+)", line)
@@ -193,7 +195,7 @@ class UpdatePage:
     def _cached_done(self, pk):
         if self.busy:
             return False
-        self.pkgs = pk
+        self.pkgs = pk or []
         self._summary(pk)
         self._show_list(pk)
         return False
@@ -264,6 +266,18 @@ class UpdatePage:
         self.progress.hide()
         self.progress_text.hide()
         err = self._got["error"] or err          # 도우미가 알려 준 이유가 더 자세하다
+        if err:
+            # 실패 — 인증 취소, 다른 설치가 진행 중(dpkg 잠김), 네트워크 등. 도우미가 목록을 끝까지
+            #   알려 주지 못했을 수 있으니 빈 목록으로 덮지 않는다 (예전엔 목록이 사라졌다).
+            #   설치 도중 실패면 일부만 깔렸을 수 있다 — 남은 것을 받아 둔 목록 기준으로 다시 센다
+            self._set_status("업데이트하지 못했습니다", err)
+            self._show_list(self.pkgs)
+            if action == "apply":
+                self.ver_label.set_text(_version() or "알 수 없음")
+                threading.Thread(target=self._reload_after_fail, args=(err,), daemon=True).start()
+            if self._got["reboot"]:
+                self.reboot_btn.show()
+            return False
         if action == "check":
             self.pkgs = self._got["pkgs"]
             self._summary(self.pkgs)
@@ -271,16 +285,27 @@ class UpdatePage:
         else:
             self.ver_label.set_text(_version() or "알 수 없음")
             left = self._got["count"]
-            self.pkgs = [] if not left else _pending()
+            self.pkgs = [] if not left else (_pending() or [])
             self._show_list(self.pkgs)
-            if not err:
-                self._set_status("업데이트를 설치했습니다",
-                                 "다시 시작해야 일부 업데이트가 적용됩니다" if self._got["reboot"]
-                                 else "지금부터 새 버전이 쓰입니다 (열려 있던 앱은 다시 열면 적용)")
+            self._set_status("업데이트를 설치했습니다",
+                             "다시 시작해야 일부 업데이트가 적용됩니다" if self._got["reboot"]
+                             else "지금부터 새 버전이 쓰입니다 (열려 있던 앱은 다시 열면 적용)")
             if self._got["reboot"]:
                 self.reboot_btn.show()
-        if err:
-            self._set_status("업데이트하지 못했습니다", err)
+        return False
+
+    def _reload_after_fail(self, err):
+        pk = _pending()
+        GLib.idle_add(self._reloaded_after_fail, pk, err)
+
+    def _reloaded_after_fail(self, pk, err):
+        if self.busy:
+            return False
+        if pk is not None:                       # 다시 셀 수 있었으면 그것으로 (못 셌으면 이전 목록 유지)
+            self.pkgs = pk
+            self._show_list(pk)
+        self._set_status("업데이트하지 못했습니다",
+                         err + (f" — 남은 업데이트 {len(self.pkgs)}개" if self.pkgs else ""))
         return False
 
     def check(self):

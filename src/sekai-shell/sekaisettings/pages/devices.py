@@ -133,6 +133,7 @@ def build_input(store):
         elif section == "input" and key == "kb_options":
             set_entry_value(options_entry, value)
     store.connect(follow)
+    p.connect("destroy", lambda *_: store.disconnect(follow))   # 페이지를 다시 그리면 떼어 낸다
     row(s, "키 반복 속도", "초당 반복 횟수",
         control=slider(i["repeat_rate"], 1, 60, 1,
                        lambda v: store.set("input", "repeat_rate", v)))
@@ -162,8 +163,7 @@ def build_input(store):
 
     s = p.section("되돌리기")
     row(s, "입력 기본값으로",
-        control=button("되돌리기", lambda: (store.reset_section("input"),
-                                          store.apply_all())))
+        control=button("되돌리기", lambda: store.reset_section("input")))   # 적용·다시 그리기까지 한다
     return p
 
 

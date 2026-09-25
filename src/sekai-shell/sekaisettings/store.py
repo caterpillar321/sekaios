@@ -13,6 +13,7 @@ import fcntl
 import json
 import os
 import pwd
+import re
 import signal
 import subprocess
 import tempfile
@@ -121,6 +122,76 @@ def atomic_write(path, text):
         raise
 
 
+_BAD = object()
+_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+_COLOR_KEYS = {("appearance", k) for k in ("accent", "bg", "surface", "fg", "titlebar_bg")} | \
+    {("wallpaper", "color")}
+# 모니터 한 대의 설정 (display 섹션은 기본값이 비어 있어 따로 적어 둔다)
+_DISPLAY_KEYS = {"mode": "", "position": "", "scale": 1.0, "transform": 0, "vrr": 0, "enabled": True}
+
+
+def _coerce(v, d):
+    """저장된 값 v 를 기본값 d 의 타입에 맞춘다. 맞출 수 없으면 _BAD."""
+    if isinstance(d, bool):                    # bool 은 int 의 하위 타입이라 먼저 본다
+        if isinstance(v, bool):
+            return v
+        return bool(v) if isinstance(v, int) and v in (0, 1) else _BAD
+    if isinstance(d, int):
+        if isinstance(v, bool):
+            return _BAD
+        if isinstance(v, int):
+            return v
+        return int(v) if isinstance(v, float) and v.is_integer() else _BAD
+    if isinstance(d, float):
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else _BAD
+    if isinstance(d, str):
+        return v if isinstance(v, str) else _BAD
+    return v
+
+
+def _sanitize(saved):
+    """손으로 고치거나 다른 버전이 쓴 설정 파일을 기본값의 모양에 맞춘다.
+    "appearance": null, 숫자 자리의 글자, 깨진 색 같은 것이 있으면 시작하다 죽었다 (a['accent'] 등).
+    틀린 값은 버린다 — 그 자리는 기본값이 쓰인다. 모르는 섹션·키는 그대로 둔다 (새 버전이 쓴 것일 수 있다)."""
+    if not isinstance(saved, dict):
+        dbg("설정 파일의 최상위가 사전이 아닙니다 — 기본값 사용")
+        return {}
+    out = {}
+    for sec, vals in saved.items():
+        base = DEFAULTS.get(sec)
+        if not isinstance(base, dict):
+            out[sec] = vals
+            continue
+        if not isinstance(vals, dict):
+            dbg(f"설정 [{sec}] 이 사전이 아닙니다 ({type(vals).__name__}) — 기본값 사용")
+            continue
+        clean = {}
+        for k, v in vals.items():
+            if sec == "display":               # {"DP-1": {...}} — 모니터마다 사전
+                if not isinstance(v, dict):
+                    dbg(f"설정 [display] {k} 이 사전이 아닙니다 — 버림")
+                    continue
+                mon = {}
+                for mk, mv in v.items():
+                    fixed = _coerce(mv, _DISPLAY_KEYS[mk]) if mk in _DISPLAY_KEYS else mv
+                    if fixed is _BAD:
+                        dbg(f"설정 [display] {k}.{mk} = {mv!r} — 타입이 틀려 버림")
+                        continue
+                    mon[mk] = fixed
+                clean[k] = mon
+                continue
+            if k not in base:
+                clean[k] = v
+                continue
+            fixed = _coerce(v, base[k])
+            if fixed is _BAD or ((sec, k) in _COLOR_KEYS and not _HEX.match(fixed)):
+                dbg(f"설정 [{sec}] {k} = {v!r} — 틀린 값이라 기본값({base[k]!r})을 씀")
+                continue
+            clean[k] = fixed
+        out[sec] = clean
+    return out
+
+
 def _merge(base, over):
     """기본값 위에 저장된 값을 덮어쓴다 (한 단계 중첩까지)."""
     out = copy.deepcopy(base)
@@ -147,13 +218,16 @@ class Store:
     def __init__(self):
         self.data = copy.deepcopy(DEFAULTS)
         self._listeners = []
+        # 페이지를 다시 그려 달라는 요청을 받을 곳 — 설정 창이 넣는다 (on_rebuild(page_id 또는 None, 지연 ms)).
+        #   저장소는 GTK 를 모른다 (세션 시작 스크립트도 쓰므로)
+        self.on_rebuild = None
         self.load()
 
     # ── 입출력 ──────────────────────────────────────────
     def load(self):
         try:
             with open(CFG_FILE, encoding="utf-8") as f:
-                self.data = _merge(DEFAULTS, json.load(f))
+                self.data = _merge(DEFAULTS, _sanitize(json.load(f)))
             dbg("설정 읽음", CFG_FILE)
         except FileNotFoundError:
             dbg("설정 파일 없음 — 기본값 사용")
@@ -210,6 +284,13 @@ class Store:
     def connect(self, cb):
         self._listeners.append(cb)
 
+    def disconnect(self, cb):
+        """페이지를 다시 그릴 때 — 없어진 페이지의 리스너가 사라진 위젯을 건드리지 않게"""
+        try:
+            self._listeners.remove(cb)
+        except ValueError:
+            pass
+
     def set_mode(self, mode):
         """다크 / 라이트 — 네 기본색을 그 모드의 묶음으로 바꾸고, 셸·창 제목줄·일반 앱에 알린다"""
         if mode not in theme.PALETTES:
@@ -236,6 +317,26 @@ class Store:
         self.data[section] = copy.deepcopy(DEFAULTS.get(section, {}))
         self.save()
         self.apply_all()
+        if section == "appearance":
+            # 색·모드가 바뀌었다 — 창의 CSS·GTK 설정과 일반 앱이 따라오게 (set_mode 와 같은 알림)
+            mode = theme.mode_of(self.get("appearance"))
+            theme.apply_system(mode)
+            for key in ("accent", "mode"):
+                for cb in self._listeners:
+                    try:
+                        cb("appearance", key, self.get("appearance", key))
+                    except Exception as e:
+                        dbg("리스너 예외", e)
+        # 화면의 스위치·콤보가 옛 값을 보여 주지 않게 페이지들을 다시 그린다
+        self.request_rebuild()
+
+    def request_rebuild(self, page_id=None, delay_ms=0):
+        """설정 창에 페이지를 다시 그려 달라고 (page_id=None 이면 모든 페이지)"""
+        if self.on_rebuild is not None:
+            try:
+                self.on_rebuild(page_id, delay_ms)
+            except Exception as e:
+                dbg("다시 그리기 요청 실패", e)
 
     # ── Hyprland 조각 생성 ──────────────────────────────
     def write_hypr_fragment(self):
@@ -431,9 +532,12 @@ class Store:
             keyword("monitor", arg)
 
     def apply_wallpaper(self):
-        subprocess.Popen(["sekai-wallpaper", "--apply"],
-                         start_new_session=True,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            subprocess.Popen(["sekai-wallpaper", "--apply"],
+                             start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as e:                     # 없으면 배경만 못 바꾼다 — 되돌리기 등 나머지는 계속
+            dbg("배경화면 적용 실패", e)
 
     # ── 패널에 알리기 ───────────────────────────────────
     def notify_panel(self):

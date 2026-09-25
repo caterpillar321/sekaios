@@ -29,8 +29,18 @@ def _name_keys():
 
 _NAME_KEYS = _name_keys()
 
-DESKTOP_DIRS = ["/usr/share/applications",
-                os.path.expanduser("~/.local/share/applications")]
+def _desktop_dirs():
+    """.desktop 을 찾을 폴더 — XDG 규칙의 우선순위대로: 사용자(XDG_DATA_HOME) → XDG_DATA_DIRS 차례.
+    같은 이름은 앞의 것이 이긴다. 예전엔 /usr/share 를 먼저 봐서 사용자가 고치거나 숨긴 항목
+    (~/.local/share/applications)과 SekaiOS 재정의(/usr/share/sekai/data)가 무시됐다."""
+    home = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    dirs = [home] + [d for d in (os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share").split(":") if d]
+    if "/usr/share" not in dirs:
+        dirs.append("/usr/share")
+    return list(dict.fromkeys(os.path.join(d, "applications") for d in dirs))
+
+
+DESKTOP_DIRS = _desktop_dirs()
 
 
 def _available(items):
