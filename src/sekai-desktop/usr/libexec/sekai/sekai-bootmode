@@ -11,17 +11,31 @@ sekai-bootmode.path 가 이것을 부른다. 지금 화면 앞(seat0)의 활성 
 (예전엔 "가장 최근에 쓴 사용자" — 수정 시각은 누구나 touch 로 바꿀 수 있어 다른 사용자가 값을 정할 수 있었다).
 그 폴더는 누구나 쓸 수 있으므로 ① 파일 주인이 그 사용자인지 ② 줄 형식을 엄격히 확인한다.
 값이 바뀌었을 때만 /var/lib/sekai/boot-video 를 고치고 update-grub (09_sekaios 가 읽는다).
+update-grub 은 다른 SekaiOS update-grub(첫 부팅·부트로더 업데이트)과 겹치지 않게 차례를 기다린다 (update-grub-locked).
 """
+import fcntl
 import os
 import pwd
 import re
+import signal
 import stat
 import subprocess
 import sys
 
 DIR = "/var/lib/sekai/displays"
 OUT = "/var/lib/sekai/boot-video"
+LOCK = "/run/sekai-update-grub.lock"                 # update-grub-locked 와 같은 잠금
+UPDATE_GRUB = "/usr/libexec/sekai/update-grub-locked"
 LINE = re.compile(r"^([A-Za-z]{1,8}(?:-[A-Za-z])?-[0-9]{1,2}) ([0-9]{3,5})x([0-9]{3,5})@([0-9]{2,3}(?:\.[0-9]{1,3})?)$")
+
+
+class Stopped(Exception):
+    """systemd 가 멈추라고 했다 (TimeoutStartSec·끄기) — boot-video 를 되돌리고 끝나려고 예외로 받는다"""
+
+
+def on_term(signum, frame):
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)   # 되돌리는 중에 또 끊기지 않게
+    raise Stopped()
 
 
 def log(*a):
@@ -98,32 +112,96 @@ def video_opts(text):
     return " ".join(opts)
 
 
+def wanted():
+    """(사용자, video= 옵션, boot-video 에 적을 내용) — 없으면 None"""
+    found = newest()
+    if not found:
+        return None
+    user, text = found
+    opts = video_opts(text)
+    return user, opts, f'SEKAI_VIDEO_OPTS="{opts}"\n'.encode()
+
+
+def current():
+    """지금 boot-video 의 내용 (없거나 못 읽으면 None)"""
+    try:
+        with open(OUT, "rb") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def put(data):
+    """boot-video 를 바꿔 넣는다 — None 이면 지운다"""
+    if data is None:
+        try:
+            os.remove(OUT)
+        except FileNotFoundError:
+            pass
+        return
+    tmp = OUT + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, OUT)
+
+
+def take_lock():
+    """update-grub 차례 — 다른 SekaiOS update-grub 이 도는 중이면 끝나기를 기다린다. 잠금 fd 를 돌려준다"""
+    # root 만 열 수 있게 — 남이 읽기로 열어 붙잡으면(flock 은 읽기 전용 fd 로도 된다) 모든 update-grub 이 멈춘다
+    fd = os.open(LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    os.fchmod(fd, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        log("다른 update-grub 이 끝나기를 기다립니다")
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
+
+
 def main():
     if os.path.isdir("/run/live/medium") or not os.path.isfile("/boot/grub/grub.cfg"):
         return 0                                     # 라이브·이미지 만드는 중
-    found = newest()
-    if not found:
-        return 0
-    user, text = found
-    opts = video_opts(text)
-    want = f'SEKAI_VIDEO_OPTS="{opts}"\n'
+    got = wanted()
+    if not got or current() == got[2]:
+        return 0                                     # 대부분 여기서 끝 — 잠금도 필요 없다
+    signal.signal(signal.SIGTERM, on_term)
     try:
-        with open(OUT, encoding="utf-8") as f:
-            if f.read() == want:
-                return 0
-    except OSError:
-        pass
-    tmp = OUT + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(want)
-    os.replace(tmp, OUT)
-    log(f"{user} 의 모니터 모드로: {opts or '(없음)'}")
-    r = subprocess.run(["update-grub"], capture_output=True, text=True)
-    if r.returncode != 0:
-        log("update-grub 실패:", r.stderr.strip()[-400:])
+        lock = take_lock()
+    except OSError as e:
+        log("update-grub 잠금을 잡지 못했습니다:", e)   # 잠그지 않고 돌리진 않는다
         return 1
-    return 0
+    # 차례를 받은 뒤에 다시 읽는다 — 기다리는 동안 모드가 또 바뀌었거나, 앞선 실행이 이미 적었을 수 있다
+    got = wanted()
+    old = current()
+    if not got or old == got[2]:
+        return 0
+    user, opts, want = got
+    ok = False
+    try:
+        # 09_sekaios 가 update-grub 중에 읽으므로 먼저 적는다
+        put(want)
+        log(f"{user} 의 모니터 모드로: {opts or '(없음)'}")
+        r = subprocess.run([UPDATE_GRUB], capture_output=True, text=True, pass_fds=(lock,),
+                           env=dict(os.environ, SEKAI_GRUB_LOCK_FD=str(lock)))
+        ok = r.returncode == 0
+        if not ok:
+            log("update-grub 실패:", r.stderr.strip()[-400:])
+    except OSError as e:
+        log("update-grub 을 돌리지 못했습니다:", e)
+    finally:
+        if not ok:
+            # 반영되지 않았다 — 예전 내용으로 되돌려야(없었으면 지워야) 다음 번에 "같다"며 건너뛰지 않고 다시 시도한다
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            try:
+                put(old)
+            except OSError as e:
+                log("boot-video 를 되돌리지 못했습니다:", e)
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Stopped:
+        log("멈추라는 신호를 받아 끝냅니다 (boot-video 는 그대로 — 다음 번에 다시 시도)")
+        sys.exit(1)

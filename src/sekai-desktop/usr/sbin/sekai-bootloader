@@ -28,6 +28,9 @@ ESP=/boot/efi
 ID=sekai
 EFIDIR="$ESP/EFI/$ID"
 LABEL="SekaiOS"
+# update-grub 은 다른 SekaiOS update-grub(첫 부팅·sekai-bootmode)과 겹치지 않게 차례대로
+#   (겹치면 grub-mkconfig 가 같은 grub.cfg.new 를 두고 다퉈 Windows 항목이 빠지거나 잘린다)
+UPDATE_GRUB=/usr/libexec/sekai/update-grub-locked
 
 say() { echo "sekai-bootloader: $*"; }
 die() { echo "sekai-bootloader: 오류: $*" >&2; exit 1; }
@@ -155,7 +158,7 @@ case "$cmd" in
         mountpoint -q "$ESP" || die "$ESP 가 마운트돼 있지 않습니다"
         grub_install; fallback
         # 출력은 버리지 않는다 — 설치 기록에 남아야 os-prober 가 무엇을 찾았는지 알 수 있다
-        update-grub 2>&1 || die "update-grub 실패"
+        "$UPDATE_GRUB" 2>&1 || die "update-grub 실패"
         nvram "$disk" "$part"
         ;;
     update)
@@ -163,7 +166,7 @@ case "$cmd" in
         migrate=0
         [ -f "$EFIDIR/refind_x64.efi" ] && [ ! -f "$EFIDIR/shimx64.efi" ] && migrate=1
         grub_install; fallback
-        update-grub >/dev/null 2>&1 || die "update-grub 실패"
+        "$UPDATE_GRUB" >/dev/null 2>&1 || die "update-grub 실패"
         if [ $migrate = 1 ]; then
             read -r disk part <<<"$(esp_disk_part)"
             nvram "$disk" "$part"

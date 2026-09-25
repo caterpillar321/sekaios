@@ -22,6 +22,7 @@ RESERVED = {"root", "daemon", "bin", "sys", "sync", "games", "man", "lp", "mail"
             "proxy", "www-data", "backup", "list", "irc", "nobody", "admin", "_greetd", "sekai-oobe"}
 GROUPS = ("audio", "video", "plugdev", "netdev", "cdrom", "dialout", "bluetooth", "users")
 ENV = dict(os.environ, LC_ALL="C.UTF-8", PATH="/usr/sbin:/usr/bin:/sbin:/bin")
+DISPLAYS = "/var/lib/sekai/displays"
 
 
 def fail(msg, code=1):
@@ -88,6 +89,9 @@ def add(name, kind):
     rc, out = run(["useradd", "-m", "-s", "/bin/bash", "-c", full or name, "-G", ",".join(groups), name])
     if rc != 0:
         fail("계정을 만들지 못했습니다")
+    # 예전에 같은 이름이던 계정(이 수정 전에 지웠거나 다른 도구로 지운 것)이나 남이 미리 만들어 둔 파일 —
+    #   새 계정은 아직 로그인한 적이 없으니 그 이름의 파일은 모두 남의 것이다
+    clear_displays(name)
     rc, out = run(["chpasswd"], inp=f"{name}:{pw}\n")
     if rc != 0:
         run(["userdel", "-r", name])
@@ -115,11 +119,21 @@ def remove(name, keep):
             os.chmod(p.pw_dir, 0o700)
         except OSError:
             pass
-    # 로그인 화면이 기억한 해상도 파일
-    try:
-        os.remove(f"/var/lib/sekai/displays/{name}.conf")
-    except OSError:
-        pass
+    clear_displays(name)
+
+
+def clear_displays(name):
+    """공용 폴더의 <이름>.conf(로그인 화면 해상도)·<이름>.modes(부팅 화면 모드)를 지운다.
+    남아 있으면 같은 이름으로 다시 만든 계정(새 UID)에겐 sticky 폴더의 남의 파일이라 고쳐 쓰지 못하고,
+    읽는 쪽(그리터·sekai-bootmode)도 주인이 달라 버려서 조용히 동작하지 않는다.
+    unlink 는 링크를 따라가지 않고(링크·FIFO 면 그 이름만 지운다) 폴더는 지우지 못한다."""
+    if "/" in name or name.startswith("."):
+        return
+    for ext in (".conf", ".modes"):
+        try:
+            os.unlink(os.path.join(DISPLAYS, name + ext))
+        except OSError:
+            pass
 
 
 def admin(name, on):

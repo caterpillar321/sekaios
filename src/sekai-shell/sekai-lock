@@ -91,6 +91,20 @@ IDLE_BACK = 30          # 로그인 단계에서 이만큼(초) 가만히 있으
 READY_TIMEOUT = 3.0
 
 
+def ready_timeout():
+    """모니터가 하나도 없으면(모니터가 절전하며 연결을 끊음) Hyprland 는 5초 타이머가 끝나야 잠김을 알린다 —
+    3초에 끊으면 sekai-lock 은 이때 한 번도 잠그지 못하고 늘 대체 잠금으로 넘어갔다. 그만큼 더 기다린다."""
+    if not os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        return READY_TIMEOUT
+    try:
+        out = subprocess.run(["hyprctl", "-j", "monitors"], capture_output=True, text=True, timeout=1).stdout
+        if json.loads(out) == []:
+            return 7.0
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    return READY_TIMEOUT
+
+
 def single_instance():
     """이미 잠겨 있으면 또 잠그지 않는다 (Super+L 을 두 번 눌러도, idle 과 겹쳐도)."""
     fd = os.open(LOCKFILE, os.O_RDWR | os.O_CREAT, 0o600)
@@ -132,13 +146,14 @@ def daemonize():
     잠금에 실패하면 1. 자식이 READY_TIMEOUT 안에 답하지 않으면(잠그기 전에 멈췄다) 자식을 치우고 1 —
     그냥 기다리면 부르는 쪽의 대체 잠금(|| swaylock)이 돌지 않고, 절전 직전이면 logind 가 기다리다 말고
     잠기지 않은 채 절전에 들어간다."""
+    timeout = ready_timeout()
     r, w = os.pipe()
     pid = os.fork()
     if pid > 0:
         os.close(w)
         got = b""
         try:
-            ready, _, _ = select.select([r], [], [], READY_TIMEOUT)
+            ready, _, _ = select.select([r], [], [], timeout)
             if ready:
                 got = os.read(r, 1)
         except OSError:
