@@ -78,7 +78,7 @@ _SEKAI_DEFAULTS = {
     "appearance": {"accent": "#39c5bb", "bg": "#151517",
                    "surface": "#1e1e22", "fg": "#f1f1f3"},
     "panel": {"height": 48, "clock_format": "%H:%M", "show_date": False},
-    "apps": {"terminal": "foot", "browser": "chromium", "files": "thunar"},
+    "apps": {"terminal": "sekai-terminal", "browser": "chromium", "files": "thunar"},
 }
 
 
@@ -336,7 +336,7 @@ def icon_image(names, size):
 DEFAULT_PINS = [
     ("파일",     ["thunar", "pcmanfm", "org.gnome.nautilus"],               ["system-file-manager", "folder"]),
     ("웹",       ["google-chrome", "chromium", "firefox-esr"],             ["chromium", "web-browser"]),
-    ("터미널",   ["foot", "footclient"],                                    ["utilities-terminal"]),
+    ("터미널",   ["kitty", "foot", "footclient"],                           ["utilities-terminal"]),
     ("편집기",   ["org.xfce.mousepad", "mousepad", "org.gnome.texteditor"], ["accessories-text-editor"]),
     ("계산기",   ["galculator", "org.gnome.calculator"],                    ["accessories-calculator"]),
     ("설정",     ["sekai-settings"],                                        ["preferences-system"]),

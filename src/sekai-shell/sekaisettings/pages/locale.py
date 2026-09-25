@@ -83,6 +83,11 @@ def build(store):
                        lambda v: subprocess.Popen(["timedatectl", "set-ntp", "true" if v else "false"])))
     row(s, "시계 동기화 상태", None,
         control=info("맞춰짐" if td.get("NTPSynchronized") == "yes" else "맞추는 중이거나 꺼짐"))
+    # Windows 는 메인보드 시계(RTC)를 현지 시간으로 읽는다. 리눅스 기본(UTC)으로 두면
+    #   Windows 로 넘어갔을 때 시간이 9시간 틀린다 (한국이면 새벽으로)
+    row(s, "Windows 와 시간 맞추기", "Windows 와 함께 쓰면 켜 두세요 — 메인보드 시계를 현지 시간으로 씁니다",
+        control=switch(td.get("LocalRTC", "no") == "yes",
+                       lambda v: subprocess.Popen(["timedatectl", "set-local-rtc", "1" if v else "0"])))
 
     # ── 한글 입력 ──
     s = p.section("한글 입력")

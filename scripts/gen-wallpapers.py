@@ -9,7 +9,7 @@
   3. 오선지처럼 흐르는 다섯 줄 — 初音(첫 소리)
   4. 줄 위의 작은 빛 알갱이
   5. 가장자리 어둡게 (비네트)
-  6. 미세한 노이즈 — 어두운 그라데이션의 계단 현상(밴딩)을 없앤다
+  6. 디더링 — 실수로 계산한 그림을 8비트로 바꿀 때 계단 현상(밴딩)이 생기지 않게
 
 사용법:  gen-wallpapers.py <출력 디렉터리> [가로 세로]
 """
@@ -19,9 +19,8 @@ import random
 import sys
 
 import cairo
-import gi
-gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import GdkPixbuf  # noqa: E402
+import numpy as np            # 빌드 도구: python3-numpy python3-pil
+from PIL import Image
 
 
 def hexrgb(h):
@@ -59,34 +58,40 @@ def staff_y(x, W, H, k, phase):
 
 
 def draw(name, W, H, out_dir):
+    """부드러운 부분(바탕·빛·비네트)은 64비트 실수로 계산하고, 선·알갱이만 cairo 로 그려 얹는다.
+    마지막에 한 번만 디더링하며 8비트로 — cairo(8비트)로 빛을 여러 겹 더하면 겹칠 때마다 반올림돼
+    어두운 그라데이션에 계단·얼룩이 생겼다."""
     top, bottom, glows, line_col, spark_col = THEMES[name]
     rnd = random.Random(f"sekai-{name}")      # 매번 같은 그림이 나오게
-    surf = cairo.ImageSurface(cairo.FORMAT_RGB24, W, H)
-    cr = cairo.Context(surf)
+    ys, xs = np.mgrid[0:H, 0:W].astype(np.float64)
+    ys += 0.5
+    xs += 0.5
 
-    # 1. 바탕
-    g = cairo.LinearGradient(0, 0, 0, H)
-    g.add_color_stop_rgb(0, *hexrgb(top))
-    g.add_color_stop_rgb(1, *hexrgb(bottom))
-    cr.set_source(g)
-    cr.paint()
+    # 1. 바탕 — 세로 그라데이션
+    t = (ys / H)[..., None]
+    img = np.array(hexrgb(top)) * (1 - t) + np.array(hexrgb(bottom)) * t
 
-    # 2. 빛
-    cr.set_operator(cairo.OPERATOR_ADD)
+    # 2. 빛 — 가우스 감쇠, 더하기
     for col, cx, cy, r, a in glows:
-        rgb = hexrgb(col)
-        rg = cairo.RadialGradient(cx * W, cy * H, 0, cx * W, cy * H, r * W)
-        # 가우스에 가까운 감쇠 — 선형이면 가장자리에 둥근 테가 보인다
-        for i in range(11):
-            p = i / 10
-            rg.add_color_stop_rgba(p, *rgb, a * math.exp(-4.2 * p * p))
-        cr.set_source(rg)
-        cr.paint()
+        p2 = ((xs - cx * W) ** 2 + (ys - cy * H) ** 2) / (r * W) ** 2
+        img += np.array(hexrgb(col)) * (a * np.exp(-4.2 * p2))[..., None]
+    np.clip(img, 0, 1, out=img)
 
-    # 3. 흐르는 다섯 줄 — 먼저 넓고 옅은 빛띠, 그 위에 가는 선
+    # 3. 가운데 줄을 따라 번지는 빛띠 — 가우스로 부드럽게 (옅은 선을 겹쳐 그리면 가장자리가 계단진다)
     phase = {"hatsune": 0.4, "sakura": 1.3, "midnight": 2.2}[name]
+    glow_col = np.array(hexrgb(glows[0][0]))
+    t_ = xs[0] / W
+    mid = (H * 0.60 + 2 * H * 0.013
+           + np.sin(t_ * math.pi * 1.35 + phase + 2 * 0.10) * H * 0.075
+           + np.sin(t_ * math.pi * 3.1 + phase * 0.6) * H * 0.018)      # staff_y(x, k=2)
+    band = 0.13 * np.exp(-((ys - mid[None, :]) / (H * 0.018)) ** 2)
+    img = img * (1 - band[..., None]) + glow_col * band[..., None]
+    del band
+
+    # 4. 흐르는 다섯 줄과 빛 알갱이 — 가는 것들이라 8비트 cairo 로 그려도 계단이 없다
+    layer = cairo.ImageSurface(cairo.FORMAT_ARGB32, W, H)
+    cr = cairo.Context(layer)
     lc = hexrgb(line_col)
-    glow_col = hexrgb(glows[0][0])
 
     def path(k):
         cr.new_path()
@@ -96,14 +101,6 @@ def draw(name, W, H, out_dir):
             y = staff_y(x, W, H, k, phase)
             (cr.move_to if i == 0 else cr.line_to)(x, y)
 
-    for width, alpha in ((H * 0.070, 0.035), (H * 0.034, 0.045), (H * 0.014, 0.065)):
-        path(2)
-        cr.set_source_rgba(*glow_col, alpha)
-        cr.set_line_width(width)
-        cr.set_line_cap(cairo.LINE_CAP_ROUND)
-        cr.stroke()
-
-    cr.set_operator(cairo.OPERATOR_OVER)
     for k in range(5):
         path(k)
         # 가운데 줄이 가장 밝고 바깥으로 갈수록 옅게
@@ -117,7 +114,6 @@ def draw(name, W, H, out_dir):
         cr.set_line_width(max(1.0, H / 1200))
         cr.stroke()
 
-    # 4. 빛 알갱이 — 줄 위에 드문드문 (음표 자리)
     sc = hexrgb(spark_col)
     cr.set_operator(cairo.OPERATOR_ADD)
     for _ in range(30):
@@ -135,40 +131,27 @@ def draw(name, W, H, out_dir):
         cr.set_source_rgba(*sc, a)
         cr.arc(x, y, r, 0, 2 * math.pi)
         cr.fill()
+    layer.flush()
+    # cairo ARGB32 = 미리 곱한(premultiplied) BGRA
+    lay = np.frombuffer(layer.get_data(), np.uint8).reshape(H, layer.get_stride() // 4, 4)[:, :W]
+    lay = lay.astype(np.float64) / 255
+    img = lay[..., 2::-1] + img * (1 - lay[..., 3:4])
+    del lay
 
-    # 5. 비네트
-    cr.set_operator(cairo.OPERATOR_OVER)
-    vg = cairo.RadialGradient(W * 0.5, H * 0.5, H * 0.35, W * 0.5, H * 0.5, W * 0.72)
-    vg.add_color_stop_rgba(0, 0, 0, 0, 0)
-    vg.add_color_stop_rgba(1, 0, 0, 0, 0.45)
-    cr.set_source(vg)
-    cr.paint()
+    # 5. 비네트 — 가장자리 어둡게
+    d = np.sqrt((xs - W / 2) ** 2 + (ys - H / 2) ** 2)
+    v = np.clip((d - H * 0.35) / (W * 0.72 - H * 0.35), 0, 1) * 0.45
+    img *= (1 - v)[..., None]
+    del xs, ys, d, v
 
-    # 6. 노이즈 (±1~2 단계) — 밴딩 제거
-    tile = cairo.ImageSurface(cairo.FORMAT_ARGB32, 256, 256)
-    buf = tile.get_data()
-    noise = os.urandom(256 * 256)
-    for i in range(256 * 256):
-        v = noise[i]
-        on = 255 if v & 1 else 0          # 흰 점 또는 검은 점
-        a = 5 + (v >> 5)                  # 아주 옅게 (5~12 / 255)
-        c = on * a // 255                 # premultiplied
-        o = i * 4
-        buf[o] = buf[o + 1] = buf[o + 2] = c
-        buf[o + 3] = a
-    tile.mark_dirty()
-    pat = cairo.SurfacePattern(tile)
-    pat.set_extend(cairo.EXTEND_REPEAT)
-    cr.set_source(pat)
-    cr.paint()
+    # 6. 디더링 — 삼각 분포 노이즈(±1 단계)를 더한 뒤 8비트로. 눈에는 안 보이고 계단만 없앤다
+    rng = np.random.default_rng(abs(hash(name)) % (2 ** 32))
+    img = img * 255 + rng.random(img.shape) - rng.random(img.shape)
+    out = np.clip(np.rint(img), 0, 255).astype(np.uint8)
 
-    # 저장: PNG 로 그리고 JPEG 로 (노이즈가 있는 그림은 PNG 가 수십 MB 가 된다)
-    png = os.path.join(out_dir, f".{name}.png")
-    surf.write_to_png(png)
-    pb = GdkPixbuf.Pixbuf.new_from_file(png)
+    # 저장: 4:4:4 JPEG (색 정보를 줄이지 않는다 — 4:2:0 이면 어두운 색 그라데이션이 얼룩진다)
     jpg = os.path.join(out_dir, f"{name}.jpg")
-    pb.savev(jpg, "jpeg", ["quality"], ["92"])
-    os.remove(png)
+    Image.fromarray(out, "RGB").save(jpg, "JPEG", quality=95, subsampling=0, optimize=True)
     print(f"  {jpg}  {os.path.getsize(jpg) // 1024} KiB")
 
 

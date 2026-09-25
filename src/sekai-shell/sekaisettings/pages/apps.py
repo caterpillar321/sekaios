@@ -12,7 +12,7 @@ from gi.repository import Gtk, GLib  # noqa: E402
 from ..util import run, spawn
 from ..widgets import Page, button, combo, entry, icon_image, info, row
 
-TERMINALS = [("sekai-terminal", "SekaiOS 터미널 (자동)"), ("foot", "Foot"), ("xterm", "XTerm")]
+TERMINALS = [("sekai-terminal", "SekaiOS 터미널 (자동)"), ("kitty", "Kitty"), ("foot", "Foot"), ("xterm", "XTerm")]
 BROWSERS = [("chromium", "Chromium"), ("google-chrome", "Google Chrome"),
             ("firefox-esr", "Firefox ESR")]
 FILERS = [("thunar", "Thunar"), ("pcmanfm", "PCManFM")]
@@ -67,7 +67,7 @@ def build_defaults(store):
     row(s, "소프트웨어 설치", "터미널에서 apt 로 설치합니다",
         icon=["system-software-install", "package-x-generic"],
         control=button("터미널 열기",
-                       lambda: spawn([store.get("apps", "terminal", "foot"),
+                       lambda: spawn([store.get("apps", "terminal", "sekai-terminal"),
                                       "-e", "bash", "-lc",
                                       "echo '예: sudo apt install <패키지>'; exec bash"])))
     return p

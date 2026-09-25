@@ -94,7 +94,7 @@ Maintainer: SekaiOS <sekai@localhost>
 Section: x11
 Priority: optional
 Depends: python3, python3-gi, python3-gi-cairo, gir1.2-gtk-3.0,
- gir1.2-gtklayershell-0.1, hyprland, foot, fuzzel,
+ gir1.2-gtklayershell-0.1, hyprland, kitty, foot, fuzzel,
  adwaita-icon-theme, papirus-icon-theme, swaybg, swayidle,
  gir1.2-gtksessionlock-0.1, libgtk-session-lock0, python3-pampy,
  libglib2.0-bin, sekai-winshot

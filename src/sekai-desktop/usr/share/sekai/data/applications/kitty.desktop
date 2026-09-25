@@ -1,0 +1,23 @@
+[Desktop Entry]
+# SekaiOS: kitty 를 "터미널"로 — sekai-terminal 을 거쳐 켠다
+#   (가상 머신이면 CPU 로 그리게 하는 등 SekaiOS 에 맞춘 처리가 거기 있다)
+Version=1.0
+Type=Application
+Name=Terminal
+Name[ko]=터미널
+GenericName=Terminal emulator
+GenericName[ko]=터미널
+Comment=Command line (Ctrl+C/V to copy and paste, Ctrl+Shift+T for a new tab)
+Comment[ko]=명령줄 (Ctrl+C·V 로 복사·붙여넣기, Ctrl+Shift+T 로 새 탭)
+TryExec=kitty
+StartupNotify=true
+StartupWMClass=kitty
+Exec=sekai-terminal
+Icon=utilities-terminal
+Categories=System;TerminalEmulator;
+Keywords=shell;prompt;command;commandline;cmd;terminal;kitty;터미널;명령;
+X-TerminalArgExec=--
+X-TerminalArgTitle=--title
+X-TerminalArgAppId=--class
+X-TerminalArgDir=--working-directory
+X-TerminalArgHold=--hold

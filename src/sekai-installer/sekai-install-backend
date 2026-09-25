@@ -232,6 +232,15 @@ kill $TICK 2>/dev/null; wait $TICK 2>/dev/null
 [ $rc -eq 0 ] || die "시스템을 설정하지 못했습니다 (기록: $LOG)"
 prog 91
 
+# Windows 가 있으면 메인보드 시계(RTC)를 현지 시간으로 — Windows 는 RTC 를 현지 시간으로 읽어서,
+#   리눅스 기본(UTC)으로 두면 Windows 로 넘어갔을 때 시간이 틀린다 (한국이면 9시간 이르게).
+#   시계 자체는 건드리지 않는다 — Windows 를 쓰던 컴퓨터면 이미 현지 시간이다.
+#   (os-prober 는 chroot 가 아니라 여기 라이브 환경에서 — 실제 udev 가 있어 더 잘 찾는다)
+if command -v os-prober >/dev/null 2>&1 && os-prober 2>>"$LOG" | tee -a "$LOG" | grep -qi windows; then
+    printf '0.0 0 0.0\n0\nLOCAL\n' > "$TARGET/etc/adjtime"
+    log "Windows 있음 — 메인보드 시계를 현지 시간으로 (/etc/adjtime LOCAL)"
+fi
+
 # ── 5. 부트로더 ──────────────────────────────────────────
 step 5 "부팅 준비"
 chroot "$TARGET" /usr/sbin/sekai-bootloader install --disk "$DISK" --part 1 >>"$LOG" 2>&1 \

@@ -1,6 +1,33 @@
 #!/bin/sh
-# SekaiOS 터미널 — Wayland 에선 foot, 기본 화면 모드(X11)에선 xterm 을 비슷한 모양으로
+# SekaiOS 터미널 — Wayland 에선 kitty (윈도우 터미널처럼 Ctrl+C·V, 탭 — /etc/xdg/sekai/kitty/kitty.conf),
+#   kitty 가 없으면 foot. 기본 화면 모드(X11)에선 xterm 을 비슷한 모양으로 (kitty 는 OpenGL 이 필요하다).
+#   인자는 foot·xterm 식으로 받는다:  sekai-terminal [-T 제목] [-e 명령 인자…]
 if [ -n "${WAYLAND_DISPLAY:-}" ] && [ "${XDG_SESSION_TYPE:-}" != x11 ]; then
+    if command -v kitty >/dev/null 2>&1; then
+        title=""
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -T|--title) title="$2"; shift 2 ;;
+                -e) shift; break ;;
+                *) break ;;
+            esac
+        done
+        # 가상 머신(VMware 등)의 가상 GPU 로 그린 버퍼는 Hyprland 가 받지 못해 kitty 가 곧바로 죽는다.
+        #   CPU 로 그리는 그래픽 단계에서도 마찬가지 — 이때는 kitty 도 CPU 로 (터미널은 충분히 빠르다)
+        if [ -n "${SEKAI_SOFTWARE_RENDER:-}" ] || \
+           case "$(systemd-detect-virt 2>/dev/null)" in none|"") false ;; *) true ;; esac; then
+            export LIBGL_ALWAYS_SOFTWARE=1
+        fi
+        # 설정: SekaiOS 기본값 위에 사용자 것(~/.config/kitty/kitty.conf)을 겹친다.
+        #   kitty 는 쓰기 권한이 있는 설정 폴더만 보므로 XDG_CONFIG_DIRS(/etc/xdg/sekai)로는 못 읽는다
+        if [ -n "$title" ]; then
+            set -- --title "$title" "$@"
+        fi
+        if [ -f "$HOME/.config/kitty/kitty.conf" ]; then
+            set -- --config "$HOME/.config/kitty/kitty.conf" "$@"
+        fi
+        exec kitty --config /etc/xdg/sekai/kitty/kitty.conf "$@"
+    fi
     exec foot "$@"
 fi
 exec xterm -class SekaiTerminal -fa "JetBrains Mono" -fs 11 -bg "#151517" -fg "#f1f1f3" \
