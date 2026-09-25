@@ -1,0 +1,16 @@
+#!/bin/sh
+# SekaiOS — NVIDIA 드라이버가 있으면 initramfs 에 넣어 부팅 초기부터 올린다 (early KMS).
+#   안 넣으면 부팅 로고를 펌웨어 화면(simpledrm)으로 그리다가 중간에 NVIDIA 가 올라오며
+#   화면을 다시 잡는다 — 모니터 신호가 한 번 더 끊기고(백라이트까지 꺼지기도) 로고가 다시 그려진다.
+#   드라이버가 없거나 이 커널용 모듈이 없으면 아무것도 하지 않는다.
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in prereqs) prereqs; exit 0 ;; esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+modinfo -k "$version" nvidia_drm >/dev/null 2>&1 || exit 0
+# 모듈 옵션(/etc/modprobe.d — modeset=1 fbdev=1)과 GSP 펌웨어는 initramfs-tools 가 따라 넣는다
+for m in nvidia nvidia_modeset nvidia_drm; do
+    force_load "$m"
+done

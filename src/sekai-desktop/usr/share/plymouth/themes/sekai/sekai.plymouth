@@ -1,8 +1,30 @@
 [Plymouth Theme]
 Name=SekaiOS
 Description=SekaiOS boot splash — two stars
-ModuleName=script
+# two-step: 모니터마다 따로 가운데에 그린다 (그림은 scripts/gen-plymouth.py 가 만든다)
+ModuleName=two-step
 
-[script]
+[two-step]
+Font=Pretendard 12
+TitleFont=Pretendard Light 24
 ImageDir=/usr/share/plymouth/themes/sekai
-ScriptFile=/usr/share/plymouth/themes/sekai/sekai.script
+HorizontalAlignment=.5
+VerticalAlignment=.5
+DialogHorizontalAlignment=.5
+DialogVerticalAlignment=.62
+TitleHorizontalAlignment=.5
+TitleVerticalAlignment=.36
+MessageBelowAnimation=true
+Transition=none
+TransitionDuration=0.0
+BackgroundStartColor=0x121317
+BackgroundEndColor=0x0b0c0e
+
+[boot-up]
+UseEndAnimation=false
+
+[shutdown]
+UseEndAnimation=false
+
+[reboot]
+UseEndAnimation=false

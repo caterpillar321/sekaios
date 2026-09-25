@@ -123,7 +123,7 @@ DSRC="$P/src/sekai-desktop"
 ( cd "$DSRC" && find . -type f ) | while read -r f; do
     f="${f#./}"
     mode=644
-    case "$f" in usr/bin/*|usr/sbin/*|usr/libexec/*|etc/kernel/postinst.d/*|etc/initramfs/post-update.d/*|etc/grub.d/*) mode=755 ;; esac
+    case "$f" in usr/bin/*|usr/sbin/*|usr/libexec/*|etc/kernel/postinst.d/*|etc/initramfs/post-update.d/*|etc/grub.d/*|usr/share/initramfs-tools/hooks/*) mode=755 ;; esac
     install -Dm$mode "$DSRC/$f" "$STAGE_D/$f"
 done
 
@@ -191,11 +191,17 @@ if [ "$1" = "configure" ] || [ "$1" = "triggered" ]; then
     /usr/sbin/sekai-bootloader update || true
 fi
 if [ "$1" = "configure" ]; then
-    # 부팅 화면(Plymouth) — 테마가 바뀔 때만 initramfs 를 다시 만든다 (느리므로)
-    if command -v plymouth-set-default-theme >/dev/null \
-       && [ "$(plymouth-set-default-theme 2>/dev/null)" != sekai ]; then
-        plymouth-set-default-theme sekai
-        update-initramfs -u >/dev/null 2>&1 || true
+    # 부팅 화면(Plymouth) — 테마나 그 그림이 바뀔 때만 initramfs 를 다시 만든다 (느리므로).
+    #   테마는 initramfs 안에 복사되므로 파일만 바뀌어도 다시 만들어야 새 그림이 뜬다
+    if command -v plymouth-set-default-theme >/dev/null; then
+        # NVIDIA 를 부팅 초기에 올리는 훅(sekai-nvidia)도 해시에 넣는다 — 처음 받으면 initramfs 를 다시 만든다
+        sum=$(cat /usr/share/plymouth/themes/sekai/* /usr/share/initramfs-tools/hooks/sekai-nvidia 2>/dev/null | md5sum | cut -d" " -f1)
+        stamp=/var/lib/sekai/plymouth-theme.md5
+        if [ "$(plymouth-set-default-theme 2>/dev/null)" != sekai ] || [ "$(cat $stamp 2>/dev/null)" != "$sum" ]; then
+            plymouth-set-default-theme sekai
+            update-initramfs -u >/dev/null 2>&1 || true
+            mkdir -p /var/lib/sekai && echo "$sum" > $stamp
+        fi
     fi
 fi
 PI
@@ -262,7 +268,7 @@ Depends: sekai-shell (= ${FULL}),
  papirus-icon-theme, adwaita-icon-theme,
  gnome-keyring, libpam-gnome-keyring, libpam-runtime,
  ibus, ibus-wayland, ibus-hangul, ibus-gtk3, ibus-gtk4, locales, greetd,
- plymouth,
+ plymouth, plymouth-themes,
  dbus-user-session,
  libgl1-mesa-dri, libegl-mesa0, mesa-utils
 Recommends: htop, tmux, tree, ncdu, vim, nano, git, curl, wget,
