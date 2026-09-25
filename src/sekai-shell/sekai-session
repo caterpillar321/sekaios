@@ -75,11 +75,14 @@ s = Store(); s.write_hypr_fragment(); theme.apply_system(theme.mode_of(s.get("ap
 
 # 그래픽 드라이버가 없으면(hw-env.sh 가 SEKAI_BASIC=1) 처음부터 기본 화면 모드(X11)
 [ -n "${SEKAI_BASIC:-}" ] && exec /usr/lib/sekai/x11/start /usr/lib/sekai/x11/session
-# Hyprland 가 시작하자마자(10초 안) 비정상으로 끝나면 — 드라이버 문제 — 기본 화면 모드로 다시
+# Hyprland 가 시작하자마자(10초 안) 비정상으로 끝나면 — 드라이버 문제 — 기본 화면 모드로 다시.
+#   세션이 한 번이라도 떴으면(hyprland.conf 의 exec-once 가 남기는 표시) 멀쩡한 것 — 빨리 로그아웃해도 되띄우지 않는다
+UP="${XDG_RUNTIME_DIR:-/tmp}/sekai-session.up"
+rm -f "$UP"
 started=$(date +%s)
 Hyprland >"$LOGDIR/session.log" 2>&1
 rc=$?
-if [ $rc -ne 0 ] && [ $(( $(date +%s) - started )) -lt 10 ]; then
+if [ ! -e "$UP" ] && [ $rc -ne 0 ] && [ $(( $(date +%s) - started )) -lt 10 ]; then
     export SEKAI_BASIC=1 SEKAI_BASIC_REASON=crash
     exec /usr/lib/sekai/x11/start /usr/lib/sekai/x11/session
 fi

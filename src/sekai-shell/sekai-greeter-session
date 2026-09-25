@@ -20,13 +20,19 @@ X=/usr/lib/sekai/x11
 
 # Hyprland 로 띄우고, 시작하자마자(10초 안) 비정상으로 끝나면 기본 화면 모드(X11)로 다시.
 #   (그냥 두면 greetd 가 계속 다시 띄우다 포기해서 화면이 영영 까맣게 남는다)
+#   로그인 화면 프로그램이 한 번이라도 떴으면(표시 파일) Hyprland 는 멀쩡한 것 — 되띄우지 않는다.
+#   예전엔 비밀번호를 10초 안에 넣으면 정상 로그인을 고장으로 알고 로그인 뒤에 X11 로그인 화면을
+#   띄웠다 (콘솔 화면 버퍼에 그려져 좌상단·보조 모니터에 로그인 화면이 남고, 로그인도 몇 초 늦었다).
+DONE="${XDG_RUNTIME_DIR:-/tmp}/sekai-greeter.done"
 run_greeter() {
     if [ -n "${SEKAI_BASIC:-}" ]; then
         exec "$X/start" "$X/greeter" "$APP"
     fi
+    rm -f "$DONE"
     started=$(date +%s)
     Hyprland -c "$1" >/dev/null 2>&1
     rc=$?
+    [ -e "$DONE" ] && { rm -f "$DONE"; exit 0; }
     if [ $rc -ne 0 ] && [ $(( $(date +%s) - started )) -lt 10 ]; then
         export SEKAI_BASIC=1
         exec "$X/start" "$X/greeter" "$APP"
