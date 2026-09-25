@@ -6,8 +6,7 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib  # noqa: E402
 
 from ..util import run, spawn
-from ..widgets import (Page, button, combo, info, row, slider, spin, switch,
-                       entry)
+from ..widgets import (Page, button, combo, info, row, slider, spin, switch)
 
 LAYOUTS = [("us", "영어 (미국)"), ("kr", "한국어"), ("jp", "일본어"),
            ("de", "독일어"), ("fr", "프랑스어"), ("es", "스페인어"),
@@ -77,6 +76,35 @@ def build_sound(store):
     return p
 
 
+def edited_entry(text, on_change, width=20, placeholder=None):
+    """입력 칸 — 엔터나 포커스가 빠질 때, 그리고 사람이 글자를 바꿨을 때만 저장한다.
+    포커스가 지나가기만 해도 저장하면, 다른 곳(위 목록·한/영 스위치)에서 바꾼 값을
+    이 칸에 남아 있던 옛 값으로 되돌렸다 (키보드 레이아웃이 us 로 돌아가는 등)."""
+    e = Gtk.Entry()
+    e.set_text(str(text or ""))
+    e.set_width_chars(width)
+    if placeholder:
+        e.set_placeholder_text(placeholder)
+    e._applied = str(text or "")
+
+    def apply(w):
+        t = w.get_text()
+        if t != w._applied:
+            w._applied = t
+            on_change(t)
+    e.connect("activate", apply)
+    e.connect("focus-out-event", lambda w, _e: (apply(w), False)[1])
+    return e
+
+
+def set_entry_value(e, text):
+    """밖에서 값이 바뀌었을 때 칸을 맞춘다 (저장은 하지 않는다)"""
+    t = str(text or "")
+    e._applied = t
+    if e.get_text() != t:
+        e.set_text(t)
+
+
 # ── 키보드 / 마우스 ─────────────────────────────────────────
 def build_input(store):
     p = Page("키보드 및 마우스", "입력 장치의 동작을 설정합니다.")
@@ -90,14 +118,21 @@ def build_input(store):
         icon=["input-keyboard", "preferences-desktop-keyboard"],
         control=combo(items, cur_layout,
                       lambda v: store.set("input", "kb_layout", v)))
-    row(s, "직접 입력", "위 목록에 없는 레이아웃",
-        control=entry(i["kb_layout"],
-                      lambda v: store.set("input", "kb_layout", v),
-                      width=14, placeholder="us,kr"))
-    row(s, "전환 단축키", "xkb options (예: grp:alt_shift_toggle)",
-        control=entry(i["kb_options"],
-                      lambda v: store.set("input", "kb_options", v),
-                      width=22, placeholder="grp:alt_shift_toggle"))
+    layout_entry = edited_entry(i["kb_layout"], lambda v: store.set("input", "kb_layout", v),
+                                width=14, placeholder="us,kr")
+    row(s, "직접 입력", "위 목록에 없는 레이아웃", control=layout_entry)
+    options_entry = edited_entry(i["kb_options"], lambda v: store.set("input", "kb_options", v),
+                                 width=22, placeholder="grp:alt_shift_toggle")
+    row(s, "전환 단축키", "xkb options (예: grp:alt_shift_toggle)", control=options_entry)
+
+    # 위 목록이나 "시간 및 언어"의 한/영 스위치가 같은 값을 바꾸면 칸도 따라간다
+    #   (칸에 옛 값이 남아 있으면 헷갈리고, 예전엔 포커스만 지나가도 그 옛 값으로 되돌렸다)
+    def follow(section, key, value):
+        if section == "input" and key == "kb_layout":
+            set_entry_value(layout_entry, value)
+        elif section == "input" and key == "kb_options":
+            set_entry_value(options_entry, value)
+    store.connect(follow)
     row(s, "키 반복 속도", "초당 반복 횟수",
         control=slider(i["repeat_rate"], 1, 60, 1,
                        lambda v: store.set("input", "repeat_rate", v)))

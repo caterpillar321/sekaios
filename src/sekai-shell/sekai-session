@@ -46,17 +46,8 @@ export XMODIFIERS=@im=ibus          # XWayland(X11) 앱
 #   경고 알림을 띄우고, Wayland 경로와 겹친다.
 export QT_IM_MODULES="wayland;ibus"
 
-# ── 로그인 화면이 같은 해상도로 뜨게 모니터 설정을 알려 둔다 ─────
-#   로그인 화면(_greetd)은 내 홈을 못 읽으므로 공용 폴더에 monitor 줄만 적는다.
-#   (sekai-greeter-session 이 형식을 엄격히 검사한 뒤에만 쓴다)
-if [ -d /var/lib/sekai/displays ] && [ -f "$HOME/.config/hypr/sekai.conf" ]; then
-    ( umask 022; { grep '^monitor = ' "$HOME/.config/hypr/sekai.conf"
-      # 주 디스플레이 — 로그인 화면이 입력 칸을 거기에 띄운다
-      python3 -c 'import json,os
-p = (json.load(open(os.path.expanduser("~/.config/sekai/settings.json"))).get("layout") or {}).get("primary") or ""
-print("# primary = " + p) if p else None' 2>/dev/null
-    } > "/var/lib/sekai/displays/$(id -un).conf" 2>/dev/null ) || true
-fi
+# (로그인 화면이 같은 해상도·주 디스플레이로 뜨게 알리는 것은 아래 write_hypr_fragment 가 한다 —
+#  store.publish_display. 누구나 쓰는 폴더라 셸 리디렉션으로 쓰지 않는다: 남이 둔 FIFO 에 막힌다)
 
 # ── 하드웨어 보정 (VMware 등) ─────────────────────────────
 . /usr/lib/sekai/hw-env.sh

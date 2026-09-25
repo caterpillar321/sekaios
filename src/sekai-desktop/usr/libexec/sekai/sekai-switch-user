@@ -4,12 +4,16 @@
 #
 #  지금 세션은 그대로 둔 채(부른 쪽이 먼저 잠근다) 다른 가상 터미널에
 #  로그인 화면을 띄우고 그리로 넘어간다.
+#    · 부른 사람(pkexec 의 PKEXEC_UID)의 화면이 정말 잠겼는지 먼저 확인한다 — 잠금이 실패했는데
+#      로그인 화면으로 넘어가면, 다른 사람이 가상 터미널을 바꿔 잠기지 않은 세션으로 들어갈 수 있다.
+#      (sekai-lock 이 잠긴 동안 남기는 표시 /run/user/<uid>/sekai-lock.pid.locked 와 그 프로세스)
 #    · 이미 사람이 없는 로그인 화면이 떠 있는 가상 터미널이 있으면 그리로
 #    · 없으면 비어 있는 가상 터미널(8~12)에 sekai-greetd@N 을 새로 띄운다
 #  인자는 받지 않는다 — 누가 불러도 하는 일은 "로그인 화면 보여 주기" 뿐이다.
 # ═══════════════════════════════════════════════════════════════
 import json
 import os
+import stat
 import subprocess
 import sys
 import time
@@ -27,6 +31,34 @@ def sessions():
         return []
 
 
+def caller_locked(uid, timeout=5.0):
+    """uid 의 화면이 잠겼나 — sekai-lock(Wayland)·xsecurelock(X11)이 남긴 표시와,
+    그 표시의 프로세스가 그 사용자의 잠금 프로그램으로 살아 있는지. 잠그는 중이면 잠시 기다린다."""
+    mark = f"/run/user/{uid}/sekai-lock.pid.locked"
+    end = time.monotonic() + timeout
+    while True:
+        try:
+            # 사용자가 쓰는 파일이다 — 링크는 따라가지 않고 FIFO 에 막히지 않게, 일반 파일만
+            fd = os.open(mark, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+            try:
+                st = os.fstat(fd)
+                if not stat.S_ISREG(st.st_mode) or st.st_uid != uid:
+                    raise OSError("잠김 표시가 일반 파일이 아님")
+                pid = int(os.read(fd, 32).decode().strip())
+            finally:
+                os.close(fd)
+            if os.stat(f"/proc/{pid}").st_uid == uid:
+                with open(f"/proc/{pid}/cmdline", "rb") as f:
+                    cmd = f.read()
+                if b"sekai-lock" in cmd or b"xsecurelock" in cmd:
+                    return True
+        except (OSError, ValueError):
+            pass
+        if time.monotonic() >= end:
+            return False
+        time.sleep(0.2)
+
+
 def vt_of(s):
     t = s.get("tty") or ""
     return int(t[3:]) if t.startswith("tty") and t[3:].isdigit() else None
@@ -36,11 +68,15 @@ def main():
     if os.geteuid() != 0:
         print("관리자 권한이 필요합니다")
         return 1
+    caller = os.environ.get("PKEXEC_UID", "")
+    if caller.isdigit() and not caller_locked(int(caller)):
+        print("화면이 잠기지 않아 사용자 전환을 하지 않습니다")
+        return 1
     ss = sessions()
     users = {vt_of(s) for s in ss if s.get("class") == "user"}
     greeters = {vt_of(s) for s in ss if s.get("class") == "greeter"}
     idle = sorted(v for v in greeters - users if v)
-    # 1. 사람 없이 로그인 화면만 떠 있는 가상 터미널 (7번 기본 화면 포함) — 하나만 쓰고
+    # 1. 사람 없이 로그인 화면만 떠 있는 가상 터미널 (1번 기본 화면 포함) — 하나만 쓰고
     #    나머지 여분(전에 전환하느라 띄운 8~12번)은 정리한다
     if idle:
         target = idle[0]
@@ -50,7 +86,7 @@ def main():
                 subprocess.run(["systemctl", "stop", f"sekai-greetd@{vt}.service"], env=ENV)
         return 0
     # 2. 빈 가상 터미널에 새로
-    busy = users | greeters | {7}
+    busy = users | greeters | {1}          # 1번은 기본 로그인 화면·첫 세션 자리 (greetd.toml)
     for vt in VTS:
         if vt in busy:
             continue

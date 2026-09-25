@@ -89,15 +89,64 @@ def wifi_connect(req):
     pw = str(req.get("password", ""))
     if not (0 < len(ssid.encode()) <= 32) or len(pw) > 63 or "\n" in ssid + pw:
         return {"ok": False, "error": "이름이나 암호가 올바르지 않습니다"}
-    cmd = ["nmcli", "device", "wifi", "connect", ssid]
-    if pw:
-        cmd += ["password", pw]
-    rc, out = run(cmd, timeout=45)
+    if not pw:
+        rc, out = run(["nmcli", "device", "wifi", "connect", ssid], timeout=45)
+    else:
+        rc, out = _connect_secret(ssid, pw)
     if rc != 0:
         msg = "암호가 틀렸거나 연결할 수 없습니다" if "Secrets" in out or "password" in out.lower() \
             else "연결하지 못했습니다"
         return {"ok": False, "error": msg}
     return {"ok": True}
+
+
+def _key_mgmt(ssid):
+    """검색 결과의 SECURITY 칸 → key-mgmt (목록에 없으면 가장 흔한 WPA-PSK)"""
+    rc, out = run(["nmcli", "-t", "-f", "SSID,SECURITY", "device", "wifi", "list"])
+    sec = ""
+    for ln in out.splitlines():
+        parts = re.split(r"(?<!\\):", ln)
+        if len(parts) >= 2 and parts[0].replace("\\:", ":") == ssid:
+            sec = parts[1].upper()
+            break
+    if "WPA3" in sec and "WPA1" not in sec and "WPA2" not in sec:
+        return "sae"
+    if "WEP" in sec and "WPA" not in sec:
+        return "none"
+    return "wpa-psk"
+
+
+def _connect_secret(ssid, pw):
+    """비밀번호를 명령줄(ps 로 누구나 볼 수 있다)이 아니라 nmcli passwd-file(메모리 파일)로 넘긴다.
+    비밀번호 없이 프로필을 만들고 `connection up … passwd-file` 로 올린다 — NetworkManager 가
+    받은 비밀번호를 프로필에 저장한다. 실패하면 만든 프로필은 지운다. 반환: (코드, 출력)"""
+    km = _key_mgmt(ssid)
+    add = ["nmcli", "connection", "add", "type", "wifi", "con-name", ssid, "ssid", ssid,
+           "wifi-sec.key-mgmt", km]
+    if km == "none":
+        add += ["wifi-sec.wep-key-type", "1" if len(pw) in (5, 13, 10, 26) else "2"]
+    rc, out = run(add, timeout=15)
+    m = re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", out)
+    if rc != 0 or not m:
+        return 1, out
+    uuid = m.group(0)
+    field = "802-11-wireless-security.wep-key0" if km == "none" else "802-11-wireless-security.psk"
+    fd = os.memfd_create("sekai-wifi", os.MFD_CLOEXEC)
+    try:
+        os.write(fd, f"{field}:{pw}\n".encode())
+        os.lseek(fd, 0, os.SEEK_SET)
+        try:
+            r = subprocess.run(["nmcli", "-w", "45", "connection", "up", "uuid", uuid,
+                                "passwd-file", f"/dev/fd/{fd}"],
+                               capture_output=True, text=True, env=ENV, timeout=60, pass_fds=(fd,))
+            rc, out = r.returncode, (r.stdout or "") + (r.stderr or "")
+        except subprocess.TimeoutExpired:
+            rc, out = 1, "timeout"
+    finally:
+        os.close(fd)
+    if rc != 0:
+        run(["nmcli", "connection", "delete", "uuid", uuid], timeout=15)
+    return rc, out
 
 
 def zones():

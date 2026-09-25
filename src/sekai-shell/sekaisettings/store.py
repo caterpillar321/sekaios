@@ -9,11 +9,13 @@
 타이틀바 버튼이 중복되는 등 부작용이 있었다.
 """
 import copy
+import fcntl
 import json
 import os
 import pwd
 import signal
 import subprocess
+import tempfile
 
 from .util import dbg, hex_to_rgba, keyword, run
 from sekaishell import theme
@@ -98,6 +100,27 @@ _FRAG_HEADER = """# ════════════════════
 """
 
 
+def atomic_write(path, text):
+    """같은 폴더의 고유한 임시 파일에 다 쓰고(fsync) 바꿔치기 — 읽는 쪽은 언제나 온전한 파일만 본다.
+    임시 파일 이름을 고정(…tmp)하면 두 프로그램이 동시에 저장할 때 서로의 반쯤 쓴 파일을
+    바꿔치기해 JSON 이 깨졌다 (깨진 설정은 다음 실행 때 기본값으로 돌아간다)."""
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix="." + os.path.basename(path) + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def _merge(base, over):
     """기본값 위에 저장된 값을 덮어쓴다 (한 단계 중첩까지)."""
     out = copy.deepcopy(base)
@@ -156,11 +179,11 @@ class Store:
 
     def save(self):
         os.makedirs(CFG_DIR, exist_ok=True)
-        tmp = CFG_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(self._diff(), f, indent=2, ensure_ascii=False)
-            f.write("\n")
-        os.replace(tmp, CFG_FILE)
+        text = json.dumps(self._diff(), indent=2, ensure_ascii=False) + "\n"
+        # 저장은 한 번에 하나씩 (설정 앱 말고도 첫 부팅 설정·세션 시작 스크립트가 이 파일을 다룬다)
+        with open(os.path.join(CFG_DIR, ".settings.lock"), "w") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)
+            atomic_write(CFG_FILE, text)
         self.write_hypr_fragment()
         self.notify_panel()
 
@@ -302,11 +325,7 @@ class Store:
             lines.append(f"workspace = 1, monitor:{prim}, default:true")
         lines.append("")
 
-        os.makedirs(HYPR_DIR, exist_ok=True)
-        tmp = HYPR_FRAG + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
-        os.replace(tmp, HYPR_FRAG)
+        atomic_write(HYPR_FRAG, "\n".join(lines))
         dbg("조각 생성", HYPR_FRAG)
         self.publish_display()
 
@@ -353,12 +372,20 @@ class Store:
             if prim:
                 mon.append(f"# primary = {prim}\n")      # 로그인 화면이 입력 칸을 주 디스플레이에
             path = os.path.join(d, pwd.getpwuid(os.getuid()).pw_name + ".conf")
-            old = os.umask(0o022)
+            # 누구나 쓰는 폴더 — 이름으로 바로 열면 남이 미리 둔 FIFO·링크에 막히거나 쓴다.
+            #   예측할 수 없는 새 임시 파일(O_EXCL)에 쓰고 바꿔 넣는다
+            fd, tmp = tempfile.mkstemp(dir=d, prefix=".sekai-display-")
             try:
-                with open(path, "w", encoding="utf-8") as f:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
                     f.writelines(mon)
-            finally:
-                os.umask(old)
+                    os.fchmod(f.fileno(), 0o644)      # 로그인 화면(_greetd)이 읽는다
+                os.replace(tmp, path)
+            except BaseException:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
         except Exception as e:
             dbg("해상도 게시 실패", e)
     def apply_one(self, section, key, value):

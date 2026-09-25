@@ -7,7 +7,7 @@ import sys
 
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, Gdk, GLib  # noqa: E402
+from gi.repository import Gtk, Gdk, Gio, GLib  # noqa: E402
 
 from .store import Store
 from .util import dbg
@@ -15,6 +15,9 @@ from .widgets import icon_image
 from .pages import all_pages
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# 설정 창은 하나만 — 두 창이 각자 메모리의 설정으로 저장하면 서로의 변경을 덮어쓴다.
+#   두 번째로 실행하면 이미 떠 있는 창을 앞으로 (--page 가 있으면 그 페이지로)
+APP_ID = "org.sekaios.Settings"
 CSS_PATHS = [
     os.path.join(HERE, "..", "settings.css"),
     "/usr/share/sekai-shell/settings.css",
@@ -56,7 +59,6 @@ class SettingsWindow(Gtk.Window):
         self.set_default_size(1100, 760)
         self.set_size_request(760, 480)
         self.get_style_context().add_class("settings-window")
-        self.connect("destroy", Gtk.main_quit)
 
         self._css = _load_css(store)
         store.connect(self._on_change)
@@ -181,45 +183,64 @@ def _error_page(title, err):
     return p
 
 
-def main(argv=None):
-    argv = argv if argv is not None else sys.argv[1:]
-    start = None
-    for a in argv:
+def _start_page(args):
+    """--page=<아이디> 또는 아이디만 (sekai-settings display)"""
+    ids = {p["id"] for p in all_pages()}
+    for a in args:
         if a.startswith("--page="):
-            start = a.split("=", 1)[1]
-        elif a in ("-h", "--help"):
-            print("사용법: sekai-settings [--page=<아이디>]")
-            print("  페이지:", ", ".join(p["id"] for p in all_pages()))
+            return a.split("=", 1)[1]
+        if a in ids:
+            return a
+    return None
+
+
+class SettingsApp(Gtk.Application):
+    def __init__(self):
+        super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
+        self.win = None
+
+    def do_command_line(self, cl):
+        start = _start_page(cl.get_arguments()[1:])
+        if self.win is not None:                 # 이미 떠 있다 — 앞으로
+            if start:
+                self.win._select(start)
+            self.win.present()
             return 0
 
-    store = Store()
-    # 처음 실행이면 조각 파일을 만들어 둔다
-    store.write_hypr_fragment()
+        store = Store()
+        # 처음 실행이면 조각 파일을 만들어 둔다
+        store.write_hypr_fragment()
 
-    from sekaishell import theme
-    theme.apply_gtk_settings(Gtk.Settings.get_default(), theme.mode_of(store.get("appearance")))
+        from sekaishell import theme
+        theme.apply_gtk_settings(Gtk.Settings.get_default(), theme.mode_of(store.get("appearance")))
 
-    win = SettingsWindow(store, start)
-    win.show_all()
+        self.win = win = SettingsWindow(store, start)
+        self.add_window(win)                      # 창을 닫으면 프로그램도 끝난다
+        win.show_all()
 
-    # 개발용: SEKAI_SHOT=/경로.png 이면 창을 찍고 종료한다.
-    #   (원격에서 화면을 직접 볼 수 없을 때 쓰려고 넣어 둔 것)
-    shot = os.environ.get("SEKAI_SHOT")
-    if shot:
-        delay = int(os.environ.get("SEKAI_SHOT_DELAY", "1500"))
+        # 개발용: SEKAI_SHOT=/경로.png 이면 창을 찍고 종료한다.
+        #   (원격에서 화면을 직접 볼 수 없을 때 쓰려고 넣어 둔 것)
+        shot = os.environ.get("SEKAI_SHOT")
+        if shot:
+            delay = int(os.environ.get("SEKAI_SHOT_DELAY", "1500"))
 
-        def grab():
-            gw = win.get_window()
-            if gw is not None:
-                from gi.repository import Gdk as _Gdk
-                pb = _Gdk.pixbuf_get_from_window(gw, 0, 0,
-                                                 gw.get_width(), gw.get_height())
-                if pb:
-                    pb.savev(shot, "png", [], [])
-                    print("shot:", shot, gw.get_width(), "x", gw.get_height())
-            Gtk.main_quit()
-            return False
-        GLib.timeout_add(delay, grab)
+            def grab():
+                gw = win.get_window()
+                if gw is not None:
+                    pb = Gdk.pixbuf_get_from_window(gw, 0, 0, gw.get_width(), gw.get_height())
+                    if pb:
+                        pb.savev(shot, "png", [], [])
+                        print("shot:", shot, gw.get_width(), "x", gw.get_height())
+                self.quit()
+                return False
+            GLib.timeout_add(delay, grab)
+        return 0
 
-    Gtk.main()
-    return 0
+
+def main(argv=None):
+    argv = argv if argv is not None else sys.argv[1:]
+    if any(a in ("-h", "--help") for a in argv):
+        print("사용법: sekai-settings [--page=<아이디>]")
+        print("  페이지:", ", ".join(p["id"] for p in all_pages()))
+        return 0
+    return SettingsApp().run([sys.argv[0]] + list(argv))

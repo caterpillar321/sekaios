@@ -2,6 +2,7 @@
 
 오래 걸리는 nmcli(무선 검색·연결)는 작업 스레드에서 — 창이 멈추지 않게.
 """
+import os
 import re
 import shutil
 import subprocess
@@ -59,6 +60,69 @@ def _wifi_list():
         seen.add(d["ssid"])
         uniq.append(d)
     return uniq
+
+
+def _key_mgmt(sec):
+    """nmcli SECURITY 칸(WPA2·WPA3·WEP…) → 802-11-wireless-security.key-mgmt"""
+    u = (sec or "").upper()
+    if "802.1X" in u:
+        return None                                  # 기업용 — 비밀번호 하나로는 안 된다
+    if "WPA3" in u and "WPA1" not in u and "WPA2" not in u:
+        return "sae"
+    if "WPA" in u:
+        return "wpa-psk"
+    if "WEP" in u:
+        return "none"
+    return None
+
+
+def wifi_connect_secret(ssid, sec, pw, dev=None, timeout=45):
+    """암호가 있는 Wi-Fi 에 연결 — 비밀번호를 명령줄에 넣지 않는다 (ps 로 누구나 볼 수 있다).
+    같은 SSID 의 프로필이 있으면 그것을, 없으면 비밀번호 없이 새로 만들고,
+    `nmcli connection up … passwd-file` 로 메모리 파일(memfd)에 담아 넘긴다.
+    NetworkManager 는 이렇게 받은 비밀번호를 프로필에 저장한다 (nm-applet 과 같은 길).
+    새로 만든 프로필로 연결하지 못하면 그 프로필은 지운다. 반환: None(성공) 또는 오류 한 줄."""
+    km = _key_mgmt(sec)
+    if km is None:
+        return "이 방식의 네트워크는 고급 연결 편집기에서 연결해 주세요"
+    uuid, created = None, False
+    for line in _nm("-f", "UUID,TYPE", "connection", "show").splitlines():
+        f = _fields(line)
+        if len(f) >= 2 and f[1] == "802-11-wireless":
+            got = run(["nmcli", "-g", "802-11-wireless.ssid", "connection", "show", "uuid", f[0]]).strip()
+            if got == ssid:
+                uuid = f[0]
+                break
+    if uuid is None:
+        add = ["nmcli", "connection", "add", "type", "wifi", "con-name", ssid,
+               "ssid", ssid, "wifi-sec.key-mgmt", km]
+        if km == "none":                             # WEP: 5·13 글자나 10·26 자리 16진수면 키, 아니면 암호문
+            add += ["wifi-sec.wep-key-type", "1" if len(pw) in (5, 13, 10, 26) else "2"]
+        if dev:
+            add += ["ifname", dev]
+        r = subprocess.run(add, capture_output=True, text=True, timeout=15)
+        m = re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", r.stdout + r.stderr)
+        if r.returncode != 0 or not m:
+            return (r.stderr or r.stdout).strip().splitlines()[-1:][0] if (r.stderr or r.stdout).strip() \
+                else "프로필을 만들지 못했습니다"
+        uuid, created = m.group(0), True
+    field = "802-11-wireless-security.wep-key0" if km == "none" else "802-11-wireless-security.psk"
+    fd = os.memfd_create("sekai-wifi", os.MFD_CLOEXEC)
+    try:
+        os.write(fd, f"{field}:{pw}\n".encode())
+        os.lseek(fd, 0, os.SEEK_SET)
+        cmd = ["nmcli", "-w", str(timeout), "connection", "up", "uuid", uuid, "passwd-file", f"/dev/fd/{fd}"]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 15, pass_fds=(fd,))
+            err = None if r.returncode == 0 else ((r.stderr or r.stdout).strip().splitlines()[-1:] or
+                                                  ["알 수 없는 오류"])[0]
+        except subprocess.TimeoutExpired:
+            err = "시간이 초과되었습니다"
+    finally:
+        os.close(fd)
+    if err is not None and created:
+        subprocess.run(["nmcli", "connection", "delete", "uuid", uuid], capture_output=True, timeout=15)
+    return err
 
 
 def _ask_password(parent, ssid):
@@ -158,11 +222,16 @@ def _fill(page, body, store, refresh=None):
                 status.set_text("연결을 끊는 중…" if active else f"'{ssid}' 에 연결하는 중…")
 
                 def work():
+                    if pw:
+                        # 비밀번호는 명령줄로 넘기지 않는다 (wifi_connect_secret)
+                        e = wifi_connect_secret(ssid, sec, pw, wifi_dev)
+                        GLib.idle_add(finish, ssid, None if e is None else [e])
+                        return
                     if active:
                         cmd = ["nmcli", "device", "disconnect", wifi_dev] if wifi_dev else \
                               ["nmcli", "connection", "down", "id", ssid]
                     else:
-                        cmd = ["nmcli", "device", "wifi", "connect", ssid] + (["password", pw] if pw else [])
+                        cmd = ["nmcli", "device", "wifi", "connect", ssid]
                     try:
                         r = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
                         err = None if r.returncode == 0 else (r.stderr or r.stdout).strip().splitlines()[-1:]

@@ -21,7 +21,10 @@ import time
 
 CFG = os.path.expanduser("~/.config/sekai/settings.json")
 DEFAULTS = {"screen_off": 600, "lock": 900, "suspend": 0}
-LOCK = "sekai-lock"
+# 잠금이 실패하면(설정 파일이 깨졌다거나) 검증된 swaylock 으로 넘어간다 — swayidle 은 명령의
+#   종료 코드를 보지 않아, before-sleep 에서 잠금이 실패해도 그대로 절전에 들어가 잠기지 않은 채 깨어났다.
+#   (sekai-lock 은 잠금이 실제로 걸리면 0, 못 걸면 1 로 끝난다. swaylock -f 도 잠긴 뒤 돌아온다)
+LOCK = "sekai-lock || swaylock -f -c 151517"
 DPMS_OFF = "hyprctl dispatch dpms off"
 DPMS_ON = "hyprctl dispatch dpms on"
 

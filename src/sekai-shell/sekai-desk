@@ -53,7 +53,8 @@ def dbg(*a):
 def settings():
     try:
         with open(CFG, encoding="utf-8") as f:
-            return json.load(f)
+            v = json.load(f)
+        return v if isinstance(v, dict) else {}
     except Exception:
         return {}
 
@@ -142,6 +143,15 @@ def thumbnail(path, ctype):
             return None
         return GdkPixbuf.Pixbuf.new_from_file_at_scale(path, ICON, ICON, True)
     except Exception:
+        return None
+
+
+def file_stamp(path):
+    """(수정 시각, 크기) — 썸네일을 다시 만들어야 하는지 가늠한다"""
+    try:
+        st = os.stat(path)
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
         return None
 
 
@@ -289,33 +299,72 @@ class Desk(Gtk.Window):
         self.area.connect("drag-data-received", self.on_drop)
         self.add(self.area)
 
+        # 바탕화면 폴더가 바뀌면 다시 읽는다 — 사진 수백 장을 복사하면 변경 알림이 수천 번 오므로
+        #   한 번으로 모은다(디바운스). 썸네일은 (시각·크기)가 같으면 다시 만들지 않고,
+        #   새로 만들 것은 화면이 멈추지 않게 뒤에서 조금씩 (_thumb_step).
+        self._pending = 0                  # 모아 둔 새로 읽기 타이머
+        self._pending_since = 0.0
+        self._thumbs = {}                  # 경로 → ((시각, 크기), 픽스버프)
+        self._thumb_queue = []             # 썸네일을 만들어야 할 Item
+        self._thumb_src = 0
+        self.monitor_file = None
+        self.trash_mon = None
+        self.connect("destroy", self._on_destroy)
+
         self.reload_settings()
         if self.primary:
             self.ddir = desktop_dir()
             self.monitor_file = Gio.File.new_for_path(self.ddir).monitor_directory(
                 Gio.FileMonitorFlags.WATCH_MOVES, None)
-            self.monitor_file.connect("changed", lambda *_: GLib.timeout_add(150, self._refresh_once))
-            self._pending = False
+            self.monitor_file.connect("changed", lambda *_: self._refresh_later(150))
             # 휴지통 상태(비었나/찼나)에 따라 아이콘을 바꾼다
             self.trash_mon = Gio.File.new_for_uri("trash:///").monitor_directory(
                 Gio.FileMonitorFlags.NONE, None)
-            self.trash_mon.connect("changed", lambda *_: GLib.timeout_add(300, self._refresh_once))
+            self.trash_mon.connect("changed", lambda *_: self._refresh_later(300))
             self.refresh()
+
+    def _on_destroy(self, *_):
+        """모니터를 뺐다 꽂을 때마다 새로 만들어진다 — 감시·타이머·팝업·큰 그림을 놓는다
+        (안 놓으면 감시 콜백이 이 창을 붙잡고 있어 해제되지 않고 계속 쌓였다)"""
+        for mon in (self.monitor_file, self.trash_mon):
+            if mon is not None:
+                mon.cancel()
+        self.monitor_file = self.trash_mon = None
+        for src in (self._pending, self._thumb_src):
+            if src:
+                GLib.source_remove(src)
+        self._pending = self._thumb_src = 0
+        for pop in (self.menu, self.rename):
+            pop.catcher.destroy()
+            pop.destroy()
+        self.wall_src = None
+        self.wall_cache = {}
+        self.fade_from = None
+        self.items = []
+        self._thumbs = {}
+        self._thumb_queue = []
 
     # ── 설정 ──────────────────────────────────────────────
     def reload_settings(self):
         s = settings()
-        a = s.get("appearance", {})
+        a = s.get("appearance") or {}
         self.accent = hex_rgb(a.get("accent", "#39c5bb"))
-        self.panel_h = int(s.get("panel", {}).get("height", 48))
-        w = s.get("wallpaper", {})
+        try:
+            self.panel_h = int((s.get("panel") or {}).get("height", 48))
+        except (TypeError, ValueError):
+            self.panel_h = 48
+        w = s.get("wallpaper") or {}
         path = w.get("path") or FALLBACK_WALL
         if not os.path.exists(path):
             path = FALLBACK_WALL
+        old_look = (getattr(self, "mode", None), getattr(self, "bgcolor", None))
         self.mode = w.get("mode") if w.get("mode") in ("fill", "fit", "stretch", "center", "tile",
                                                        "solid_color") else "fill"
         self.bgcolor = hex_rgb(w.get("color", "#151517"), (0.08, 0.08, 0.09))
-        if path != self.wall_path:
+        # 같은 이름의 파일을 새 그림으로 덮어쓴 경우도 알아본다 (시각·크기)
+        stamp = file_stamp(path)
+        if path != self.wall_path or stamp != getattr(self, "wall_stamp", None):
+            self.wall_stamp = stamp
             old = self._current_surface()
             try:
                 self.wall_src = GdkPixbuf.Pixbuf.new_from_file(path)
@@ -328,13 +377,17 @@ class Desk(Gtk.Window):
                 self.fade_from = old
                 self.fade_t = 0.0
                 GLib.timeout_add(16, self._fade_step)
-        else:
+        elif old_look != (self.mode, self.bgcolor):
+            # 배치·바탕색이 바뀌었을 때만 다시 그린다 — 설정 앱이 저장할 때마다 SIGHUP 이 오는데,
+            #   그때마다 4K 원본을 고품질로 다시 줄이면 무겁다
             self.wall_cache.clear()
         self.area.queue_draw()
         if self.primary:
             self.layout()
 
     def _fade_step(self):
+        if self.fade_from is None:                    # 창이 닫혔다 (_on_destroy)
+            return False
         self.fade_t = min(1.0, self.fade_t + 16 / 450)
         self.area.queue_draw()
         if self.fade_t >= 1.0:
@@ -344,8 +397,39 @@ class Desk(Gtk.Window):
 
     # ── 아이콘 목록 ───────────────────────────────────────
     def _refresh_once(self):
+        self._pending = 0
         self.refresh()
         return False
+
+    def _refresh_later(self, ms):
+        """변경 알림을 모아 한 번만 다시 읽는다. 알림이 계속 와도 2초에 한 번은 읽는다."""
+        if not self.primary:
+            return
+        now = time.monotonic()
+        if self._pending:
+            if now - self._pending_since > 2.0:
+                return                              # 곧 돈다 — 계속 미루지 않는다
+            GLib.source_remove(self._pending)
+        else:
+            self._pending_since = now
+        self._pending = GLib.timeout_add(ms, self._refresh_once)
+
+    def _thumb_step(self):
+        """썸네일을 한 번에 몇 장씩만 — 메인 스레드에서 사진 수백 장을 한꺼번에 풀면 화면이 멈춘다"""
+        for _ in range(4):
+            if not self._thumb_queue:
+                self._thumb_src = 0
+                self.area.queue_draw()
+                return False
+            it, ctype, stamp = self._thumb_queue.pop(0)
+            if it not in self.items:                # 그 사이 목록이 바뀌었다
+                continue
+            pb = thumbnail(it.path, ctype)
+            self._thumbs[it.path] = (stamp, pb)
+            if pb is not None:
+                it.pixbuf = pb
+        self.area.queue_draw()
+        return True
 
     def refresh(self):
         items = []
@@ -364,6 +448,7 @@ class Desk(Gtk.Window):
                           gicon=Gio.ThemedIcon.new("user-trash-full" if full else "user-trash")))
 
         entries = []
+        queue = []
         try:
             d = Gio.File.new_for_path(self.ddir)
             en = d.enumerate_children("standard::*", Gio.FileQueryInfoFlags.NONE, None)
@@ -389,16 +474,27 @@ class Desk(Gtk.Window):
                         it.gicon = app.get_icon() or it.gicon
                 except Exception:
                     pass
-            else:
-                it.pixbuf = thumbnail(p, info.get_content_type())
+            elif info.get_content_type() in IMAGE_TYPES:
+                stamp = file_stamp(p)
+                got = self._thumbs.get(p)
+                if got is not None and got[0] == stamp:
+                    it.pixbuf = got[1]                   # 이미 만든 썸네일
+                else:
+                    queue.append((it, info.get_content_type(), stamp))
             items.append(it)
 
         for it in items:
             if it.pixbuf is None:
-                it.pixbuf = load_icon(it.gicon)
+                it.pixbuf = load_icon(it.gicon)       # 썸네일이 나오기 전엔 보통 아이콘
         keep = {k for k in self.selected if any(i.key == k for i in items)}
         self.items = items
         self.selected = keep
+        # 지워진 파일의 썸네일은 버린다
+        live = {i.path for i in items if i.path}
+        self._thumbs = {k: v for k, v in self._thumbs.items() if k in live}
+        self._thumb_queue = queue
+        if queue and not self._thumb_src:
+            self._thumb_src = GLib.idle_add(self._thumb_step)
         self.layout()
 
     def _trash_count(self):
@@ -709,7 +805,7 @@ class Desk(Gtk.Window):
             except Exception as e:
                 dbg("휴지통 실패", e)
         self.selected = set()
-        GLib.timeout_add(200, self._refresh_once)
+        self._refresh_later(200)
 
     def rename_item(self, it):
         if it.special or not it.path:
@@ -803,7 +899,7 @@ def main():
     prov = Gtk.CssProvider()
     for p in (os.path.join(HERE, "style.css"), "/usr/share/sekai-shell/style.css"):
         if os.path.exists(p):
-            a = settings().get("appearance", {})
+            a = settings().get("appearance") or {}
             pre = ("@define-color accent %s;\n@define-color bg %s;\n@define-color surface %s;\n"
                    "@define-color fg %s;\n") % (a.get("accent", "#39c5bb"), a.get("bg", "#151517"),
                                                 a.get("surface", "#1e1e22"), a.get("fg", "#f1f1f3"))
@@ -848,13 +944,23 @@ def main():
     disp.connect("monitor-added", later)
     disp.connect("monitor-removed", later)
 
-    def on_hup(*_):
+    hup = {"src": 0}
+
+    def apply_hup():
+        hup["src"] = 0
         # 주 디스플레이가 바뀌었으면 아이콘을 옮긴다 (다시 만든다)
         prim = primary_gdk(disp)
         if any(d.primary != (d.monitor == prim) for d in desks if hasattr(d, "primary")):
             later()
         for d in desks:
-            GLib.idle_add(lambda d=d: (d.reload_settings(), False)[1])
+            d.reload_settings()
+        return False
+
+    def on_hup(*_):
+        # 설정 앱은 저장할 때마다 보낸다 (슬라이더를 끌면 연달아) — 잠깐 모아서 한 번만
+        if hup["src"]:
+            GLib.source_remove(hup["src"])
+        hup["src"] = GLib.timeout_add(200, apply_hup)
         return True
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGHUP, on_hup)
     Gtk.main()

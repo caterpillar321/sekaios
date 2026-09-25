@@ -116,7 +116,10 @@ def _scale_id(v):
 
 def build(store):
     p = Page("디스플레이", "모니터의 해상도, 주사율, 배율을 바꿉니다.")
-    mons = hyprctl("monitors", js=True) or []
+    # 꺼 둔 모니터도 보여야 다시 켤 수 있다 — "monitors" 는 켜진 것만, "monitors all" 은 꺼진 것까지
+    all_mons = hyprctl("monitors", "all", js=True) or hyprctl("monitors", js=True) or []
+    mons = [m for m in all_mons if not m.get("disabled")]   # 배치·주 디스플레이는 켜진 것만
+    off_mons = [m for m in all_mons if m.get("disabled")]
     ctl = {}                       # 모니터 이름 → 되돌릴 때 다시 맞출 위젯들
     quiet = {"on": False}          # 되돌리며 위젯을 바꿀 땐 변경 처리를 하지 않는다
 
@@ -125,6 +128,9 @@ def build(store):
         try:
             for n, w in ctl.items():
                 d = store.get("display").get(n, {})
+                w["en"].set_active(d.get("enabled", True))
+                if "res" not in w:                  # 꺼진 모니터 — 켜기 스위치만 있다
+                    continue
                 res, hz = _split(d.get("mode"))
                 if not w["res"].set_active_id(res or "preferred"):
                     w["res"].set_active_id("preferred")
@@ -132,7 +138,6 @@ def build(store):
                 w["vrr"].set_active_id(str(int(d.get("vrr", 0))))
                 w["scale"].set_active_id(_scale_id(d.get("scale", 1.0)))
                 w["tr"].set_active_id(str(int(d.get("transform", 0))))
-                w["en"].set_active(d.get("enabled", True))
         finally:
             quiet["on"] = False
 
@@ -274,6 +279,21 @@ def build(store):
         view = ArrangeView(mons, current_primary(), store.get("appearance", "accent"), apply_layout)
         arrange["view"] = view
         p.add_widget(view)
+
+    for mon in off_mons:
+        # 꺼 둔 모니터 — 다시 켜는 스위치만 (모드·배율은 켠 뒤에 이 페이지를 다시 열어 바꾼다)
+        name = mon.get("name", "?")
+        s = p.section(f"{_monitor_title(mon)}  ·  {name}  (꺼짐)")
+
+        def on_enable_off(v, n=name):
+            if quiet["on"]:
+                return
+            change(n, "enabled", bool(v))
+
+        en_off = switch(False, on_enable_off)
+        row(s, "이 모니터 사용", "켜면 화면이 다시 나옵니다",
+            icon=["video-display", "preferences-desktop-display"], control=en_off)
+        ctl[name] = {"en": en_off}
 
     if not mons:
         w = Gtk.Label(label="모니터 정보를 읽지 못했습니다. "
@@ -457,7 +477,7 @@ def build(store):
 
     s = p.section("기타")
     def reset():
-        names = [m.get("name") for m in mons] + list(store.get("display").keys())
+        names = [m.get("name") for m in all_mons] + list(store.get("display").keys())   # 꺼 둔 것도 다시 켠다
         store.reset_section("display")
         # 설정이 비면 apply_display 는 아무것도 안 보낸다 → 지금 화면에도 직접 권장값을
         for n in dict.fromkeys(names):

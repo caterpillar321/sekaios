@@ -12,8 +12,10 @@
 #
 #  sekai-lock         잠그고, 잠금이 걸리면 곧바로 돌아온다 (백그라운드로 남음)
 #                     → swayidle 의 before-sleep 에 쓰기 좋다: 잠긴 뒤에 절전에 들어간다
+#                     잠그지 못하면 1 — 부르는 쪽이 swaylock -f 로 넘어간다 (sekai-idle)
 #  sekai-lock --fg    앞에서 실행 (디버그)
-#  SEKAI_LOCK_DEMO=1  잠금 프로토콜 없이 보통 창으로 (모양 확인용, 비밀번호 demo)
+#  sekai-lock --demo  잠그지 않는 보통 창으로 모양만 본다 (비밀번호 demo, "데모" 표시).
+#                     환경 변수로는 켤 수 없다 — 물려받은 환경 하나로 가짜 잠금 화면이 되면 안 된다
 # ═══════════════════════════════════════════════════════════════
 import atexit
 import fcntl
@@ -25,8 +27,14 @@ import sys
 import threading
 import time
 
+LOCKFILE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "sekai-lock.pid")
+LOCKED_MARK = LOCKFILE + ".locked"       # 화면이 실제로 잠긴 동안만 있다 (내용 = 잠근 pid)
+DEMO = __name__ == "__main__" and "--demo" in sys.argv
+
 # ── 기본 화면 모드(X11) — ext-session-lock 이 없으므로 검증된 X 잠금 프로그램(xsecurelock)을 쓴다 ──
-if not os.environ.get("WAYLAND_DISPLAY") or os.environ.get("XDG_SESSION_TYPE") == "x11":
+#   xsecurelock 은 입력을 다 잡고 화면을 덮은 "뒤에" -- 뒤의 명령을 부른다 → 그때 잠김 표시를 남긴다.
+#   사용자 전환(sekai-switch-user)은 이 표시를 보고 정말 잠긴 뒤에만 로그인 화면으로 넘어간다.
+if not DEMO and (not os.environ.get("WAYLAND_DISPLAY") or os.environ.get("XDG_SESSION_TYPE") == "x11"):
     env = dict(os.environ,
                XSECURELOCK_FONT="Pretendard:size=14",
                XSECURELOCK_AUTH_BACKGROUND_COLOR="#151517",
@@ -40,14 +48,35 @@ if not os.environ.get("WAYLAND_DISPLAY") or os.environ.get("XDG_SESSION_TYPE") =
                XSECURELOCK_BLANK_TIMEOUT="60",
                XSECURELOCK_SAVER="saver_blank")
     try:
-        os.execvpe("xsecurelock", ["xsecurelock"], env)
+        os.remove(LOCKED_MARK)
+    except OSError:
+        pass
+    # 알림 명령의 부모($PPID)가 xsecurelock 이다 — 표시 내용 = xsecurelock pid
+    notify = ["sh", "-c", 'echo "$PPID" > "$1"', "sh", LOCKED_MARK]
+    try:
+        # close_fds=False: xss-lock 이 넘긴 절전 지연 fd(XSS_SLEEP_LOCK_FD)를 xsecurelock 이 받아야 한다
+        proc = subprocess.Popen(["xsecurelock", "--"] + notify, env=env, close_fds=False)
+        # 우리 쪽 복사본은 닫는다 — xss-lock 은 그 fd 가 모두 닫혀야(= 잠긴 뒤) 절전을 허락한다
+        sfd = os.environ.get("XSS_SLEEP_LOCK_FD", "")
+        if sfd.isdigit():
+            try:
+                os.close(int(sfd))
+            except OSError:
+                pass
+        rc = proc.wait()
     except OSError as e:
         print("xsecurelock 을 실행하지 못했습니다:", e, file=sys.stderr)
-        sys.exit(1)
+        rc = 1
+    try:
+        os.remove(LOCKED_MARK)
+    except OSError:
+        pass
+    sys.exit(rc)
 
-LOCKFILE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "sekai-lock.pid")
-LOCKED_MARK = LOCKFILE + ".locked"       # 화면이 실제로 잠긴 동안만 있다 (내용 = 잠근 pid)
-DEMO = os.environ.get("SEKAI_LOCK_DEMO") == "1"
+if DEMO:
+    # 데모는 진짜 잠금과 잠금 파일을 나눠 쓴다 — 데모가 떠 있어도 진짜 잠금이 막히지 않게
+    LOCKFILE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "sekai-lock-demo.pid")
+    LOCKED_MARK = LOCKFILE + ".locked"
 CFG = os.path.expanduser("~/.config/sekai/settings.json")
 FALLBACK_WALL = "/usr/share/backgrounds/sekai/hatsune.jpg"
 PAM_SERVICE = "sekai-lock"
@@ -150,9 +179,22 @@ from sekaishell.monitors import primary_gdk  # noqa: E402
 def settings():
     try:
         with open(CFG, encoding="utf-8") as f:
-            return json.load(f)
+            v = json.load(f)
+        return v if isinstance(v, dict) else {}
     except Exception:
         return {}
+
+
+def accent_color():
+    """강조색 — 설정이 이상하면(null·잘못된 색) 기본값. 잠금 전에 죽으면 안 된다."""
+    try:
+        a = settings().get("appearance") or {}
+        v = str(a.get("accent") or "") if isinstance(a, dict) else ""
+    except Exception:
+        v = ""
+    import re
+    # CSS 에 그대로 끼워 넣는 값이다 — #rrggbb 모양만 받는다
+    return v if re.fullmatch(r"#[0-9a-fA-F]{6}", v) else "#39c5bb"
 
 
 def signal_ready(ok):
@@ -306,6 +348,14 @@ class LockView(Gtk.Overlay):
             sw.set_margin_bottom(36)
             sw.connect("clicked", lambda *_: self.app.switch_user())
             self.add_overlay(sw)
+
+        if DEMO and primary:
+            badge = Gtk.Label(label="데모 — 화면이 잠기지 않았습니다 (비밀번호 demo)")
+            badge.get_style_context().add_class("msg")
+            badge.set_halign(Gtk.Align.CENTER)
+            badge.set_valign(Gtk.Align.START)
+            badge.set_margin_top(24)
+            self.add_overlay(badge)
 
         mark = Gtk.DrawingArea()
         mark.set_size_request(28, 28)
@@ -689,19 +739,35 @@ class Locker:
         Gtk.main_quit()
 
 
-def main():
-    a = settings().get("appearance", {})
-    accent = a.get("accent", "#39c5bb")
+def apply_style():
+    """모양 — 여기서 무엇이 잘못돼도 잠금은 이미 걸려 있어야 한다 (그래서 Locker() 뒤에 부른다)"""
     prov = Gtk.CssProvider()
-    prov.load_from_data((CSS % {"accent": accent}).encode())
+    try:
+        prov.load_from_data((CSS % {"accent": accent_color()}).encode())
+    except Exception as e:
+        print("잠금 화면 스타일 오류 — 기본 색으로:", e, file=sys.stderr)
+        try:
+            prov.load_from_data((CSS % {"accent": "#39c5bb"}).encode())
+        except Exception:
+            return
     Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov,
                                              Gtk.STYLE_PROVIDER_PRIORITY_USER)
-    st = Gtk.Settings.get_default()
-    if st:
-        st.set_property("gtk-application-prefer-dark-theme", True)
-        if os.path.isdir("/usr/share/icons/Papirus-Dark"):
-            st.set_property("gtk-icon-theme-name", "Papirus-Dark")
+    try:
+        st = Gtk.Settings.get_default()
+        if st:
+            st.set_property("gtk-application-prefer-dark-theme", True)
+            if os.path.isdir("/usr/share/icons/Papirus-Dark"):
+                st.set_property("gtk-icon-theme-name", "Papirus-Dark")
+    except Exception:
+        pass
+
+
+def main():
+    # 세션 잠금을 먼저 건다 — 설정 파일이 깨져 있어도 잠그기 전에 죽지 않게
+    #   (예전엔 스타일을 먼저 만들다 "appearance": null·잘못된 강조색에서 예외로 끝나,
+    #    절전 직전 잠금이 실패한 채 절전에 들어갔다)
     Locker()
+    apply_style()
     Gtk.main()
 
 
