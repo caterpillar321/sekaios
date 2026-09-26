@@ -1,0 +1,24 @@
+// Modified by SekaiOS, 2026-09-26: 기본 색 테마를 'sekai' 로
+// (원본: Fluent-gtk-theme 2025-04-17, https://github.com/vinceliuice/Fluent-gtk-theme — GPL-3.0)
+
+
+// Gnome-shell panel style
+$panel_style: 'compact';
+
+// Transparent opacity
+$opacity: 'default';
+
+// Windows type
+$window: 'default';
+
+// Theme color — SekaiOS 는 'sekai' (강조색·창 바탕을 SekaiOS 셸 팔레트로, _colors.scss)
+$theme: 'sekai';
+
+// For Blur-Me
+$blur: 'false';
+
+// Windows outline
+$outline: 'true';
+
+// Windows button style
+$titlebutton: 'circular';

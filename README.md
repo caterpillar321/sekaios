@@ -39,3 +39,8 @@ scripts/publish-repo.sh           # 저장소 게시 → https://caterpillar321.
 
 [Apache License 2.0](LICENSE).
 이미지에 들어가는 데비안·Hyprland 등 다른 패키지는 각자의 라이선스를 따른다.
+
+예외 — `third_party/` 의 것과 그것으로 만든 파일은 원래 라이선스를 따른다:
+
+- `third_party/fluent-gtk-theme` → GTK 테마 Sekai-Light · Sekai-Dark: **GPL-3.0**
+  ([Fluent-gtk-theme](https://github.com/vinceliuice/Fluent-gtk-theme) 바탕, 자세한 출처는 그 폴더의 `UPSTREAM.md`)

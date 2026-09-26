@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=X-GNOME-Metatheme
+Name=Sekai-Light
+Comment=SekaiOS Light — Fluent-gtk-theme (vinceliuice, GPL-3.0) 바탕
+Encoding=UTF-8
+
+[X-GNOME-Metatheme]
+GtkTheme=Sekai-Light
+IconTheme=Papirus-Light

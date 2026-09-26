@@ -25,11 +25,11 @@ PALETTES = {
 
 # 모드별 GTK 테마·아이콘 테마 — 작업 표시줄(패널) 아이콘이 Papirus·Papirus-Dark 는 흰색,
 #   Papirus-Light 는 어두운 색이다. 밝은 작업 표시줄엔 Papirus-Light 를 써야 트레이 아이콘이 보인다
-# Sekai-Dark 는 GTK 에 들어 있는 Adwaita 다크를 부르는 우리 테마 (/usr/share/themes/Sekai-Dark) —
-#   "Adwaita-dark" 는 GNOME 패키지(gnome-themes-extra-data)가 있어야 해서, 없는 설치에선 GTK3 앱이 라이트로 떴다
+# Sekai-Light · Sekai-Dark 는 SekaiOS 테마 (/usr/share/themes — Fluent-gtk-theme 바탕, scripts/build-theme.sh).
+#   예전에는 GTK 에 들어 있는 Adwaita(GNOME 디자인)를 썼다
 GTK = {
     "dark":  {"gtk": "Sekai-Dark",   "icons": "Papirus-Dark", "scheme": "prefer-dark", "prefer_dark": 1},
-    "light": {"gtk": "Adwaita",      "icons": "Papirus-Light", "scheme": "prefer-light", "prefer_dark": 0},
+    "light": {"gtk": "Sekai-Light",  "icons": "Papirus-Light", "scheme": "prefer-light", "prefer_dark": 0},
 }
 
 

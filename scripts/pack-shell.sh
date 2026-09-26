@@ -284,6 +284,29 @@ TR
 chmod 755 "$STAGE_D/DEBIAN/postinst" "$STAGE_D/DEBIAN/prerm" "$STAGE_D/DEBIAN/postrm"
 
 copyright "$STAGE_D" sekai-desktop
+# GTK 테마(Sekai-Light · Sekai-Dark)는 Apache 2.0 이 아니라 GPL-3.0 — 원본 저작권·출처·소스 위치를 함께 적는다
+#   (third_party/fluent-gtk-theme/UPSTREAM.md 와 같은 내용)
+cat >> "$STAGE_D/usr/share/doc/sekai-desktop/copyright" <<'THEME'
+
+════════════════════════════════════════════════════════════════
+다음 파일은 Apache 2.0 이 아니라 GPL-3.0 입니다 — 다른 사람의 저작물을 SekaiOS 가 고친 것.
+
+파일:     usr/share/themes/Sekai-Light/{gtk-3.0,gtk-4.0,index.theme}
+          usr/share/themes/Sekai-Dark/{gtk-3.0,gtk-4.0,index.theme}
+원본:     Fluent-gtk-theme, 태그 2025-04-17 (commit 76f8112ff22d81b372f7081c4fad13e9a08227de)
+          https://github.com/vinceliuice/Fluent-gtk-theme
+저작권:   Copyright (C) vinceliuice (Vince Liuice) and Fluent-gtk-theme contributors
+          Fluent 은 Materia theme 을 바탕으로 한다:
+            Copyright (C) nana-4 and Materia contributors — GPL-2.0-or-later
+            https://github.com/nana-4/materia-theme
+          Materia 는 GNOME 의 Adwaita 를 바탕으로 한다 (LGPL-2.1-or-later)
+          기호 아이콘 일부는 Google 의 Material Design icons 바탕 (Apache-2.0)
+          SekaiOS 의 수정: 강조색·창 바탕·면·제목줄 색 (2026, 고친 원본 파일 머리에 표시)
+라이선스: GPL-3.0 — 전문은 /usr/share/common-licenses/GPL-3
+소스:     이 파일들을 만든 원본(SCSS·SVG)과 스크립트는 SekaiOS 소스 저장소에서 받을 수 있다:
+          https://github.com/caterpillar321/sekaios
+          (third_party/fluent-gtk-theme, scripts/build-theme.sh)
+THEME
 
 cat > "$STAGE_D/DEBIAN/control" <<CTRL
 Package: sekai-desktop
