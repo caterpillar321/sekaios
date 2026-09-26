@@ -46,6 +46,19 @@ def _cpu():
     return platform.processor() or "알 수 없음"
 
 
+def _compositor():
+    """창을 그리는 합성기 — Hyprland(패키지 판) 또는 기본 화면 모드의 xfwm4"""
+    import subprocess
+    if os.environ.get("SEKAI_BASIC") == "1" or os.environ.get("XDG_SESSION_TYPE") == "x11":
+        return "xfwm4 (기본 화면 모드)"
+    try:
+        v = subprocess.run(["dpkg-query", "-W", "-f=${Version}", "hyprland"], capture_output=True, text=True,
+                           timeout=3).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        v = ""
+    return f"Hyprland {v.split('-')[0]}" if v else "Hyprland"
+
+
 def build_about(store):
     osr = _os_release()
     p = Page("시스템 정보", "이 컴퓨터와 SekaiOS 에 대한 정보입니다.")
@@ -58,7 +71,8 @@ def build_about(store):
     row(s, "기반", control=info("Debian %s (%s)" % (
         osr.get("DEBIAN_VERSION_ID", "?"), osr.get("DEBIAN_VERSION_CODENAME", "?"))))
     row(s, "커널", control=info(platform.release()))
-    row(s, "데스크탑", control=info("Hyprland + sekai-shell"))
+    row(s, "데스크톱", control=info("SekaiOS 셸"))
+    row(s, "화면 합성기", "창을 화면에 그리는 부품", control=info(_compositor()))
 
     s = p.section("하드웨어")
     row(s, "프로세서", icon=["cpu", "computer"], control=info(_cpu()))

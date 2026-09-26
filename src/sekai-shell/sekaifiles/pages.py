@@ -45,9 +45,9 @@ def _flowbox():
 class _Page:
     def _wrap(self, box):
         sc = Gtk.ScrolledWindow()
-        # 가로도 넘치면 스크롤 — NEVER 면 "최근 항목" 표(열 폭 합계 ~880px)만큼 창을 더 줄일 수 없어
-        #   스냅(3분할 등)이 안 됐다
-        sc.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        # 페이지는 창 폭을 따른다 (즐겨찾기 칸이 폭에 맞춰 줄을 바꾼다). 넓은 "최근 항목" 표는 따로 가로로 밀린다
+        #   (페이지 전체를 가로로 밀면 표의 폭 ~880px 로 배치되어 즐겨찾기가 오른쪽에서 잘렸다)
+        sc.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         sc.add(box)
         sc.get_style_context().add_class("fx-page")
         sc.connect("button-press-event", self._nav_buttons)
@@ -123,7 +123,14 @@ class HomePage(_Page):
         filler = Gtk.TreeViewColumn()
         filler.set_expand(True)
         v.append_column(filler)
-        box.pack_start(v, False, False, 0)
+        # 표만 가로로 밀린다 — 열 폭 합계(~880px)가 창의 최소 폭을 잡지 않게 (좁은 스냅 칸에 들어가게)
+        rs = self.recent_sw = Gtk.ScrolledWindow()
+        rs.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+        rs.set_propagate_natural_height(True)
+        rs.add(v)
+        rs.set_no_show_all(True)
+        v.show()
+        box.pack_start(rs, False, False, 0)
         self.empty = Gtk.Label(label="최근에 연 파일이 없습니다.", xalign=0)
         self.empty.get_style_context().add_class("fx-empty-inline")
         self.empty.set_no_show_all(True)
@@ -212,7 +219,7 @@ class HomePage(_Page):
             for e, ts in out:
                 self.store.append([e, ic.get(e.gicon, 16), e.name, fmt_date(ts), e.loc])
             self.empty.set_visible(not out)
-            self.recent.set_visible(bool(out))
+            self.recent_sw.set_visible(bool(out))
             return False
         threading.Thread(target=work, daemon=True, name="sekai-files-recent").start()
 
