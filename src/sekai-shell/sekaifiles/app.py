@@ -145,7 +145,7 @@ button.fx-eject image { color: @text2; }
 
 /* 내용 */
 .fx-content { background: @winbg; }
-iconview.fx-icons { background-color: @winbg; color: @fg; font-size: 13px; }
+iconview.fx-icons { background-color: @winbg; color: @fg; font-size: 13px; outline-style: none; }
 iconview.fx-icons:selected, iconview.fx-icons.cell:selected {
     background-color: @fx_sel;
     color: @fg;
@@ -161,7 +161,7 @@ treeview.fx-details rubberband, treeview.fx-details .rubberband {
     background-color: alpha(@accent, 0.16);
     border: 1px solid alpha(@accent, 0.85);
 }
-treeview.fx-details { background-color: @winbg; color: @fg; font-size: 13px; }
+treeview.fx-details { background-color: @winbg; color: @fg; font-size: 13px; outline-style: none; }
 treeview.fx-details:hover { background-color: alpha(@fg, 0.05); }
 treeview.fx-details:selected { background-color: @fx_sel; color: @fg; }
 treeview.fx-details:drop(active) { background-color: alpha(@accent, 0.18); }

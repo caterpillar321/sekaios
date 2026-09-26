@@ -13,7 +13,7 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
-from .common import COMPUTER, edit_text, image, local_path, natural, theme_icon  # noqa: E402
+from .common import COMPUTER, edit_text, icons, image, local_path, natural, theme_icon  # noqa: E402
 
 MENU_MAX = 400
 
@@ -112,8 +112,8 @@ class AddressBar(Gtk.Stack):
     # ── 칸 ──
     def set_location(self, uri, crumbs, icon_names):
         self.uri = uri
-        self.icon.set_from_icon_name(theme_icon(icon_names), Gtk.IconSize.MENU)
-        self.icon.set_pixel_size(16)
+        # 목록과 같은 그림 (IconCache — 16px 에서도 색 있는 폴더)
+        self.icon.set_from_pixbuf(icons().get(Gio.ThemedIcon.new_from_names([theme_icon(icon_names)]), 16))
         for c in self.crumb_box.get_children():
             c.destroy()
         for i, (label, target) in enumerate(crumbs):

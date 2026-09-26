@@ -450,7 +450,14 @@ class IconCache:
         try:
             if gicon is not None:
                 info = th.lookup_by_gicon(gicon, size, Gtk.IconLookupFlags.FORCE_SIZE)
-                if info is not None:
+                # Papirus 는 22px 보다 작은 장소(places — 폴더·드라이브) 아이콘을 글자색 한 가지로 그린다 →
+                #   자세히 보기의 폴더가 회색이었다. 윈도우처럼 작아도 색 있는 폴더가 보이게 24px 그림을 줄여 쓴다
+                if info is not None and size < 22 and "/places/" in (info.get_filename() or ""):
+                    big = th.lookup_by_gicon(gicon, 24, 0)
+                    fn = big.get_filename() if big is not None else None
+                    if fn and fn.endswith(".svg"):
+                        pb = GdkPixbuf.Pixbuf.new_from_file_at_size(fn, size, size)
+                if pb is None and info is not None:
                     pb = info.load_icon()
         except GLib.Error:
             pb = None
