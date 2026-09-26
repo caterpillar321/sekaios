@@ -88,6 +88,7 @@ class AddressBar(Gtk.Stack):
 
         # 글 칸
         self.entry = Gtk.Entry()
+        self.entry.set_width_chars(4)               # 창이 좁아지면 같이 줄어든다 (기본 폭이면 창 최소 폭을 붙잡는다)
         self.entry.get_style_context().add_class("fx-address-entry")
         self.entry.connect("activate", self._activate)
         self.entry.connect("key-press-event", self._entry_key)

@@ -45,7 +45,9 @@ def _flowbox():
 class _Page:
     def _wrap(self, box):
         sc = Gtk.ScrolledWindow()
-        sc.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        # 가로도 넘치면 스크롤 — NEVER 면 "최근 항목" 표(열 폭 합계 ~880px)만큼 창을 더 줄일 수 없어
+        #   스냅(3분할 등)이 안 됐다
+        sc.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         sc.add(box)
         sc.get_style_context().add_class("fx-page")
         sc.connect("button-press-event", self._nav_buttons)

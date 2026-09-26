@@ -198,7 +198,8 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         # 지난번에 최대화한 채 닫았으면 — 창이 나타난 뒤에 (그 전에 청하면 Hyprland 가 받지 않는데 GTK 는
         #   최대화된 줄로 알아 단추 모양이 어긋났다)
         self._max_at_start = bool(st.get("maximized"))
-        self.set_size_request(560, 360)
+        # 좁게도 줄어든다 — 화면 3분할 스냅(1280 화면이면 426px)까지. 좁으면 왼쪽 창을 숨긴다 (_on_alloc)
+        self.set_size_request(380, 320)
         for c in ("settings-window", "fx-window"):
             self.get_style_context().add_class(c)
 
@@ -259,6 +260,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         overlay = Gtk.Overlay()
         content.pack_start(overlay, True, True, 0)
         self.stack = Gtk.Stack()
+        self.stack.set_hhomogeneous(False)      # 안 보이는 페이지(홈·내 PC)의 폭까지 창 최소 폭에 넣지 않는다
         self.stack.set_transition_type(Gtk.StackTransitionType.NONE)
         overlay.add(self.stack)
         self.home_page = HomePage(self)
@@ -293,6 +295,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         root.pack_start(self._build_statusbar(), False, False, 0)
 
         self.connect("key-press-event", self._on_key)
+        self.connect("size-allocate", self._on_alloc)
         self.connect("button-press-event", self._on_button)
         self.connect("delete-event", self._on_close)
         self.connect("destroy", self._on_destroy)
@@ -473,7 +476,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         img = Gtk.Image()
         lbl = Gtk.Label(xalign=0)
         lbl.set_ellipsize(Pango.EllipsizeMode.END)
-        lbl.set_width_chars(12)
+        lbl.set_width_chars(3)                  # 좁으면 탭도 줄어든다 (이름은 … 로)
         lbl.set_max_width_chars(22)
         close = Gtk.Button()
         close.set_relief(Gtk.ReliefStyle.NONE)
@@ -657,7 +660,8 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         bar.pack_start(addr_wrap, True, True, 6)
         self.search = Gtk.SearchEntry()
         self.search.get_style_context().add_class("fx-search")
-        self.search.set_width_chars(24)
+        self.search.set_width_chars(8)          # 좁으면 여기까지 줄어든다
+        self.search.set_max_width_chars(24)
         self.search.connect("search-changed", self._on_search_changed)
         self.search.connect("stop-search", lambda *_: self._stop_search_entry())
         self.search.connect("activate", lambda *_: self._on_search_changed(self.search))
@@ -687,8 +691,10 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         return s
 
     def _build_cmdbar(self):
+        """단추 줄 — 창이 좁으면 다 들어가지 않는 단추는 숨기고 ⋯(더 보기) 메뉴로 옮긴다 (윈도우 11 처럼)"""
+        outer = Gtk.Box(spacing=2)
+        outer.get_style_context().add_class("fx-cmdbar")
         bar = Gtk.Box(spacing=2)
-        bar.get_style_context().add_class("fx-cmdbar")
         self.c_new = self._cbtn(["list-add-symbolic", "document-new-symbolic"], "새로 만들기", None,
                                 self._new_menu_popup, arrow=True)
         bar.pack_start(self.c_new, False, False, 0)
@@ -728,8 +734,66 @@ class ExplorerWindow(Gtk.ApplicationWindow):
             bar.pack_start(b, False, False, 0)
         self.c_more = self._cbtn(["view-more-horizontal-symbolic", "view-more-symbolic", "open-menu-symbolic"],
                                  None, "더 보기", self._more_menu_popup)
-        bar.pack_end(self.c_more, False, False, 0)
-        return bar
+        sw = Gtk.ScrolledWindow()
+        sw.set_policy(Gtk.PolicyType.EXTERNAL, Gtk.PolicyType.NEVER)
+        sw.set_propagate_natural_width(True)
+        sw.set_propagate_natural_height(True)
+        sw.add(bar)
+        vp = sw.get_child()
+        if isinstance(vp, Gtk.Viewport):
+            vp.set_shadow_type(Gtk.ShadowType.NONE)
+        outer.pack_start(sw, True, True, 0)
+        outer.pack_end(self.c_more, False, False, 0)
+        self._cmd_bar, self._cmd_sw, self._cmd_fit_src = bar, sw, 0
+        # 숨긴 단추 → ⋯ 메뉴의 항목 (이름, 할 일, 아이콘, 하위 메뉴를 만드는 함수)
+        self._cmd_overflow = {
+            self.c_new: ("새로 만들기", None, ["list-add-symbolic"], self._new_submenu),
+            self.c_cut: ("잘라내기", self.cut, ["edit-cut-symbolic"], None),
+            self.c_copy: ("복사", self.copy, ["edit-copy-symbolic"], None),
+            self.c_paste: ("붙여넣기", self.paste, ["edit-paste-symbolic"], None),
+            self.c_rename: ("이름 바꾸기", self.rename_selected, ["document-edit-symbolic", "edit-symbolic"], None),
+            self.c_delete: ("삭제", self.delete_selected, ["user-trash-symbolic", "edit-delete-symbolic"], None),
+            self.c_sort: ("정렬", None, ["view-sort-descending-symbolic"], self._sort_submenu),
+            self.c_view: ("보기", None, VIEW_ICONS["details"], self._view_submenu),
+            self.x_empty: ("휴지통 비우기", self.empty_trash, ["user-trash-full-symbolic"], None),
+            self.x_restore: ("선택 항목 복원", self.restore_selected, ["edit-undo-symbolic"], None),
+            self.x_eject: ("꺼내기", self._eject_selected, ["media-eject-symbolic"], None),
+            self.x_extract: ("모두 압축 풀기", self.extract_selected, ["package-x-generic-symbolic"], None),
+            self.x_wall: ("배경으로 설정", self.set_wallpaper_selected,
+                          ["preferences-desktop-wallpaper-symbolic", "image-x-generic-symbolic"], None),
+        }
+        for w in (sw, bar):
+            w.connect("size-allocate", lambda *_: self._cmd_fit_later())
+        return outer
+
+    def _cmd_fit_later(self):
+        if not self._cmd_fit_src:
+            self._cmd_fit_src = GLib.idle_add(self._cmd_fit)
+
+    def _cmd_fit(self):
+        """보이는 폭 밖으로 (조금이라도) 나가는 단추는 감춘다 — 자리는 그대로 두고 그리지만 않는다
+        (set_child_visible: 크기 계산이 바뀌지 않아 다시 배치가 돌지 않는다). 구분선은 바로 뒤 단추를 따른다"""
+        self._cmd_fit_src = 0
+        width = self._cmd_sw.get_allocated_width()
+        x0 = self._cmd_bar.get_allocation().x
+        kids = [k for k in self._cmd_bar.get_children() if k.get_visible()]
+        fits = []
+        for k in kids:
+            a = k.get_allocation()
+            fits.append(a.x - x0 + a.width <= width)
+        for i, k in enumerate(kids):
+            ok = fits[i]
+            if isinstance(k, Gtk.Separator):
+                # 뒤에 보이는 단추가 있어야 구분선도 보인다
+                ok = any(fits[j] for j in range(i + 1, len(kids)) if not isinstance(kids[j], Gtk.Separator))
+            if k.get_child_visible() != ok:
+                k.set_child_visible(ok)
+        return False
+
+    def _cmd_hidden(self):
+        """좁아서 감춘 단추들 (단추 줄 순서)"""
+        return [k for k in self._cmd_bar.get_children()
+                if k.get_visible() and not k.get_child_visible() and k in self._cmd_overflow]
 
     def _build_statusbar(self):
         bar = Gtk.Box(spacing=16)
@@ -2100,6 +2164,13 @@ class ExplorerWindow(Gtk.ApplicationWindow):
     def _more_menu_popup(self, btn):
         m = _new_menu()
         folder = self._page_name() == "folder"
+        # 창이 좁아 단추 줄에서 감춘 것들이 먼저
+        hidden = self._cmd_hidden()
+        for b in hidden:
+            label, cb, icon, sub = self._cmd_overflow[b]
+            _mitem(m, label, cb, icon, None, b.get_sensitive(), submenu=sub() if sub else None)
+        if hidden:
+            _sep(m)
         _mitem(m, "모두 선택", self.select_all, ["edit-select-all-symbolic"], "Ctrl+A", folder or self._page_name() == "home")
         _mitem(m, "선택 안 함", self.unselect_all, ["edit-clear-symbolic"])
         _mitem(m, "선택 영역 반전", self.invert_selection, ["edit-select-symbolic"], None, folder)
@@ -2344,6 +2415,14 @@ class ExplorerWindow(Gtk.ApplicationWindow):
             self.view_nav_button(ev.button)
             return True
         return False
+
+    def _on_alloc(self, _w, a):
+        """창이 좁으면 왼쪽 탐색 창을 숨긴다 (윈도우 11 탐색기처럼) — 넓어지면 다시. 경계에서 깜박이지 않게 틈을 둔다"""
+        w = a.width
+        if w < 600 and self.nav.get_visible():
+            GLib.idle_add(lambda: (self.nav.hide(), False)[1])
+        elif w >= 660 and not self.nav.get_visible():
+            GLib.idle_add(lambda: (self.nav.show(), False)[1])
 
     def _in_titlebar(self, x, y):
         a = self._titlebar.get_allocation()
