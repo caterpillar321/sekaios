@@ -6,7 +6,8 @@
 command -v plymouth >/dev/null 2>&1 || exit 0
 plymouth --ping 2>/dev/null || exit 0
 i=0
-while [ $i -lt 50 ]; do                     # 최대 10초
+while [ $i -lt 150 ]; do                    # 최대 30초 (느린 기계에서 로그인 화면이 늦게 떠도
+                                            #   부팅 화면이 먼저 끝나 신호가 끊기지 않게)
     # 로그인 화면(_greetd)의 Hyprland 가 떴다 — 첫 화면을 그릴 틈을 조금 준다
     if ls /run/user/*/hypr/*/.socket.sock >/dev/null 2>&1; then
         sleep 1.5

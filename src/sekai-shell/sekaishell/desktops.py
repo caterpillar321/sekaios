@@ -146,16 +146,27 @@ class Live:
         self.ws = {}          # id → {"windows": n, "name": …}
         self.active = None    # 초점이 있는 모니터가 보여 주는 워크스페이스
         self.others = set()   # 다른 모니터들이 보여 주는 워크스페이스
+        self.mon_of = {}      # 보이는 워크스페이스 → 모니터 이름
+        self.focused_mon = None
         for w in _ctl("workspaces", js=True) or []:
             if isinstance(w, dict) and isinstance(w.get("id"), int) and w["id"] > 0:
                 self.ws[w["id"]] = w
         for m in _ctl("monitors", js=True) or []:
             wid = (m.get("activeWorkspace") or {}).get("id") if isinstance(m, dict) else None
             if isinstance(wid, int):
+                self.mon_of[wid] = m.get("name")
                 if m.get("focused"):
                     self.active = wid
+                    self.focused_mon = m.get("name")
                 else:
                     self.others.add(wid)
+
+    def desk(self, names):
+        """지금 데스크톱 — 데스크톱(1~N)을 보여 주는 모니터의 것. 둘째 모니터에 초점이 있어도
+        (그 모니터는 N+1 번이나 데스크톱 번호 밖을 보여 준다) 데스크톱은 첫 모니터의 것이다"""
+        n = len(names)
+        cands = [w for w in [self.active, *sorted(self.others)] if isinstance(w, int) and 1 <= w <= n]
+        return cands[0] if cands else self.active
 
     def count(self, names):
         """데스크톱 개수 — 저장된 개수, 그리고 창이 있는 워크스페이스 중 가장 큰 번호
@@ -163,8 +174,12 @@ class Live:
         다른 모니터가 보여 주는 워크스페이스는 뺀다 — Hyprland 는 모니터마다 제 워크스페이스를 가져서
         둘째 모니터는 N+1 번을 보여 준다. 윈도우의 데스크톱처럼 셈하면 모니터가 데스크톱으로 보인다"""
         n = len(names)
+        desk = self.desk(names)
+        # 데스크톱을 보여 주지 않는 모니터의 워크스페이스는 세지 않는다 — 둘째 모니터에 초점이 있을 때
+        #   그 번호(21 등)를 데스크톱으로 세어 데스크톱이 20개로 불어나 저장됐다
+        skip = ({self.active} | self.others) - {desk}
         for i, w in self.ws.items():
-            if i > n and i not in self.others and (w.get("windows", 0) > 0 or i == self.active):
+            if n < i <= MAX and i not in skip and (w.get("windows", 0) > 0 or i == desk):
                 n = i
         return n
 
@@ -228,11 +243,20 @@ def _ensure(i, live, names):
 
 
 # ── 동작 (단축키 · 설정 앱) — 화면에 보일 글을 돌려준다 ──────────
+def _to_desk_monitor(live, names):
+    """초점을 데스크톱을 보여 주는 모니터로 — workspace 명령은 초점 모니터에 걸려, 둘째 모니터에서
+    데스크톱을 바꾸면 데스크톱이 그 모니터로 넘어갔다"""
+    mon = live.mon_of.get(live.desk(names))
+    if mon and mon != live.focused_mon:
+        _ctl("dispatch", "focusmonitor", mon)
+
+
 def go(i, live=None, names=None):
     live, names = live or Live(), names if names is not None else load()
     if not 1 <= i <= MAX:
         return None
     names = _ensure(i, live, names)
+    _to_desk_monitor(live, names)
     _ctl("dispatch", "workspace", i)
     _name_live(names, i, live)
     return display(names, i)
@@ -241,7 +265,7 @@ def go(i, live=None, names=None):
 def step(d):
     """옆 데스크톱으로 — 끝에서는 넘어가지 않는다 (윈도우처럼)"""
     live, names = Live(), load()
-    cur, n = live.active, live.count(names)
+    cur, n = live.desk(names), live.count(names)
     if cur is None or not 1 <= cur <= n:
         return None
     t = cur + d
@@ -272,7 +296,7 @@ def remove(k=None):
     """데스크톱 k(없으면 지금 것)를 닫는다 — 창은 왼쪽 데스크톱으로 (첫 데스크톱이면 오른쪽 것과 합친다)"""
     live, names = Live(), load()
     n = live.count(names)
-    cur = live.active
+    cur = live.desk(names)
     k = k or cur
     if not k or n <= 1 or not 1 <= k <= n:
         return None
@@ -297,6 +321,7 @@ def remove(k=None):
     for i in range(k, n):
         _name_live(names, i, live)
     if cur is not None and k <= cur <= n:
+        _to_desk_monitor(live, names)
         _ctl("dispatch", "workspace", final(cur))
         return display(names, final(cur))
     return None
@@ -324,7 +349,8 @@ def move(i):
 
 def current():
     live, names = Live(), load()
-    return display(names, live.active) if live.active and 0 < live.active <= live.count(names) else None
+    d = live.desk(names)
+    return display(names, d) if d and 0 < d <= live.count(names) else None
 
 
 def handle(action, arg=""):
@@ -375,14 +401,16 @@ def home(c):
     return wid if wid > 0 else _home.get(c.get("address"))
 
 
-def visible(c, shown):
+def visible(c, shown, n=None):
     """shown(지금 화면에 보이는 워크스페이스들)의 창인가 — 최소화한 창은 원래 데스크톱으로 가린다.
-    어느 데스크톱 것인지 모르면(작업 표시줄이 다시 뜬 뒤 등) 보인다고 한다 (숨겨서 못 찾는 것보다 낫다)"""
+    어느 데스크톱 것인지 모르면(작업 표시줄이 다시 뜬 뒤 등) 보인다고 한다 (숨겨서 못 찾는 것보다 낫다).
+    n(데스크톱 개수)보다 큰 데스크톱을 기억하면 그 데스크톱은 이미 닫혔다 — 역시 보인다고 한다
+    (설정 앱에서 데스크톱을 닫으면 이 프로세스의 기억은 그대로라, 최소화한 창에 닿을 길이 없었다)"""
     ws = c.get("workspace") or {}
     wid = ws.get("id", 0) or 0
     if wid > 0:
         return wid in shown
     if ws.get("name") == "special:min":
         h = _home.get(c.get("address"))
-        return h is None or h in shown
+        return h is None or h in shown or (n is not None and h > n)
     return True

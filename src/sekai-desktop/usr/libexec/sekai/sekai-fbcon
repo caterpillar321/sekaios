@@ -9,7 +9,10 @@
 # 떼어 두면 글자 모드로 바뀌어도 모니터엔 마지막 그림이 남고 다음 화면이 그대로 넘겨받는다.
 # 부팅 때 커널이 모니터를 바탕화면 모드로 켜는 것(video=)은 콘솔이 붙어 있어야 하므로, 뗄 때는 그 뒤다.
 case "${1:-}" in
-    off) v=0 ;;
+    off) v=0
+         # 글자 콘솔(tty2~6)을 보고 있는 중이면 떼지 않는다 — 그 화면에서 greetd 를 다시 띄우면
+         #   (systemctl restart greetd) 보고 있던 콘솔이 까매졌다. 1번으로 돌아오면 sekai-drm-hold 가 뗀다
+         case "$(cat /sys/class/tty/tty0/active 2>/dev/null)" in tty[2-6]) exit 0 ;; esac ;;
     on)  v=1; [ "${2:-}" = tty1 ] && exit 0 ;;   # 1번은 그래픽 화면 자리
     *)   echo "사용법: sekai-fbcon off | on ttyN" >&2; exit 2 ;;
 esac

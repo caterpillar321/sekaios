@@ -25,7 +25,8 @@ Type=simple
 ExecStartPre=-/usr/libexec/sekai/sekai-fbcon off
 # 요청 길(sekai-plymouth-release)이 없으면 예전처럼 여기서 비활성화한다 — 부팅 화면이 화면을 쥔 채로는
 #   로그인 화면이 화면을 잡지 못한다
-ExecStartPre=-/bin/sh -c 'systemctl -q is-active sekai-plymouth-release.path && [ -d /run/sekai-greeter ] || exec /usr/bin/plymouth deactivate'
+#   라이브 USB 는 로그인 화면 없이 바로 세션을 띄워(initial_session) 요청할 쪽이 없다 — 여기서
+ExecStartPre=-/bin/sh -c '[ ! -d /run/live/medium ] && systemctl -q is-active sekai-plymouth-release.path && [ -d /run/sekai-greeter ] || exec /usr/bin/plymouth deactivate'
 ExecStart=greetd
 ExecStartPost=-/usr/libexec/sekai/plymouth-handoff
 # 로그인 화면이 화면을 잡은 뒤 — 그래픽 장치를 열어 두는 도우미 (넘어갈 때 콘솔 화면이 끼어들지 않게)

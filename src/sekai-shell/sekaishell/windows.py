@@ -55,6 +55,7 @@ class WindowManager:
         self._drag_addr = None     # 끄는 창 — 끄는 중에 닫히면 놓기 이벤트가 안 온다
         self._drag_t0 = 0          # 끌기 시작 시각 (µs)
         self._drag_pos = None      # 마지막으로 본 커서 자리와 그때부터 멈춰 있던 시각
+        self._drag_armed = False   # 위쪽 띠 밖으로 나간 적이 있나 (레이아웃 바)
         self._drag_still = 0
         self._poll_one_src = 0
         self.mon_ws = {}           # 모니터 이름 → 보이던 워크스페이스 id (모니터가 빠질 때 창을 옮기려고)
@@ -84,6 +85,17 @@ class WindowManager:
     def _active(self):
         a = self.hypr.query("activewindow") or {}
         return a if isinstance(a, dict) and a.get("address") else None
+
+    def _toggle_max(self, addr):
+        """이 창의 최대화를 켜고 끈다. fullscreen 1 은 "초점 창"에 걸리므로, 초점이 이 창에 왔을 때만
+        (스냅 도우미처럼 키보드를 쥔 레이어가 떠 있으면 Hyprland 가 초점을 거부해 엉뚱한 창이 최대화됐다)"""
+        self.hypr.dispatch(f"focuswindow address:{addr}")
+        a = self._active()
+        if not a or a.get("address") != addr:
+            dbg(f"[win] {addr} 에 초점이 가지 않아 최대화를 바꾸지 않는다")
+            return False
+        self.hypr.dispatch("fullscreen 1")
+        return True
 
     def _work_area(self, c=None, mon_name=None):
         """모니터에서 작업 표시줄 등을 뺀 영역 (논리 좌표). 창(c)이 있는 모니터나 이름으로 고른다."""
@@ -151,17 +163,18 @@ class WindowManager:
         c = c or self._client(addr)
         if not c:
             return
+        if c.get("fullscreen", 0) == 2:
+            return                                        # 전체 화면(F11·동영상)은 건드리지 않는다
         maxed = c.get("fullscreen", 0) == 1
         if not c.get("floating"):
             self.hypr.dispatch(f"setfloating address:{addr}")
         if zone == "max":
             if not maxed:
-                self.hypr.dispatch(f"focuswindow address:{addr}")
-                self.hypr.dispatch("fullscreen 1")          # 1 = 최대화 (작업 표시줄은 남긴다)
+                self._toggle_max(addr)                    # 1 = 최대화 (작업 표시줄은 남긴다)
             return
         if maxed:
-            self.hypr.dispatch(f"focuswindow address:{addr}")
-            self.hypr.dispatch("fullscreen 1")
+            if not self._toggle_max(addr):
+                return
             c = self._client(addr) or c
         if addr not in self.saved:
             (x, y), (w, h) = self.drag_start.get(addr) or (c.get("at", [0, 0]), c.get("size", [800, 600]))
@@ -181,8 +194,10 @@ class WindowManager:
         GLib.timeout_add(200, self._fit, addr, zone, rect, bar)
 
     def _fit(self, addr, zone, rect, bar):
+        if self.snapped.get(addr) != zone:
+            return False                                  # 그사이 다른 칸으로 옮겼거나 풀었다 (Win+← 두 번 등)
         c = self._client(addr)
-        if not c:
+        if not c or c.get("fullscreen"):
             return False
         (cx, cy), (cw, ch) = c.get("at", [0, 0]), c.get("size", [0, 0])
         x, y, w, h = rect
@@ -192,7 +207,8 @@ class WindowManager:
         nx = x + w - cw if zone in ("right", "tr", "br", "r13", "r23", "c3") else x  # 칸의 바깥쪽 모서리에
         ny = y + h - ch if zone in ("bl", "br") else y + bar
         nx = min(max(nx, ax), ax + aw - cw)
-        ny = min(max(ny, ay + bar), ay + ah - ch)
+        # 창이 작업 영역보다 크면 아래가 삐져나가도 제목줄이 화면 안에 오는 게 먼저 (다시 잡을 수 있게)
+        ny = max(min(ny, ay + ah - ch), ay + bar)
         if abs(nx - cx) > 1 or abs(ny - cy) > 1:
             self.hypr.dispatch(f"movewindowpixel exact {int(nx)} {int(ny)},address:{addr}")
         return False
@@ -209,22 +225,40 @@ class WindowManager:
         "down":  {None: "min", "left": "bl", "right": "br", "tl": "left", "tr": "right",
                   "bl": "restore", "br": "restore", "max": "unmax"},
     }
+    # 스냅 레이아웃의 1/3·2/3 칸 — 왼쪽에 붙은 칸은 ← 로 왼쪽 반, → 로 오른쪽 반 (가운데 칸도), ↑ 최대화, ↓ 복원
+    for _z in ("l23", "l13", "c1", "c2", "c3", "r13", "r23"):
+        KEYS["left"][_z], KEYS["right"][_z], KEYS["up"][_z], KEYS["down"][_z] = "left", "right", "max", "restore"
+    del _z
 
     def snap(self, direction):
         c = self._active()
         if not c or direction not in self.KEYS:
             return
         addr = c["address"]
+        if c.get("fullscreen", 0) == 2:
+            return                                        # 전체 화면(F11·동영상) 중엔 스냅하지 않는다
         cur = "max" if c.get("fullscreen", 0) == 1 else self.snapped.get(addr)
+        if cur not in (None, "max") and not self._in_zone(c, cur):
+            cur = None                                    # 다른 방법(Win+Shift+화살표·Super+끌기)으로 옮겨졌다
         to = self.KEYS[direction].get(cur, "restore")
         if to == "min":
             self.hypr.dispatch(f"movetoworkspacesilent special:min,address:{addr}")
         elif to == "unmax":
-            self.hypr.dispatch("fullscreen 1")
+            self._toggle_max(addr)
         elif to == "restore":
             self._restore(addr)
         elif to != cur:
             self.snap_to(addr, to, c, assist=False)     # 키보드로 연달아 누르는 중엔 도우미를 띄우지 않는다
+
+    def _in_zone(self, c, zone, slack=8):
+        """창이 아직 그 칸 자리에 있나 (제목줄 높이를 뺀 내용 위치로 비교)"""
+        rect = self.zone_rect(zone, c)
+        if not rect:
+            return False
+        x, y, w, h = rect
+        bar = self._bar(c)
+        (cx, cy), (cw, ch) = c.get("at", [0, 0]), c.get("size", [0, 0])
+        return abs(cx - x) <= slack and abs(cy - (y + bar)) <= slack and cw <= w + slack and ch <= h - bar + slack
 
     def _restore(self, addr):
         g = self.saved.pop(addr, None)
@@ -257,13 +291,14 @@ class WindowManager:
             # 새 끌기 — 멈추지 못한 옛 폴링이 남아 있어도 기준은 새로 잡는다
             self._drag_t0 = self._drag_still = GLib.get_monotonic_time()
             self._drag_pos = None
+            self._drag_armed = False        # 위쪽 띠 밖으로 한 번 나가야 레이아웃 바를 띄운다 (_drag_poll)
             self._drag_mons = self.hypr.query("monitors") or []
             if not self._poll_src:
                 self._bar_hit = None
                 self._poll_src = GLib.timeout_add(33, self._drag_poll)
         if c.get("fullscreen", 0) == 1:
-            self.hypr.dispatch(f"focuswindow address:{addr}")
-            self.hypr.dispatch("fullscreen 1")            # 최대화된 창을 끌면 먼저 최대화를 푼다
+            pass    # 최대화는 Hyprland 가 끌기 문턱(binds:drag_threshold)을 넘을 때 푼다 — 여기서 풀면 손이 조금만
+                    #   떨려도 풀렸다. 커서가 제목줄 같은 자리에 오게 두는 것도 그쪽 (SEKAI_DRAG_RESTORE)
         elif addr not in self.snapped:
             self.drag_start[addr] = (c.get("at", [0, 0]), c.get("size", [800, 600]))
         return False
@@ -301,6 +336,12 @@ class WindowManager:
         m, mw, mh = mon
         dx, dy = abs(x - (m["x"] + mw / 2)), y - m["y"]
         bar = self.topbar
+        if not self._drag_armed:
+            # 끌기를 띠 안에서 시작했다(최대화된 창·위쪽에 붙은 창의 제목줄) — 옆으로 조금 옮기고 놓았는데
+            #   바의 칸에 스냅되지 않게, 띠 밖으로 한 번 나갔다 들어와야 바를 띄운다
+            if dy < self.BAND_Y and dx < mw * self.BAND_X:
+                return True
+            self._drag_armed = True
         if not bar.get_visible():
             if dy < self.BAND_Y and dx < mw * self.BAND_X:
                 from gi.repository import Gdk
@@ -371,16 +412,20 @@ class WindowManager:
         self._drag_addr = None
         if self.preview is not None:
             self.preview.hide_now()
-        if bar_open:
-            # 레이아웃 바가 내려와 있었다 — 가리킨 칸으로, 칸 밖 맨 위면 최대화, 그 밖엔 그냥 둔다
+        if bar_open and (hit or zone == "max"):
+            # 레이아웃 바가 내려와 있었다 — 가리킨 칸으로, 칸 밖 맨 위면 최대화
             if hit:
                 self.snap_to(addr, hit[0], mon_name=mon_name, rest=hit[1])
-            elif zone == "max":
+            else:
                 self.snap_to(addr, "max", mon_name=mon_name)
             self.drag_start.pop(addr, None)
             return False
+        # (바가 내려와 있었어도 칸 밖에 놓았으면 보통 놓기처럼 — 스냅된 창은 아래에서 원래 크기로)
         if zone != "none":
             self.snap_to(addr, zone, mon_name=mon_name)
+        elif addr in self.snapped and (c0 := self._client(addr)) and self._in_zone(c0, self.snapped[addr]):
+            # 제목줄을 누르다 조금 흔들렸을 뿐 — 스냅을 풀지 않고 칸에 다시 맞춘다
+            self._fit_back(addr, c0)
         elif addr in self.snapped:
             # 스냅된 창을 끌어낸 것 — 원래 크기로, 잡은 자리가 커서 밑에 그대로 오게
             c = self._client(addr)
@@ -395,6 +440,13 @@ class WindowManager:
                 GLib.timeout_add(200, self._keep_visible, addr)
         self.drag_start.pop(addr, None)
         return False
+
+    def _fit_back(self, addr, c):
+        rect = self.zone_rect(self.snapped[addr], c)
+        if rect:
+            x, y, w, h = rect
+            bar = self._bar(c)
+            self.hypr.dispatch(f"movewindowpixel exact {int(x)} {int(y + bar)},address:{addr}")
 
     # ── 창 크기 기억 ──
     def _poll(self):
@@ -426,9 +478,12 @@ class WindowManager:
             addr = c.get("address")
             if not addr:
                 continue
-            if ws is not None and tws is not None and (c.get("workspace") or {}).get("id") == ws:
+            was_there = ws is not None and (c.get("workspace") or {}).get("id") == ws
+            if was_there and tws is not None:
                 self.hypr.dispatch(f"movetoworkspacesilent {tws},address:{addr}")
             zone = self.snapped.get(addr)
+            if zone and (not was_there or c.get("fullscreen")):
+                continue                              # 남은 모니터의 창·최대화된 창은 그대로 둔다
             if zone:
                 GLib.timeout_add(150, lambda a=addr, z=zone: self.snap_to(a, z, mon_name=target.get("name"),
                                                                            assist=False) and False)
@@ -455,10 +510,10 @@ class WindowManager:
             # 끄는 중에 닫히면 Hyprland 는 놓기(sekaisnapdrop)를 보내지 않는다 — 끌기 이벤트와 같은 순서로(idle)
             GLib.idle_add(self._drag_closed, addr)
             c = self.known.pop(addr, None)
+            if c:
+                self._closed(c)                       # 스냅 기록을 지우기 전에 (스냅된 창인지 본다)
             self.saved.pop(addr, None)
             self.snapped.pop(addr, None)
-            if c:
-                self._closed(c)
         elif name in ("movewindow", "movewindowv2", "activewindowv2"):
             # 창 정보를 봐 둔다 — 한꺼번에 오는 이벤트는 한 번으로 모은다. 제목 이벤트는 뺐다: 크기 기억과
             #   상관없고, 제목이 계속 바뀌는 창이 있으면 이벤트마다 동기 조회를 했다
@@ -487,12 +542,15 @@ class WindowManager:
         cls = c.get("class") or ""
         if cls in SKIP_CLASSES or not c.get("floating") or c.get("fullscreen"):
             return
+        w, h = c.get("size", [0, 0])
         if c["address"] in self.snapped:
-            return
+            g = self.saved.get(c["address"])
+            if not g:
+                return
+            w, h = g[2], g[3]               # 스냅된 채 닫았다 — 칸 크기가 아니라 스냅 전 크기를
         clients = self.hypr.query("clients") or []
         if not self._first_of_class(c, clients):
             return                          # 같은 앱의 다른 창이 남아 있다 — 대화상자일 수 있다
-        w, h = c.get("size", [0, 0])
         if w >= MIN_W and h >= MIN_H:
             self.sizes[cls] = [int(w), int(h)]
             self._save()

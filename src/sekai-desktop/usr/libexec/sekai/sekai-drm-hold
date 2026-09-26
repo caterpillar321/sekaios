@@ -13,6 +13,7 @@
 import fcntl
 import glob
 import os
+import select
 import signal
 
 DRM_IOCTL_DROP_MASTER = 0x641F          # _IO('d', 0x1f)
@@ -32,5 +33,43 @@ for path in sorted(glob.glob("/dev/dri/card[0-9]*")):
 if not fds:
     raise SystemExit(0)
 signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
+
+
+# ── 커널 글자 콘솔(fbcon)을 보고 있는 가상 터미널에 맞춰 붙이고 뗀다 (sekai-fbcon 머리말) ──
+#   글자 콘솔(tty2~6)을 보는 동안만 붙인다. 그래픽 화면(1번·사용자 전환의 8번~)으로 돌아오면 다시 뗀다 —
+#   안 그러면 Ctrl+Alt+F2 를 한 번 쓴 뒤로는 로그아웃·사용자 전환 때 콘솔이 다시 번쩍였다.
+#   커널이 터미널을 바꿀 때 /sys/class/tty/tty0/active 에 알림을 준다 (못 받아도 5초마다 다시 본다)
+def fbcon_bind(on):
+    for c in glob.glob("/sys/class/vtconsole/vtcon*"):
+        try:
+            with open(c + "/name") as f:
+                if "frame buffer" not in f.read().lower():
+                    continue
+            with open(c + "/bind") as f:
+                if f.read().strip() == ("1" if on else "0"):
+                    continue
+            with open(c + "/bind", "w") as f:
+                f.write("1" if on else "0")
+        except OSError:
+            pass
+
+
+ACTIVE = "/sys/class/tty/tty0/active"
+try:
+    act = open(ACTIVE)
+except OSError:
+    while True:
+        signal.pause()
+poller = select.poll()
+poller.register(act, select.POLLPRI | select.POLLERR)
+last = None
 while True:
-    signal.pause()
+    try:
+        act.seek(0)
+        tty = act.read().strip()
+    except OSError:
+        tty = last
+    if tty != last:
+        last = tty
+        fbcon_bind(tty in ("tty2", "tty3", "tty4", "tty5", "tty6"))
+    poller.poll(5000)

@@ -68,6 +68,7 @@ class Switcher(Gtk.Window):
         clients = self.hypr.query("clients") or []
         desktops.remember(clients)
         shown = None
+        ndesk = len(desktops.load())
         if desktops.mode("alttab") == "current":
             # 설정 › 멀티태스킹 — 지금 데스크톱(모니터마다 보이는 워크스페이스)의 창만.
             #   X11 흉내에는 워크스페이스 정보가 없다 — 그땐 가리지 않는다
@@ -82,7 +83,7 @@ class Switcher(Gtk.Window):
             # 특수 워크스페이스 중 최소화(special:min)만 넣는다 (윈도우도 최소화 창을 보여 준다)
             if ws.get("id", 0) < 0 and wname != "special:min":
                 continue
-            if shown is not None and not desktops.visible(c, shown):
+            if shown is not None and not desktops.visible(c, shown, ndesk):
                 continue
             out.append(c)
         # 최근에 쓴 순서 (focusHistoryID 0 = 지금 창)
@@ -130,8 +131,10 @@ class Switcher(Gtk.Window):
             if not self.items:
                 return
             if len(self.items) == 1:
-                # 창이 하나뿐 — 보여 줄 필요 없이 그 창에 초점
+                # 창이 하나뿐 — 보여 줄 필요 없이 그 창에 초점 (최소화돼 있으면 되살린다)
+                only = self.items[0]
                 self.items = []
+                self._focus(only)
                 return
             self.index = 1 if d > 0 else len(self.items) - 1
             self._build()

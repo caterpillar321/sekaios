@@ -1288,14 +1288,23 @@ class TaskbarMixin:
         self.connect("leave-notify-event",
                      lambda _w, ev: ev.detail != Gdk.NotifyType.INFERIOR and self.preview.schedule_hide() and False)
 
-    def _my_clients(self, clients, origins=None):
+    def _my_clients(self, clients, origins=None, ws_mon=None):
         disp = Gdk.Display.get_default()
         if disp.get_n_monitors() < 2 or self.gdk_monitor is None:
             return clients
         g = self.gdk_monitor.get_geometry()
         if origins is None:
             origins = hypr_monitor_origins(self.hypr)
-        return [c for c in clients if origins.get(c.get("monitor")) == (g.x, g.y)]
+
+        def mon(c):
+            # 최소화한 창(special:min)은 최소화 칸이 있는 모니터로 옮겨진다 — 원래 데스크톱의 모니터로 가린다
+            #   (안 그러면 다른 모니터에서 최소화한 창의 단추가 이 작업 표시줄로 넘어왔다)
+            if ws_mon and (c.get("workspace") or {}).get("id", 0) < 0:
+                m = ws_mon.get(desktops.home(c))
+                if m is not None:
+                    return m
+            return c.get("monitor")
+        return [c for c in clients if origins.get(mon(c)) == (g.x, g.y)]
 
     def task_snapshot(self):
         """작업 표시줄을 그리는 데 필요한 Hyprland 상태 — 모든 작업 표시줄이 한 번 조회한 것을 같이 쓴다"""
@@ -1303,7 +1312,10 @@ class TaskbarMixin:
         clients = _open_order(self.hypr.query("clients") or [])
         desktops.remember(clients)                  # 최소화하기 전의 데스크톱을 알아 두려고
         mons = self.hypr.query("monitors") or []
+        wss = self.hypr.query("workspaces") or []
         return {"clients": clients,
+                "ndesk": len(desktops.load()),
+                "ws_mon": {w.get("id"): w.get("monitorID") for w in wss if isinstance(w, dict)},
                 "active": active.get("address") if isinstance(active, dict) else None,
                 "origins": {m.get("id"): (m.get("x"), m.get("y")) for m in mons},
                 # 모니터마다 지금 보이는 워크스페이스 (X11 흉내에는 없다 — 그땐 가리지 않는다)
@@ -1323,11 +1335,11 @@ class TaskbarMixin:
         for c in self.tasks.get_children():
             self.tasks.remove(c)
         self._task_btns = {}                                # 앱 묶음 → (버튼, 창들)
-        clients = self._my_clients(snap["clients"], snap["origins"])
+        clients = self._my_clients(snap["clients"], snap["origins"], snap.get("ws_mon"))
         clients = [c for c in clients if c.get("mapped", True) and c.get("address")]  # 연 순서
         if snap.get("shown") and desktops.mode("taskbar") == "current":
             # 설정 › 멀티태스킹 — 지금 보고 있는 데스크톱의 창만 (윈도우 기본값과 같게)
-            clients = [c for c in clients if desktops.visible(c, snap["shown"])]
+            clients = [c for c in clients if desktops.visible(c, snap["shown"], snap.get("ndesk"))]
         active_addr = snap["active"]
 
         groups = {}                                         # 묶음 키 → 창들
@@ -1413,8 +1425,18 @@ class TaskbarMixin:
         self.preview.hide_now()
         self.activate_window(wins[0], active_addr)
 
+    def _fresh(self, c):
+        """누른 순간의 창 상태 — 단추·미리보기가 쥔 정보는 몇백 ms 늦을 수 있다 (방금 최소화한 창을
+        보이는 창으로 알고 초점을 주면 최소화 칸 전체가 화면에 펼쳐졌다). 창이 없어졌으면 None"""
+        addr = c.get("address")
+        return next((x for x in (self.hypr.query("clients") or []) if x.get("address") == addr), None)
+
     def _preview_pick(self, c):
         """미리보기에서 고름 — 최소화돼 있으면 복원, 아니면 초점 (초점이 있어도 최소화하지 않는다)"""
+        c = self._fresh(c)
+        if c is None:
+            self._queue_rebuild()
+            return
         if self._minimized(c):
             self.restore_window(c.get("address"))
         else:
@@ -1425,6 +1447,10 @@ class TaskbarMixin:
         self.hypr.dispatch(f"closewindow address:{c.get('address')}")
 
     def activate_window(self, c, active_addr):
+        c = self._fresh(c)
+        if c is None:
+            self._queue_rebuild()
+            return
         addr = c.get("address")
         if self._minimized(c):
             self.restore_window(addr)
@@ -1438,7 +1464,8 @@ class TaskbarMixin:
         """최소화(special:min)된 창을 원래 데스크톱으로 되돌리고 초점 (모르면 지금 데스크톱으로).
         다른 데스크톱의 창이면 그리로 간다 — 윈도우처럼 (movetoworkspace 는 창을 따라간다)"""
         wid = desktops.home({"address": addr})
-        if not wid:
+        if not wid or wid > len(desktops.load()):
+            # 모르거나 그 데스크톱이 이미 닫혔다 — 지금 데스크톱으로
             wid = (self.hypr.query("activeworkspace") or {}).get("id", 1)
         self.hypr.dispatch(f"movetoworkspace {wid},address:{addr}")
         self.hypr.dispatch(f"focuswindow address:{addr}")

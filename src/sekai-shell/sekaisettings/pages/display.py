@@ -228,7 +228,9 @@ def build(store):
         def done(d, resp):
             GLib.source_remove(src) if left["n"] > 0 else None
             d.destroy()
-            if resp != Gtk.ResponseType.ACCEPT:
+            if resp == Gtk.ResponseType.ACCEPT:
+                store.save()                    # 이제야 저장·게시한다 (로그인 화면·부팅 화면 모드도)
+            else:
                 restore(snap)
         dlg.connect("response", done)
         dlg.show_all()
@@ -239,9 +241,14 @@ def build(store):
         snap = copy.deepcopy(store.get("display"))
         d = copy.deepcopy(snap.get(n, {}))
         d[key] = value
-        store.set("display", n, d)
-        if ask:
-            confirm(snap)
+        if not ask:
+            store.set("display", n, d)
+            return
+        # "유지"를 누르기 전에는 화면에만 적용하고 저장하지 않는다 — 모니터가 못 받는 모드를 골라 화면이
+        #   까매진 채 전원을 끄거나 앱이 죽으면, 저장된 나쁜 모드가 부팅 화면·로그인 화면·바탕화면에 남았다
+        store.data.setdefault("display", {})[n] = d
+        store.apply_display()
+        confirm(snap)
 
     arrange = {"view": None}
     prim_sw = {}                   # 모니터 이름 → "주 디스플레이로 사용" 스위치
@@ -261,8 +268,7 @@ def build(store):
             d = dict(disp.get(n, {}))
             d["position"] = f"{int(x)}x{int(y)}"
             disp[n] = d
-        store.save()
-        store.apply_display()
+        store.apply_display()                   # 저장은 "유지"를 누를 때 (confirm)
 
         def verify(tries=[0]):
             # 옮기는 도중 잠깐 겹치면 Hyprland 가 자리를 밀어낸다 — 다르면 한 번 더 보낸다
