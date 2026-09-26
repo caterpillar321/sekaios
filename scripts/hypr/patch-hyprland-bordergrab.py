@@ -283,3 +283,34 @@ if "SEKAI_BORDER_FIX" not in t:
     print("    적용: InputManager.cpp 테두리 부작용 (갇힌 포인터·끝난 뒤 커서·앱 커서 요청)")
 else:
     print("    (InputManager.cpp 테두리 부작용 이미 적용됨)")
+
+# ── SEKAI_BORDER_EDGE: 화면 끝에 붙은 변은 안쪽 띠를 끈다 ──
+#   스냅한 창의 스크롤바를 잡으려고 커서를 화면 오른쪽 끝으로 던지거나, 위쪽에 붙은 창의 제목줄을 화면 맨 위에서
+#   잡으면 스크롤·끌기 대신 크기 조절이 됐다. 윈도우는 테두리가 창 바깥이라 화면 끝 픽셀이 창 몫이다 —
+#   모니터 끝·작업 표시줄 끝에 붙은 변은 안쪽 4px 띠(와 둥근 모서리 안쪽)를 크기 조절로 보지 않는다.
+#   (hyprbars 쪽 patch-hyprbars-bordergrab.py 도 같은 변은 넘기지 않는다)
+t = inp.read_text()
+if "SEKAI_BORDER_EDGE" not in t:
+    t = sub(t, '''// 커서가 창(제목줄 포함) 테두리 근처면 방향 비트 (1 왼 · 2 오 · 4 위 · 8 아래), 아니면 0
+static int sekaiBorderAt(''', '''// SEKAI_BORDER_EDGE: 창(제목줄 포함) 상자 B 의 변 중 화면 끝(모니터 끝·작업 표시줄 끝)에 붙은 변 — 방향 비트
+static int sekaiScreenEdges(PHLWINDOW w, const CBox& B) {
+    const auto M = w->m_monitor.lock();
+    if (!M)
+        return 0;
+    const double L = M->m_position.x + M->m_reservedTopLeft.x, T = M->m_position.y + M->m_reservedTopLeft.y;
+    const double R = M->m_position.x + M->m_size.x - M->m_reservedBottomRight.x, D = M->m_position.y + M->m_size.y - M->m_reservedBottomRight.y;
+    return (B.x <= L + 1 ? 1 : 0) | (B.x + B.width >= R - 1 ? 2 : 0) | (B.y <= T + 1 ? 4 : 0) | (B.y + B.height >= D - 1 ? 8 : 0);
+}
+
+// 커서가 창(제목줄 포함) 테두리 근처면 방향 비트 (1 왼 · 2 오 · 4 위 · 8 아래), 아니면 0
+static int sekaiBorderAt(''', "화면 끝 변 함수")
+    t = sub(t, '''        if (!e && real.containsPoint(p) && w->isInCurvedCorner(p.x, p.y)) // 둥근 모서리 안쪽 (원래 동작)
+            e = (p.x < real.x + real.width / 2 ? 1 : 2) | (p.y < real.y + real.height / 2 ? 4 : 8);
+    }''', '''        if (!e && real.containsPoint(p) && w->isInCurvedCorner(p.x, p.y)) // 둥근 모서리 안쪽 (원래 동작)
+            e = (p.x < real.x + real.width / 2 ? 1 : 2) | (p.y < real.y + real.height / 2 ? 4 : 8);
+        e &= ~sekaiScreenEdges(w, B); // SEKAI_BORDER_EDGE: 화면 끝에 붙은 변의 안쪽은 창 몫
+    }''', "안쪽 띠에서 화면 끝 변 빼기")
+    inp.write_text(t)
+    print("    적용: InputManager.cpp 화면 끝에 붙은 변")
+else:
+    print("    (InputManager.cpp 화면 끝 변 이미 적용됨)")
