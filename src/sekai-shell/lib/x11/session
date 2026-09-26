@@ -20,6 +20,7 @@ export GDK_BACKEND=x11
 export QT_QPA_PLATFORM=xcb
 export GTK_IM_MODULE=ibus QT_IM_MODULE=ibus XMODIFIERS=@im=ibus
 export SEKAI_BASIC=1
+export XCURSOR_THEME=DMZ-White     # 마우스 커서 (Hyprland 세션과 같게)
 export SEKAI_SESSION_PID=$$
 X=/usr/lib/sekai/x11
 

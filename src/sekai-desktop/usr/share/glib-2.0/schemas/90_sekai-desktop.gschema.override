@@ -5,6 +5,8 @@
 color-scheme='prefer-dark'
 gtk-theme='Sekai-Dark'
 icon-theme='Papirus-Dark'
+# 마우스 커서 — DMZ-White (윈도우처럼 꼬리 달린 흰 화살표, openSUSE 의 커서 · dmz-cursor-theme)
+cursor-theme='DMZ-White'
 cursor-size=24
 font-name='Pretendard 10'
 monospace-font-name='JetBrains Mono 10'

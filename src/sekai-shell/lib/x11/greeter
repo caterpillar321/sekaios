@@ -3,5 +3,6 @@
 export XDG_SESSION_TYPE=x11
 unset WAYLAND_DISPLAY
 export GDK_BACKEND=x11
+export XCURSOR_THEME=DMZ-White     # 마우스 커서 (Hyprland 로그인 화면과 같게)
 xsetroot -cursor_name left_ptr -solid '#151517' 2>/dev/null
 exec "$@"

@@ -219,6 +219,12 @@ if [ "$1" = "configure" ]; then
         fi
     done
     rmdir /usr/share/sekai/grub 2>/dev/null || true
+    # 마우스 커서 기본값 — DMZ-White (앱이 따로 고르지 않을 때 쓰는 /usr/share/icons/default).
+    #   관리자가 직접 고른 것(수동)이 있으면 그대로 둔다
+    if update-alternatives --query x-cursor-theme 2>/dev/null | grep -q '^Status: auto' \
+       && [ -e /usr/share/icons/DMZ-White/cursor.theme ]; then
+        update-alternatives --set x-cursor-theme /usr/share/icons/DMZ-White/cursor.theme >/dev/null 2>&1 || true
+    fi
     # "폴더에 표시"(org.freedesktop.FileManager1)는 파일 탐색기(sekai-files)가 맡는다. 예전 설치본에
     #   Thunar 가 남아 있으면 같은 이름을 서비스 파일 둘이 주장해 어느 쪽이 뜰지 모른다 → Thunar 것을
     #   옆 이름으로 옮겨 둔다 (dpkg-divert — Thunar 가 업데이트돼도 그 파일은 옮긴 이름으로 깔린다)
@@ -336,7 +342,7 @@ Depends: sekai-shell (= ${FULL}),
  qt6-wayland, xdg-user-dirs,
  fonts-pretendard, fonts-dejavu, fonts-jetbrains-mono, fonts-nanum,
  fonts-noto-color-emoji, fonts-symbola,
- papirus-icon-theme, adwaita-icon-theme,
+ papirus-icon-theme, adwaita-icon-theme, dmz-cursor-theme,
  gnome-keyring, libpam-gnome-keyring, libpam-runtime,
  ibus, ibus-wayland, ibus-hangul, gir1.2-ibus-1.0, ibus-gtk3, ibus-gtk4, locales, greetd,
  plymouth (>= 24.004.60-5+sekai1), plymouth-themes,
