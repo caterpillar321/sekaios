@@ -37,7 +37,11 @@ REV="sekai2"
 #                     한 데스크톱에 최대화 창 여럿 (patch-hyprland-multimax.py)
 #   hyprbars sekai13: 화면 끝에 붙은 제목줄 가장자리는 넘기지 않고 그쪽 테두리 픽셀도 제목줄 — 화면 맨 위에서 잡으면 끌기
 #                     (patch-hyprbars-bordergrab.py)
-rev_for() { case "$1" in hyprbars) echo sekai13 ;; hyprland) echo sekai16 ;; *) echo "$REV" ;; esac; }
+#   hyprland sekai17: 앱이 스스로 청한 최소화(크롬 최소화 단추·X11 WM_CHANGE_STATE)·X11 최대화 요청을 받고, 최소화하면 그 데스크톱의
+#                     맨 위 창에 초점 (patch-hyprland-minimize.py). 안쪽 테두리 띠는 위쪽만 (bordergrab SEKAI_BORDER_TOPONLY)
+#   hyprbars sekai14: 막대를 숨긴 창(크롬·탐색기)의 누름은 받지 않는다 — sekai13 이 최대화한 크롬의 탭 줄·단추를 가로챘다.
+#                     창 단추의 판정 칸 = 그려지는 칸 (patch-hyprbars-slots.py)
+rev_for() { case "$1" in hyprbars) echo sekai14 ;; hyprland) echo sekai17 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
@@ -170,6 +174,7 @@ PYEOF
     python3 /build/patch-hyprland-misclick.py "$dir" || die "패치 실패 (misclick)"
     python3 /build/patch-hyprland-fitnew.py "$dir" || die "패치 실패 (fitnew)"
     python3 /build/patch-hyprland-multimax.py "$dir" || die "패치 실패 (multimax)"
+    python3 /build/patch-hyprland-minimize.py "$dir" || die "패치 실패 (minimize)"
     ok "패치 완료"
 }
 
@@ -396,6 +401,7 @@ build_plugin() {
         python3 /build/patch-hyprbars-focus.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (focus)"
         python3 /build/patch-hyprbars-dialog.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (dialog)"
         python3 /build/patch-hyprbars-inputfix.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (inputfix)"
+        python3 /build/patch-hyprbars-slots.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (slots)"
     fi
 
     say "빌드(plugin): $pkg $ver"

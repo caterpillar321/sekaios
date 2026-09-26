@@ -7,13 +7,38 @@
 SEKAI_BORDER_GRAB2: Hyprland 가 테두리 크기 조절을 하지 않는 창(최대화·전체 화면, resize_on_border 꺼짐)이면
 넘기지 않는다 — 넘기면 아무도 받지 않아 제목줄 맨 위·양 끝이 끌기·더블클릭이 안 되는 띠가 됐다.
 SEKAI_BORDER_EDGE: 화면 끝(모니터 끝·작업 표시줄 끝)에 붙은 변도 넘기지 않는다 — Hyprland 도 그 변은 안쪽 띠를
-보지 않는다(윈도우처럼 화면 맨 위에서 잡으면 제목줄 끌기). 멱등.
+보지 않는다(윈도우처럼 화면 맨 위에서 잡으면 제목줄 끌기).
+SEKAI_BAR_HIDDEN: 막대를 숨긴 창(nobar 규칙 — 크롬·탐색기처럼 제목줄을 스스로 그리는 창)의 누름은 받지 않는다. 숨긴 막대는
+폭이 0 이라 원래 받을 일이 없었는데, EDGE2 가 화면 끝 테두리까지 넓히면서 최대화한 크롬·탐색기의 위쪽 34px(탭 줄·
+창 단추)을 가로챘다 — 복원이 몇 번 눌러야 되고(두 번 누름이 제목줄 더블클릭으로) 최소화는 아예 안 먹었다. 멱등.
 사용법: patch-hyprbars-bordergrab.py <barDeco.cpp>
 """
 import sys
 
 p = sys.argv[1]
 s = open(p, encoding="utf-8").read()
+
+
+def sekai_bar_hidden(s):
+    """3단계 SEKAI_BAR_HIDDEN — 숨긴 막대는 누름을 받지 않는다"""
+    if "SEKAI_BAR_HIDDEN" in s:
+        return s
+    # inputfix(뒤에 적용) 전 소스면 첫 줄 뒤, 이미 적용된 소스면 그 줄 뒤 — 어느 쪽이든 결과는 같다
+    old = """    m_bCancelledDown = false; // SEKAI_BAR_INPUT: 지난 누름의 표시가 남아 이번 뗌(본문 클릭)을 삼키지 않게
+"""
+    if s.count(old) != 1:
+        old = """void CHyprBar::handleDownEvent(SCallbackInfo& info, std::optional<ITouch::SDownEvent> touchEvent) {
+    m_bTouchEv = touchEvent.has_value();
+"""
+    assert s.count(old) == 1, "handleDownEvent 앞 기준점 없음"
+    return s.replace(old, old + """    // SEKAI_BAR_HIDDEN: 막대를 숨긴 창(nobar — 제목줄을 스스로 그리는 크롬·탐색기)의 누름은 앱 몫이다
+    //   (전엔 화면 끝까지 넓힌 판정(EDGE2)이 최대화한 창의 탭 줄·창 단추를 가로챘다)
+    if (m_hidden) {
+        m_bDragPending = false;
+        return;
+    }
+""", 1)
+
 NEW2 = '''    // SEKAI_BORDER_GRAB: 제목줄 가장자리 4px 은 창 테두리 — Hyprland 가 크기 조절하게 넘긴다
     //   SEKAI_BORDER_GRAB2: Hyprland 가 테두리 크기 조절을 하는 창일 때만 (최대화·전체 화면은 아니다)
     static auto* const PSEKAIRESIZE = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "general:resize_on_border")->getDataStaticPtr();
@@ -74,7 +99,9 @@ else:
 #   제목줄(34px) 위엔 창 테두리(1px)가 있어, 화면 맨 위에 붙은 창의 y=0 은 제목줄이 아니라 테두리였다 — 누르면 아무 일도
 #   없었다(전엔 크기 조절). 윈도우처럼 화면 끝 픽셀을 눌러도 제목줄 끌기·두 번 눌러 최대화가 되게 한다.
 if "SEKAI_BORDER_EDGE2" in s:
-    print("이미 적용됨")
+    s = sekai_bar_hidden(s)
+    open(p, "w", encoding="utf-8").write(s)
+    print("적용함 (HIDDEN)" if "SEKAI_BAR_HIDDEN" in s else "이미 적용됨")
     sys.exit(0)
 OLD_E = '''        const auto SEKAI_B = assignedBoxGlobal();
         int        SEKAI_E = 0;
@@ -122,5 +149,6 @@ s = s.replace(OLD_V, '''    // SEKAI_BORDER_EDGE2: 화면 끝에 붙은 변 쪽�
     }
     if (!VECINRECT(COORDS, SEKAI_X0, SEKAI_Y0, SEKAI_X1, **PHEIGHT - 1)) {
 ''', 1)
+s = sekai_bar_hidden(s)
 open(p, "w", encoding="utf-8").write(s)
 print("적용함")

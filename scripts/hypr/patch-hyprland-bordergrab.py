@@ -314,3 +314,26 @@ static int sekaiBorderAt(''', "화면 끝 변 함수")
     print("    적용: InputManager.cpp 화면 끝에 붙은 변")
 else:
     print("    (InputManager.cpp 화면 끝 변 이미 적용됨)")
+
+# ── SEKAI_BORDER_TOPONLY: 안쪽 띠는 위쪽만 ──
+#   윈도우는 크기 조절 테두리가 창 바깥에 있고(옆·아래), 안쪽을 쓰는 건 제목줄 위쪽뿐이다. 네 변 모두 안쪽 4px 을 크기
+#   조절로 잡아서, 창 가장자리의 스크롤바·단추에 마우스를 올리면 앱이 강조를 띄우는데 누르면 크기 조절이 됐다
+#   ("강조가 뜬 자리와 눌리는 자리가 어긋난다"). 옆·아래는 바깥 띠(extend_border_grab_area)로 잡는다.
+t = inp.read_text()
+if "SEKAI_BORDER_TOPONLY" not in t:
+    t = sub(t, '''        if (p.x < B.x + SEKAI_INNER_GRAB)
+            e |= 1;
+        else if (p.x > B.x + B.width - SEKAI_INNER_GRAB)
+            e |= 2;
+        if (p.y < B.y + SEKAI_INNER_GRAB)
+            e |= 4;
+        else if (p.y > B.y + B.height - SEKAI_INNER_GRAB)
+            e |= 8;
+''', '''        // SEKAI_BORDER_TOPONLY: 안쪽 띠는 위쪽만 (윈도우처럼 옆·아래 테두리는 창 바깥 — 창 안은 앱 몫)
+        if (p.y < B.y + SEKAI_INNER_GRAB)
+            e |= 4;
+''', "안쪽 띠 위쪽만")
+    inp.write_text(t)
+    print("    적용: InputManager.cpp 안쪽 띠는 위쪽만")
+else:
+    print("    (InputManager.cpp 안쪽 띠 위쪽만 이미 적용됨)")
