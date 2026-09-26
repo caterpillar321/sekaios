@@ -64,7 +64,7 @@ DEFAULTS = {
         "tp_tap": True,
         "follow_mouse": 2,       # 2 = 윈도우처럼 클릭해야 초점 이동 (1 = 마우스를 따라)
     },
-    "display": {},               # {"DP-1": {...}}
+    "display": {},               # {"desc:<모니터 설명>" 또는 "DP-1": {...}} — display_key
     "layout": {
         "primary": "",           # 주 디스플레이 (모니터 이름). 비면 첫 모니터
     },
@@ -138,6 +138,20 @@ _COLOR_KEYS = {("appearance", k) for k in ("accent", "bg", "surface", "fg", "tit
     {("wallpaper", "color")}
 # 모니터 한 대의 설정 (display 섹션은 기본값이 비어 있어 따로 적어 둔다)
 _DISPLAY_KEYS = {"mode": "", "position": "", "scale": 1.0, "transform": 0, "vrr": 0, "enabled": True}
+
+# ── 모니터 설정의 열쇠 ──
+#   윈도우처럼 화면 설정은 단자가 아니라 모니터마다 기억한다 — 열쇠는 "desc:<제조사 모델 일련번호>"(EDID 에서 온
+#   설명, Hyprland 규칙의 desc: 그대로). 같은 단자에 다른 모니터를 꽂으면 그 모니터의 설정(없으면 권장 모드)이 쓰이고,
+#   옛 모니터를 다시 꽂으면 옛 설정이 돌아온다. 설명이 없는 모니터(가상 머신 등)와 예전 설정은 단자 이름.
+#   (전엔 단자 이름에만 묶여, 165Hz 모니터 자리에 60Hz 모니터를 꽂으면 로그인 화면·바탕화면이 못 받는 모드로 떴다)
+_DESC = re.compile(r"[A-Za-z0-9._()+/-][A-Za-z0-9 ._()+/-]{0,94}[A-Za-z0-9._()+/-]")   # 쉼표·# 없음 (규칙 문법)
+_DISPLAY_KEY_OK = re.compile(r"desc:" + _DESC.pattern + r"|[A-Za-z0-9._-]{1,32}")
+
+
+def display_key(mon):
+    """hyprctl monitors 의 모니터 하나 → 설정 열쇠"""
+    desc = str(mon.get("description") or "").strip()
+    return "desc:" + desc if _DESC.fullmatch(desc) else str(mon.get("name") or "")
 # 고를 수 있는 값이 정해진 것
 _CHOICES = {("multitasking", "taskbar"): ("current", "all"),
             ("multitasking", "alttab"): ("current", "all")}
@@ -467,6 +481,8 @@ class Store:
         lines.append("")
 
         for name, m in sorted(self.get("display").items()):
+            if not _DISPLAY_KEY_OK.fullmatch(name):      # 손으로 고친 설정 파일 등 — 규칙을 깨뜨리지 않게
+                continue
             if not m.get("enabled", True):
                 lines.append(f"monitor = {name}, disable")
                 continue
@@ -551,6 +567,12 @@ class Store:
             prim = self.get("layout", "primary") or ""
             if prim:
                 mon.append(f"# primary = {prim}\n")      # 로그인 화면이 입력 칸을 주 디스플레이에
+            # 자판 배열 — 로그인 화면에서 이 사람을 고르면 이 배열로 (윈도우처럼. sekai-greeter 가 형식을 검사해 쓴다)
+            i = self.get("input")
+            for k in ("kb_layout", "kb_variant", "kb_options"):
+                v = str(i.get(k) or "").strip()
+                if "\n" not in v:
+                    mon.append(f"# {k} = {v}\n")
             path = os.path.join(d, pwd.getpwuid(os.getuid()).pw_name + ".conf")
             # 누구나 쓰는 폴더 — 이름으로 바로 열면 남이 미리 둔 FIFO·링크에 막히거나 쓴다.
             #   예측할 수 없는 새 임시 파일(O_EXCL)에 쓰고 바꿔 넣는다
@@ -597,8 +619,28 @@ class Store:
         self.apply_wallpaper()
         self.notify_panel()
 
+    def display_entry(self, mon):
+        """이 모니터(hyprctl monitors 의 하나)의 설정 — 없으면 빈 사전"""
+        return self.get("display").get(display_key(mon), {})
+
+    def migrate_display(self, mons):
+        """예전 설정(단자 이름)을 지금 그 단자에 꽂힌 모니터의 설정으로 옮긴다 — 바뀌었으면 True (저장은 부른 쪽이).
+        그 모니터 설정이 이미 있으면 예전 것은 버린다 (두 규칙이 한 모니터에 걸리지 않게)"""
+        disp = self.data.setdefault("display", {})
+        changed = False
+        for m in mons or []:
+            name, key = m.get("name"), display_key(m)
+            if not name or key == name or name not in disp:
+                continue
+            disp.setdefault(key, disp[name])
+            del disp[name]
+            changed = True
+        return changed
+
     def apply_display(self):
         for name, m in self.get("display").items():
+            if not _DISPLAY_KEY_OK.fullmatch(name):
+                continue
             if not m.get("enabled", True):
                 keyword("monitor", f"{name}, disable")
                 continue

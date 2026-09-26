@@ -1946,9 +1946,10 @@ class Panel(Gtk.Window, TaskbarMixin):
                 p.show_all()
                 self.others.append(p)
         self.rebuild_all_tasks()
-        # 지금 모니터 모드를 부팅 옵션용으로 알린다 (monitors.publish_modes) — 모드가 자리 잡은 뒤에
+        # 지금 모니터 모드를 부팅 옵션용으로 알린다 (monitors.publish_modes) — 모드가 자리 잡은 뒤에.
+        #   예전 화면 설정(단자 이름)은 지금 꽂힌 모니터의 설정으로 옮긴다 (monitors.migrate_display_keys)
         if _layer.WAYLAND:
-            GLib.timeout_add(2500, lambda: monitors.publish_modes() and False)
+            GLib.timeout_add(2500, lambda: (monitors.publish_modes(), monitors.migrate_display_keys()) and False)
         return False
 
     # ── 시스템 정보 ──

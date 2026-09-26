@@ -9,6 +9,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib  # noqa: E402
 
+from ..store import display_key
 from ..util import hyprctl, keyword, spawn
 from ..widgets import Page, button, combo, row, switch
 from .arrange import ArrangeView
@@ -120,6 +121,17 @@ def build(store):
     all_mons = hyprctl("monitors", "all", js=True) or hyprctl("monitors", js=True) or []
     mons = [m for m in all_mons if not m.get("disabled")]   # 배치·주 디스플레이는 켜진 것만
     off_mons = [m for m in all_mons if m.get("disabled")]
+    # 설정은 모니터마다 (store.display_key — 같은 단자라도 다른 모니터면 따로). 예전 설정(단자 이름)은 지금 꽂힌
+    #   모니터의 것으로 옮긴다 — 로그인 때 작업 표시줄도 옮기지만 그보다 먼저 이 페이지를 열 수도 있다
+    if store.migrate_display(all_mons):
+        store.save()
+    keys = {m.get("name"): display_key(m) for m in all_mons}     # 단자 이름 → 설정 열쇠
+
+    def key_of(n):
+        return keys.get(n) or n
+
+    def entry(n):
+        return store.get("display").get(key_of(n), {})
     ctl = {}                       # 모니터 이름 → 되돌릴 때 다시 맞출 위젯들
     quiet = {"on": False}          # 되돌리며 위젯을 바꿀 땐 변경 처리를 하지 않는다
 
@@ -151,7 +163,7 @@ def build(store):
         quiet["on"] = True
         try:
             for n, w in ctl.items():
-                d = store.get("display").get(n, {})
+                d = entry(n)
                 w["en"].set_active(d.get("enabled", True))
                 if "res" not in w:                  # 꺼진 모니터 — 켜기 스위치만 있다
                     continue
@@ -239,14 +251,15 @@ def build(store):
         if quiet["on"]:
             return
         snap = copy.deepcopy(store.get("display"))
-        d = copy.deepcopy(snap.get(n, {}))
+        k = key_of(n)
+        d = copy.deepcopy(snap.get(k, {}))
         d[key] = value
         if not ask:
-            store.set("display", n, d)
+            store.set("display", k, d)
             return
         # "유지"를 누르기 전에는 화면에만 적용하고 저장하지 않는다 — 모니터가 못 받는 모드를 골라 화면이
         #   까매진 채 전원을 끄거나 앱이 죽으면, 저장된 나쁜 모드가 부팅 화면·로그인 화면·바탕화면에 남았다
-        store.data.setdefault("display", {})[n] = d
+        store.data.setdefault("display", {})[k] = d
         store.apply_display()
         confirm(snap)
 
@@ -265,9 +278,9 @@ def build(store):
         before = snapshot()
         disp = store.data.setdefault("display", {})
         for n, (x, y) in pos.items():
-            d = dict(disp.get(n, {}))
+            d = dict(disp.get(key_of(n), {}))
             d["position"] = f"{int(x)}x{int(y)}"
-            disp[n] = d
+            disp[key_of(n)] = d
         store.apply_display()                   # 저장은 "유지"를 누를 때 (confirm)
 
         def verify(tries=[0]):
@@ -336,7 +349,7 @@ def build(store):
 
     for num, mon in enumerate(mons, 1):
         name = mon.get("name", "?")
-        saved = store.get("display").get(name, {})
+        saved = entry(name)
 
         s = p.section(f"{num}.  {_monitor_title(mon)}  ·  {name}" if len(mons) > 1
                       else f"{_monitor_title(mon)}  ·  {name}")

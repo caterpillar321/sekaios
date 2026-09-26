@@ -143,3 +143,19 @@ def publish_modes(hmons=None):
                 os.unlink(tmp)
             except OSError:
                 pass
+
+
+def migrate_display_keys():
+    """예전 화면 설정(단자 이름)을 지금 꽂힌 모니터의 설정으로 옮긴다 (sekaisettings.store.migrate_display).
+    화면 설정을 윈도우처럼 모니터마다 기억하게 바꾼 뒤 처음 로그인할 때 한 번 일어난다 — 그 뒤엔 옮길 것이 없다"""
+    if not os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        return
+    try:
+        out = subprocess.run(["hyprctl", "-j", "monitors", "all"], capture_output=True, text=True, timeout=3).stdout
+        mons = json.loads(out)
+        from sekaisettings.store import Store
+        s = Store()
+        if isinstance(mons, list) and s.migrate_display(mons):
+            s.save()
+    except Exception:
+        pass
