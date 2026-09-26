@@ -45,6 +45,7 @@ install -Dm755 "$SRC/lib/autostart"    "$STAGE/usr/lib/sekai/autostart"
 install -Dm755 "$SRC/lib/automount"    "$STAGE/usr/lib/sekai/automount"
 install -Dm755 "$SRC/lib/polkit-agent" "$STAGE/usr/lib/sekai/polkit-agent"
 install -Dm755 "$SRC/lib/nm-agent"     "$STAGE/usr/lib/sekai/nm-agent"
+install -Dm755 "$SRC/lib/keyring-prompter" "$STAGE/usr/lib/sekai/keyring-prompter"
 install -Dm755 "$SRC/sekai-terminal"  "$STAGE/usr/bin/sekai-terminal"
 # 기본 화면 모드 (X11) — 그래픽 드라이버가 없을 때
 for f in "$SRC"/lib/x11/*; do
@@ -117,7 +118,7 @@ Depends: python3, python3-gi, python3-gi-cairo, gir1.2-gtk-3.0,
  adwaita-icon-theme, papirus-icon-theme, swaybg, swayidle,
  gir1.2-gtksessionlock-0.1, libgtk-session-lock0, python3-pampy,
  libglib2.0-bin, sekai-winshot, gir1.2-gudev-1.0, pulseaudio-utils,
- gir1.2-gtksource-4, gir1.2-polkit-1.0
+ gir1.2-gtksource-4, gir1.2-polkit-1.0, gir1.2-gcr-4
 Recommends: wireplumber, swaylock
 Provides: polkit-1-auth-agent
 Description: SekaiOS desktop shell
@@ -231,6 +232,14 @@ if [ "$1" = "configure" ]; then
     if ! dpkg-divert --listpackage "$t" 2>/dev/null | grep -qx sekai-desktop; then
         dpkg-divert --package sekai-desktop --rename --quiet --divert "$t.sekai-off" --add "$t" || true
     fi
+    # 암호 저장소(gnome-keyring)·GPG 의 암호 창은 우리 것(/usr/lib/sekai/keyring-prompter)이 맡는다 —
+    #   gcr 의 gcr-prompter 서비스 파일을 같은 방법으로 옆 이름으로 옮긴다 (같은 이름을 둘이 주장하지 않게)
+    for n in SystemPrompter PrivatePrompter; do
+        t=/usr/share/dbus-1/services/org.gnome.keyring.$n.service
+        if ! dpkg-divert --listpackage "$t" 2>/dev/null | grep -qx sekai-desktop; then
+            dpkg-divert --package sekai-desktop --rename --quiet --divert "$t.sekai-off" --add "$t" || true
+        fi
+    done
 fi
 if [ "$1" = "configure" ] || [ "$1" = "triggered" ]; then
     # 부팅 메뉴(shim + GRUB)를 이 패키지 기준으로 다시 쓴다 — 설치된 디스크일 때만.
@@ -275,6 +284,10 @@ if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
     [ -e /etc/grub.d/09_sekaios ] && chmod 644 /etc/grub.d/09_sekaios
     dpkg-divert --package sekai-desktop --rename --quiet \
         --remove /usr/share/dbus-1/services/org.xfce.Thunar.FileManager1.service 2>/dev/null || true
+    for n in SystemPrompter PrivatePrompter; do
+        dpkg-divert --package sekai-desktop --rename --quiet \
+            --remove /usr/share/dbus-1/services/org.gnome.keyring.$n.service 2>/dev/null || true
+    done
     # 설치된 디스크면 부팅 메뉴를 다시 쓴다 (없어진 테마·항목을 가리키지 않게)
     if [ -f /boot/grub/grub.cfg ] && command -v update-grub >/dev/null; then
         update-grub >/dev/null 2>&1 || true
