@@ -87,6 +87,18 @@ for f in /run/user/*/hypr/*/hyprland.log; do
     read_user_file "$f" "$u" 8388608 head \
         | grep -aiE "\[AQ\].*(drm|modeset|crtc|connector|mode |commit fail|restor)|monitor .*(added|mode)" | cut -c1-400 | head -80
 done
+# 증상이 매번 나지 않는다 — 탈이 난 부팅 뒤에 다시 켜서 돌려도 그 부팅을 볼 수 있게 지난 부팅 몇 번의 요점도
+#   (데비안은 저널을 /var/log/journal 에 남긴다. 세션 Hyprland 로그는 /run 이라 지난 부팅 것은 없다)
+echo "== 지난 부팅들"
+journalctl --list-boots --no-pager 2>/dev/null | tail -4
+for b in -1 -2 -3; do
+    journalctl -b "$b" -n 1 --no-pager >/dev/null 2>&1 || continue
+    echo "-- 부팅 $b"
+    journalctl -b "$b" -k --no-pager -o short-monotonic 2>/dev/null \
+        | grep -iE "Command line|User-defined mode|efifb: mode|nvidia-drmdrmfb|fbcon|\[drm\].*(error|fail|timeout|flip)|nvidia.*(error|fail|Xid)" | grep -viE "kernel command line" | cut -c1-300 | head -15
+    journalctl -b "$b" --no-pager -o short-monotonic -u plymouth-start -u plymouth-quit -u plymouth-quit-wait -u greetd -u sekai-drm-hold 2>/dev/null \
+        | grep -vE "gkr-pam|pam_unix" | cut -c1-300 | head -15
+done
 } > "$OUT" 2>&1
 chown "$U" "$OUT" 2>/dev/null
 echo "저장했습니다: $OUT"
