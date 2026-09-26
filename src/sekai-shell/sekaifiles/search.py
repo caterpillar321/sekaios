@@ -32,7 +32,9 @@ class Searcher:
     """on_batch([Entry]) · on_done(찾은 수, 너무 많아 멈췄는지) — 둘 다 메인 스레드에서"""
 
     def __init__(self, base_uri, query, show_hidden, on_batch, on_done):
-        self.base_uri = base_uri
+        # 한 곳 또는 여러 곳 (내 PC — 홈과 연결된 드라이브들을 차례로)
+        self.bases = list(base_uri) if isinstance(base_uri, (list, tuple)) else [base_uri]
+        self.base_uri = self.bases[0]
         self.q = query.casefold()
         self.show_hidden = show_hidden
         self.on_batch = on_batch
@@ -73,11 +75,14 @@ class Searcher:
     def _run(self):
         truncated = False
         try:
-            p = local_path(self.base_uri)
-            if p:
-                truncated = self._walk_local(p)
-            else:
-                truncated = self._walk_gio(Gio.File.new_for_uri(self.base_uri))
+            for b in self.bases:
+                if self._stop.is_set() or truncated:
+                    break
+                p = local_path(b)
+                if p:
+                    truncated = self._walk_local(p)
+                else:
+                    truncated = self._walk_gio(Gio.File.new_for_uri(b))
         except Exception as ex:                  # 찾기가 죽어도 창은 살아야 한다
             print("[sekai-files] 검색 오류:", ex, flush=True)
         self._emit(force=True)

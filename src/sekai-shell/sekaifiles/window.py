@@ -21,7 +21,7 @@ from . import opener  # noqa: E402
 from .addressbar import AddressBar  # noqa: E402
 from .common import (COMPUTER, HOME, TRASH, archive, copy_text, count_text, crumbs,  # noqa: E402
                      dbg, edit_text, favorites, fileops, fit_pixbuf, fmt_size, gfile_of, home_dir,
-                     image, is_in_trash, is_special, local_path, location_icon, mount_names, norm_uri,
+                     image, is_in_trash, is_special, list_drives, local_path, location_icon, mount_names, norm_uri,
                      parse_location, properties, quote_path, split_ext, theme_icon, thumbable, thumbs,
                      title_of, uri_of_path, SORT_LABELS)
 from .folder import PX_L, PX_M, FolderModel  # noqa: E402
@@ -443,7 +443,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         else:
             self.set_title(title)
             self.address.set_location(uri, crumbs(uri, mounts), location_icon(uri))
-        self.search.set_placeholder_text(f"{'홈' if uri == COMPUTER else title} 검색")
+        self.search.set_placeholder_text(f"{title} 검색")
         self.nav.select_uri(uri)
         self.b_back.set_sensitive(self.hpos > 0)
         self.b_fwd.set_sensitive(self.hpos < len(self.history) - 1)
@@ -1424,9 +1424,25 @@ class ExplorerWindow(Gtk.ApplicationWindow):
             self.search.set_text("")
         self.focus_view()
 
+    def _drive_roots(self):
+        """연결된 드라이브의 맨 위 (루트 / 와 홈 안에 있는 것은 빼고)"""
+        home = home_dir().rstrip("/") + "/"
+        out = []
+        try:
+            for d in list_drives(self.app.vm):
+                p = local_path(d.root_uri) if d.root_uri and d.mount is not None else None
+                if p and p != "/" and not (p.rstrip("/") + "/").startswith(home):
+                    out.append(d.root_uri)
+        except Exception as e:
+            dbg("드라이브 목록 실패", e)
+        return out
+
     def _start_search(self, q):
         base = self.uri
-        if base in (HOME, COMPUTER) or base is None:
+        if base == COMPUTER:
+            # 내 PC — 홈과 연결된 드라이브(USB 등). 시스템 전체(/)는 뒤지지 않는다 (시스템 파일뿐이고 오래 걸린다)
+            base = [uri_of_path(home_dir())] + self._drive_roots()
+        elif base == HOME or base is None:
             base = uri_of_path(home_dir())
         if self.searcher is not None:
             self.searcher.cancel()
