@@ -1,7 +1,23 @@
 #!/bin/sh
 # SekaiOS — 부팅·로그인 화면 전환 진단 (화면 깜박임·신호 끊김 원인 찾기)
 #   sudo /usr/libexec/sekai/sekai-bootdiag [저장할 파일]   (기본: ~/sekai-bootdiag.txt)
+#   sudo /usr/libexec/sekai/sekai-bootdiag --plymouth-debug on|off
+#       부팅 화면(Plymouth)이 스스로 남기는 기록을 켜고 끈다 — 다음 부팅부터 /var/log/plymouth-debug.log
+#       (부팅마다 새로 쓴다). 켜 두면 진단에 그 기록의 화면 관련 줄이 들어간다.
 #   개인 정보(파일·비밀번호 등)는 모으지 않는다 — 부팅 기록 중 그래픽 관련 줄만.
+if [ "${1:-}" = "--plymouth-debug" ]; then
+    [ "$(id -u)" -eq 0 ] || { echo "관리자 권한이 필요합니다 (sudo)"; exit 1; }
+    f=/etc/default/grub.d/zz-sekai-plymouth-debug.cfg
+    case "${2:-}" in
+        on)  printf '%s\n' "# sekai-bootdiag --plymouth-debug on 이 만든 파일 — 끄기: sudo /usr/libexec/sekai/sekai-bootdiag --plymouth-debug off" \
+                 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT plymouth.debug"' > "$f" ;;
+        off) rm -f "$f" ;;
+        *)   echo "사용법: sekai-bootdiag --plymouth-debug on|off"; exit 2 ;;
+    esac
+    /usr/libexec/sekai/update-grub-locked >/dev/null 2>&1 || { echo "부팅 메뉴를 고치지 못했습니다 (update-grub)"; exit 1; }
+    echo "부팅 화면 기록: $2 — 다음 부팅부터"
+    exit 0
+fi
 U=${SUDO_USER:-$(id -un)}
 H=$(getent passwd "$U" | cut -d: -f6)
 OUT=${1:-$H/sekai-bootdiag.txt}
@@ -99,6 +115,16 @@ for b in -1 -2 -3; do
     journalctl -b "$b" --no-pager -o short-monotonic -u plymouth-start -u plymouth-quit -u plymouth-quit-wait -u greetd -u sekai-drm-hold 2>/dev/null \
         | grep -vE "gkr-pam|pam_unix" | cut -c1-300 | head -15
 done
+# Plymouth 가 모니터를 어떻게 잡았는지 — 이미 켜진 모니터·고른 모드·출력 변화(늦게 나타난 모니터)·스플래시 표시/끝
+echo "== Plymouth 기록"
+P=/var/log/plymouth-debug.log
+if grep -qw "plymouth.debug" /proc/cmdline && [ -f "$P" ] && [ ! -L "$P" ]; then
+    ls -l --time-style=+%F\ %T "$P"
+    grep -aE "renderers/drm/plugin\.c|ply-device-manager\.c:[0-9]+:(on_udev|create_dev:|ply_device)|ply-renderer\.c|ply-boot-splash\.c|two-step/plugin\.c:[0-9]+:(show_splash|become_idle|hide)|main\.c:[0-9]+:(on_quit|on_boot_splash_idle|on_show|on_hide|on_deactivate|on_reactivate|tell_systemd|plymouth_should)|[Ff]ail|[Cc]ould not|[Ee]rror" "$P" \
+        | grep -av "ply-key-file" | tr -d '\000-\010\013-\037' | cut -c1-260 | head -300
+else
+    echo "(없음 — 켜려면 sudo /usr/libexec/sekai/sekai-bootdiag --plymouth-debug on 뒤 다시 부팅)"
+fi
 } > "$OUT" 2>&1
 chown "$U" "$OUT" 2>/dev/null
 echo "저장했습니다: $OUT"
