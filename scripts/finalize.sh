@@ -69,6 +69,21 @@ ok "sekai-desktop $(inroot "dpkg-query -W -f='\${Version}' sekai-desktop")"
 say "fnott 제거 (알림 데몬은 sekai-panel 이 직접 제공)"
 inroot "apt-get purge -y fnott 2>/dev/null | tail -1 || true"
 
+say "대체된 다른 DE 앱 제거 (파일 탐색기·메모장·사진·계산기·사용자 계정 컨트롤·설정 › 소리가 대신한다)"
+#   설치된 PC 는 업데이트해도 지우지 않고 메뉴에서만 숨긴다 (/usr/share/sekai/data/applications).
+#   이미지에는 처음부터 넣지 않는다. lxpolkit 은 nm-applet 이 요구하는 polkit-1-auth-agent 를
+#   sekai-shell 이 대신 제공해야 지울 수 있다 — 무엇이든 SekaiOS 구성 요소를 같이 지우게 되면 멈춘다
+OLD_APPS="thunar thunar-volman thunar-data mousepad ristretto galculator xarchiver evince pavucontrol
+          lxpolkit xfce4-taskmanager system-config-printer tumbler xdg-user-dirs-gtk"
+OLD_APPS=$(echo $OLD_APPS)
+#   (결과를 먼저 받아 둔다 — pipefail 에서 grep -q 가 일찍 끝나면 앞 명령이 SIGPIPE 로 실패로 잡혀 검사가 새어 나간다)
+SIM=$(inroot "apt-get -s purge $OLD_APPS 2>&1" || true)
+if grep -qE '^(Purg|Remv) (sekai-|network-manager|hyprland|nm-)' <<<"$SIM"; then
+    echo "E: 옛 앱을 지우면 SekaiOS 구성 요소도 지워집니다 — 멈춥니다 (apt-get -s purge $OLD_APPS)"
+    exit 1
+fi
+inroot "apt-get purge -y $OLD_APPS 2>&1 | tail -1; apt-get autoremove --purge -y 2>&1 | tail -1"
+
 say "NetworkManager 전환"
 inroot "systemctl disable systemd-networkd.socket systemd-networkd 2>/dev/null || true
         systemctl mask systemd-networkd 2>/dev/null || true
