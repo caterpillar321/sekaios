@@ -310,6 +310,14 @@ def build_appearance(store):
                       lambda v: store.set("panel", "clock_format", v),
                       width=14, placeholder="%H:%M"))
 
+    s = p.section("글꼴")
+    from sekaishell import theme as _theme
+    row(s, "글꼴 다듬기",
+        "윈도우의 ClearType 과 같은 것 — 글자 가장자리를 모니터의 빨강·초록·파랑 점에 맞춰 또렷하게. "
+        "글자 둘레에 색이 번져 보이면 BGR 이나 회색조로 (OLED 모니터는 회색조). 열려 있던 앱은 다시 열면 적용됩니다",
+        control=combo([("rgb", "선명하게 (RGB)"), ("bgr", "선명하게 (BGR)"), ("gray", "부드럽게 (회색조)")],
+                      _theme.font_smoothing(), _theme.set_font_smoothing))
+
     s = p.section("커서")
     row(s, "커서 크기", "다시 로그인해야 완전히 적용됩니다",
         control=spin(a["cursor_size"], 12, 64, 2,

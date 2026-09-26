@@ -10,6 +10,12 @@ cursor-theme='DMZ-White'
 cursor-size=24
 font-name='Pretendard 10'
 monospace-font-name='JetBrains Mono 10'
+# 글꼴 다듬기 — 윈도우의 ClearType 처럼 RGB 서브픽셀 + 약한 힌팅 (GTK·크로미움이 본다).
+#   설정 › 개인 설정 › 색 및 모양 › 글꼴 다듬기에서 BGR·회색조(OLED 등)로 바꿀 수 있다.
+#   데비안 fontconfig 의 "서브픽셀 끔"(10-sub-pixel-none)은 sekai-desktop 이 "자동"으로 돌린다 — 그게 있으면 이 값이 먹지 않는다
+font-antialiasing='rgba'
+font-rgba-order='rgb'
+font-hinting='slight'
 
 # 창 버튼은 윈도우처럼 오른쪽에 최소화·최대화·닫기
 #   (기본값은 GNOME 식 'appmenu:close' 라 크로미움·헤더바 앱에 닫기만 보인다)

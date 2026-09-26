@@ -205,6 +205,16 @@ if [ "$1" = "configure" ]; then
     if command -v debconf-set-selections >/dev/null; then
         echo "refind refind/install_to_esp boolean false" | debconf-set-selections || true
     fi
+    # 글꼴 — 데비안 fontconfig 의 "서브픽셀 끔"을 "자동"으로 (한 번만 — 사용자가 dpkg-reconfigure 로 다시 끄면 그대로 둔다).
+    #   끔이면 fontconfig 가 먼저 rgba=none 을 정해, GSettings 의 ClearType(font-antialiasing=rgba)을 GTK·크로미움이 못 쓴다.
+    #   자동이면 앱이 GSettings 대로 한다 (설정 › 개인 설정 › 색 및 모양 › 글꼴 다듬기)
+    if [ ! -e /var/lib/sekai/.fontconfig-subpixel-auto ]; then
+        if command -v debconf-set-selections >/dev/null; then
+            echo "fontconfig-config fontconfig/subpixel_rendering select Automatic" | debconf-set-selections || true
+        fi
+        [ -L /etc/fonts/conf.d/10-sub-pixel-none.conf ] && rm -f /etc/fonts/conf.d/10-sub-pixel-none.conf
+        mkdir -p /var/lib/sekai && : > /var/lib/sekai/.fontconfig-subpixel-auto
+    fi
     # 데비안의 10_linux 대신 09_sekaios 가 부팅 항목을 만든다 (항목이 두 벌이 되지 않게).
     #   파일을 옮기지(dpkg-divert) 않고 실행 권한만 뺀다 — update-grub 은 실행 권한 없는 것을
     #   건너뛴다. 이 파일들은 grub-common 의 conffile 이라 옮기면 grub 업데이트 때 꼬인다.
@@ -360,7 +370,7 @@ Maintainer: SekaiOS <sekai@localhost>
 Section: metapackages
 Priority: optional
 Depends: sekai-shell (= ${FULL}),
- hyprland (>= 0.50.1-sekai11), hyprbars (>= 0.50.0-sekai11), hyprexpo, xwayland, binutils,
+ hyprland (>= 0.50.1-sekai17), hyprbars (>= 0.50.0-sekai14), hyprexpo, xwayland, binutils,
  xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr,
  foot, fuzzel, swaybg, swayidle, swaylock, grim, slurp,
  brightnessctl, playerctl, wtype, pkexec, efibootmgr, open-vm-tools, mokutil, pciutils, openssl,

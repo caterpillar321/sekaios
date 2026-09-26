@@ -94,3 +94,36 @@ def apply_system(mode):
             _write_ini(os.path.join(home, ".config", d, "settings.ini"), vals)
         except OSError:
             pass
+
+
+# ── 글꼴 다듬기 (윈도우의 ClearType) ──
+#   GSettings org.gnome.desktop.interface 의 font-antialiasing·font-rgba-order — GTK 앱과 크로미움이 본다.
+#   기본값(sekai-desktop 의 gschema override)은 RGB 서브픽셀. 모니터의 빨강·초록·파랑 점 배열이 거꾸로(BGR)거나
+#   OLED 처럼 줄지어 있지 않으면 글자에 색 번짐이 보인다 — 그땐 BGR·회색조로
+SMOOTHING = {"rgb": ("rgba", "rgb"), "bgr": ("rgba", "bgr"), "gray": ("grayscale", "rgb")}
+
+
+def _gsettings_get(key):
+    try:
+        out = subprocess.run(["gsettings", "get", "org.gnome.desktop.interface", key],
+                             capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return ""
+    return out.strip().strip("'")
+
+
+def font_smoothing():
+    """지금 글꼴 다듬기 — "rgb" · "bgr" · "gray" """
+    if _gsettings_get("font-antialiasing") != "rgba":
+        return "gray"
+    return "bgr" if _gsettings_get("font-rgba-order") == "bgr" else "rgb"
+
+
+def set_font_smoothing(v):
+    aa, order = SMOOTHING.get(v, SMOOTHING["rgb"])
+    for key, val in (("font-antialiasing", aa), ("font-rgba-order", order)):
+        try:
+            subprocess.run(["gsettings", "set", "org.gnome.desktop.interface", key, val],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        except Exception:
+            pass

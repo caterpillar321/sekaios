@@ -364,13 +364,12 @@ class ExplorerWindow(Gtk.ApplicationWindow):
             #   요청은 어긋났다(복원했는데 최대화된 줄로 알거나 크기가 작아짐). 두 번 누르기는 창이 직접 받는다
             #   (_on_button — 제목 표시줄 위치인지 본다; 이 위젯은 자기 입력 창이 없어 누름을 받지 못한다)
             Gtk.Settings.get_default().set_property("gtk-titlebar-double-click", "none")
-            self.connect("configure-event", lambda *_: self._sync_max_later(250))
         self._titlebar = hb
         self.set_titlebar(hb)
         hb.show_all()
         self._win_title = "파일 탐색기"               # navigate() 가 폴더 이름으로 바꾼다
         self._title_ready = False
-        self._maxed = False                          # Hyprland 에 물어 본 최대화 상태 (_show_max)
+        self._maxed = False                          # 최대화 상태 (_show_max — window-state-event 가 맞춘다)
 
         def ready(*_):
             if self._max_at_start:
@@ -404,79 +403,18 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         return b
 
     def _toggle_max(self):
-        """다른 창의 제목 표시줄(hyprbars)의 최대화 단추와 같은 명령 (복원 크기도 Hyprland 가 기억한 것).
-        단추 모양은 Hyprland 에 물어 맞춘다 (_sync_max). 기본 화면 모드(X11)는 GTK 로"""
-        if HYPR:
-            try:
-                subprocess.Popen(["hyprctl", "dispatch", "fullscreen", "1"],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                self._sync_max_later(200)
-                return
-            except OSError:
-                pass
+        """최대화·복원 — 창 자신의 요청(xdg set/unset_maximized)으로. Hyprland 가 이 창 주소로 처리한다
+        (sekai11 부터 최대화 상태도 GTK 에 제대로 알린다). 전엔 hyprctl fullscreen 1 이 그 순간의 초점 창을 뒤집어,
+        초점이 어긋나면 헛돌거나 다른 창에 먹었다"""
         if self.is_maximized():
             self.unmaximize()
         else:
             self.maximize()
 
     def _maximize_at_start(self):
-        """지난번에 최대화한 채 닫았다 — 이 창이 지금 초점 창이고 아직 최대화되지 않았을 때만 최대화한다
-        (fullscreen 1 은 초점 창을 뒤집는다 — 창 여럿이 한꺼번에 열리면 엉뚱한 창을 뒤집거나 두 번 뒤집었다)"""
-        if not HYPR:
+        """지난번에 최대화한 채 닫았다 — 최대화로 연다"""
+        if not self.is_maximized():
             self.maximize()
-            return
-        if not self.is_active():
-            return
-        try:
-            proc = Gio.Subprocess.new(["hyprctl", "-j", "activewindow"],
-                                      Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE)
-        except GLib.Error:
-            return
-
-        def done(p, res):
-            try:
-                _ok, out, _err = p.communicate_utf8_finish(res)
-                import json
-                j = json.loads(out or "{}")
-            except (GLib.Error, ValueError):
-                return
-            if (j.get("class") == self.app.get_application_id() and j.get("title") == self.get_title()
-                    and j.get("fullscreen") != 1 and self.is_active()):
-                self._toggle_max()
-        proc.communicate_utf8_async(None, None, done)
-
-    def _sync_max_later(self, ms):
-        if getattr(self, "_max_src", 0):
-            GLib.source_remove(self._max_src)
-
-        def go():
-            self._max_src = 0
-            self._sync_max()
-            return False
-        self._max_src = GLib.timeout_add(ms, go)
-
-    def _sync_max(self):
-        """Hyprland 에 이 창이 최대화됐는지 묻는다 → 단추 모양 · 다음 실행 때 최대화할지 (지금 초점인 창일 때만 —
-        제목으로 이 창인지 확인한다)"""
-        if not self.is_active():
-            return
-        try:
-            proc = Gio.Subprocess.new(["hyprctl", "-j", "activewindow"],
-                                      Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE)
-        except GLib.Error:
-            return
-
-        def done(p, res):
-            try:
-                _ok, out, _err = p.communicate_utf8_finish(res)
-                import json
-                j = json.loads(out or "{}")
-            except (GLib.Error, ValueError):
-                return
-            if j.get("class") != self.app.get_application_id() or j.get("title") != self.get_title():
-                return
-            self._show_max(j.get("fullscreen") == 1)
-        proc.communicate_utf8_async(None, None, done)
 
     def _show_max(self, maxed):
         self._maxed = maxed
@@ -485,15 +423,9 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         self.b_max.set_tooltip_text("이전 크기로 복원" if maxed else "최대화")
 
     def _minimize(self):
-        """SekaiOS 의 최소화는 숨김 작업 공간으로 옮기기 (작업 표시줄이 다시 꺼낸다) — hyprbars 의 최소화 단추와
-        같은 명령. GTK 의 최소화(iconify)는 Hyprland 가 받지 않는다. 기본 화면 모드(X11)는 xfwm4 가 한다"""
-        if HYPR:
-            try:
-                subprocess.Popen(["hyprctl", "dispatch", "movetoworkspacesilent", "special:min"],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                return
-            except OSError:
-                pass
+        """최소화 — 창 자신의 요청(xdg set_minimized)으로. SekaiOS 의 Hyprland(sekai17~)가 숨김 작업 공간으로 옮긴다
+        (작업 표시줄이 다시 꺼낸다). 전엔 hyprctl 로 초점 창을 옮겨 초점이 어긋나면 다른 창이 최소화됐다.
+        기본 화면 모드(X11)는 xfwm4 가 한다"""
         self.iconify()
 
     def _build_tabbar(self):
@@ -2683,23 +2615,15 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         self._toast_src = GLib.timeout_add_seconds(secs, hide)
 
     def _on_wstate(self, _w, ev):
-        # 최대화 단추 — 최대화된 창이면 "이전 크기로 복원" (윈도우처럼). Hyprland 에서는 GTK 가 최대화를
-        #   알아보지 못해 Hyprland 에 묻는다 (_sync_max)
-        if HYPR:
-            self._sync_max_later(250)
-        else:
-            self._show_max(bool(ev.new_window_state & Gdk.WindowState.MAXIMIZED))
+        # 최대화 단추 — 최대화된 창이면 "이전 크기로 복원" (윈도우처럼)
+        self._show_max(bool(ev.new_window_state & Gdk.WindowState.MAXIMIZED))
         return False
 
     def _on_close(self, *_):
         st = self.app.state
-        # 최대화했는지 — Hyprland 의 최대화(fullscreen 1)는 GTK 가 모르므로 물어 둔 것(_show_max)으로.
-        #   최대화된 크기는 "보통 크기"로 적지 않는다 (다음에 거의 화면만 한 크기로 최대화 안 된 채 열렸다)
-        if HYPR:
-            maxed = self._maxed
-        else:
-            gw = self.get_window()
-            maxed = bool(gw and gw.get_state() & Gdk.WindowState.MAXIMIZED)
+        # 최대화했는지 — 최대화된 크기는 "보통 크기"로 적지 않는다 (다음에 거의 화면만 한 크기로 최대화 안 된 채 열렸다)
+        gw = self.get_window()
+        maxed = bool(gw and gw.get_state() & Gdk.WindowState.MAXIMIZED)
         st["maximized"] = maxed
         if not maxed:
             w, h = self.get_size()
