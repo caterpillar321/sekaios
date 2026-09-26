@@ -11,6 +11,7 @@
 썸네일(thumbs) · 압축(archive) · 속성(properties) 도 부품 — 없으면 그 명령만 꺼진다.
 """
 import os
+import subprocess
 
 import gi
 gi.require_version("Gtk", "3.0")
@@ -95,6 +96,54 @@ def _same_fs(a, b):
         return False
 
 
+# Hyprland 세션인가 — 아니면 기본 화면 모드(X11, xfwm4)
+HYPR = bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"))
+
+
+class _CapIcon(Gtk.DrawingArea):
+    """창 단추 기호 — 1px 선으로 그린다 (다른 창의 제목 표시줄 hyprbars 의 sekai:min·max·close 와 같은 모양).
+    색은 단추의 CSS 글자색을 따른다 (닫기 단추에 마우스를 올리면 흰색)"""
+
+    def __init__(self, kind):
+        super().__init__()
+        self.kind = kind
+        self.set_size_request(16, 16)
+        self.connect("draw", self._draw)
+
+    def set_kind(self, kind):
+        self.kind = kind
+        self.queue_draw()
+
+    def _draw(self, w, cr):
+        a = w.get_allocation()
+        S = 10                                   # 기호 한 변 (논리 픽셀)
+        x0, y0 = (a.width - S) // 2 + 0.5, (a.height - S) // 2 + 0.5   # 선이 픽셀에 맞게
+        c = w.get_style_context().get_color(w.get_state_flags())
+        cr.set_source_rgba(c.red, c.green, c.blue, c.alpha)
+        cr.set_line_width(1)
+        k = self.kind
+        if k == "min":
+            y = y0 + S // 2
+            cr.move_to(x0, y)
+            cr.line_to(x0 + S, y)
+        elif k == "max":
+            cr.rectangle(x0, y0, S - 1, S - 1)
+        elif k == "restore":                     # 겹친 네모 둘
+            cr.rectangle(x0, y0 + 2, S - 3, S - 3)
+            cr.move_to(x0 + 2, y0 + 2)
+            cr.line_to(x0 + 2, y0)
+            cr.line_to(x0 + S - 1, y0)
+            cr.line_to(x0 + S - 1, y0 + S - 3)
+            cr.line_to(x0 + S - 3, y0 + S - 3)
+        else:                                    # close
+            cr.move_to(x0, y0)
+            cr.line_to(x0 + S - 1, y0 + S - 1)
+            cr.move_to(x0 + S - 1, y0)
+            cr.line_to(x0, y0 + S - 1)
+        cr.stroke()
+        return False
+
+
 class Tab:
     """탭 하나 — 위치·뒤로/앞으로 기록·폴더 내용·검색·보기 모양은 탭마다.
     툴바·주소 표시줄·왼쪽 창·보기 위젯은 창에 하나고, 탭을 바꾸면 그 탭의 것을 갈아 끼운다 (switch_tab)"""
@@ -146,8 +195,9 @@ class ExplorerWindow(Gtk.ApplicationWindow):
             self.set_default_size(max(640, int(w)), max(420, int(h)))
         except (TypeError, ValueError):
             self.set_default_size(1100, 680)
-        if st.get("maximized"):
-            self.maximize()
+        # 지난번에 최대화한 채 닫았으면 — 창이 나타난 뒤에 (그 전에 청하면 Hyprland 가 받지 않는데 GTK 는
+        #   최대화된 줄로 알아 단추 모양이 어긋났다)
+        self._max_at_start = bool(st.get("maximized"))
         self.set_size_request(560, 360)
         for c in ("settings-window", "fx-window"):
             self.get_style_context().add_class(c)
@@ -188,7 +238,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         top = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         top.get_style_context().add_class("fx-top")
         root.pack_start(top, False, False, 0)
-        top.pack_start(self._build_tabbar(), False, False, 0)
+        self._build_titlebar()
         top.pack_start(self._build_toolbar(), False, False, 0)
         top.pack_start(self._build_cmdbar(), False, False, 0)
 
@@ -272,6 +322,137 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         box.append(m)
         m.dimmed = set(self._cut_uris)
         return m
+
+    # ── 제목 표시줄 ──
+    def _build_titlebar(self):
+        """탭이 제목 표시줄에 (윈도우 11 탐색기처럼). 이 창은 Hyprland 의 제목 표시줄(hyprbars)을 쓰지 않는다 —
+        hyprland.conf 의 nobar 규칙이 "처음 제목이 '파일 탐색기'인 창"을 고른다 (대화상자는 같은 앱이라도 그대로).
+        그래서 폴더 이름은 창이 나타난 뒤에 제목으로 건다 (_set_win_title).
+        빈 곳을 끌면 옮겨진다(가장자리로 끌면 스냅 — Hyprland 의 SEKAI_CLIENT_MOVE), 두 번 누르면 최대화 — GTK 가 한다.
+        기본 화면 모드(X11)에서는 xfwm4 가 이 제목 표시줄을 알아보고 자기 것을 그리지 않는다 (GTK CSD)"""
+        hb = Gtk.HeaderBar()
+        hb.get_style_context().add_class("fx-titlebar")
+        hb.set_show_close_button(False)
+        hb.set_custom_title(Gtk.Box())              # 가운데 제목 글은 없다 (윈도우처럼)
+        tabs = self._build_tabbar()
+        tabs.set_valign(Gtk.Align.END)
+        hb.pack_start(tabs)
+        caps = Gtk.Box(spacing=0)
+        caps.set_valign(Gtk.Align.START)
+        self.b_min = self._cap_btn("min", "최소화", self._minimize)
+        self.b_max = self._cap_btn("max", "최대화", self._toggle_max)
+        self.b_close = self._cap_btn("close", "닫기", self.close, "close")
+        for b in (self.b_min, self.b_max, self.b_close):
+            caps.pack_start(b, False, False, 0)
+        hb.pack_end(caps)
+        if HYPR:
+            # Hyprland 의 최대화(fullscreen 1)는 GTK 가 알아보지 못한다 — GTK 가 두 번 누르기로 보내는 최대화·복원
+            #   요청은 어긋났다(복원했는데 최대화된 줄로 알거나 크기가 작아짐). 두 번 누르기는 창이 직접 받는다
+            #   (_on_button — 제목 표시줄 위치인지 본다; 이 위젯은 자기 입력 창이 없어 누름을 받지 못한다)
+            Gtk.Settings.get_default().set_property("gtk-titlebar-double-click", "none")
+            self.connect("configure-event", lambda *_: self._sync_max_later(250))
+        self._titlebar = hb
+        self.set_titlebar(hb)
+        hb.show_all()
+        self._win_title = self.get_title()
+        self._title_ready = False
+
+        def ready(*_):
+            if self._max_at_start:
+                self._max_at_start = False
+                GLib.timeout_add(120, lambda: (self._toggle_max(), False)[1])
+            if not self._title_ready:
+                # 처음 제목("파일 탐색기")이 Hyprland 에 자리 잡은 뒤 — 조금 기다렸다가 폴더 이름으로
+                def go():
+                    self._title_ready = True
+                    self.set_title(self._win_title)
+                    return False
+                GLib.timeout_add(200, go)
+            return False
+        self.connect("map-event", ready)
+
+    def _set_win_title(self, text):
+        self._win_title = text
+        if getattr(self, "_title_ready", False):
+            self.set_title(text)
+
+    def _cap_btn(self, kind, tooltip, cb, cls=None):
+        b = Gtk.Button()
+        b.set_relief(Gtk.ReliefStyle.NONE)
+        b.set_focus_on_click(False)
+        b.get_style_context().add_class("fx-cap")
+        if cls:
+            b.get_style_context().add_class(cls)
+        b.add(_CapIcon(kind))
+        b.set_tooltip_text(tooltip)
+        b.connect("clicked", lambda *_: cb())
+        return b
+
+    def _toggle_max(self):
+        """다른 창의 제목 표시줄(hyprbars)의 최대화 단추와 같은 명령 (복원 크기도 Hyprland 가 기억한 것).
+        단추 모양은 Hyprland 에 물어 맞춘다 (_sync_max). 기본 화면 모드(X11)는 GTK 로"""
+        if HYPR:
+            try:
+                subprocess.Popen(["hyprctl", "dispatch", "fullscreen", "1"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self._sync_max_later(200)
+                return
+            except OSError:
+                pass
+        if self.is_maximized():
+            self.unmaximize()
+        else:
+            self.maximize()
+
+    def _sync_max_later(self, ms):
+        if getattr(self, "_max_src", 0):
+            GLib.source_remove(self._max_src)
+
+        def go():
+            self._max_src = 0
+            self._sync_max()
+            return False
+        self._max_src = GLib.timeout_add(ms, go)
+
+    def _sync_max(self):
+        """Hyprland 에 이 창이 최대화됐는지 묻는다 → 단추 모양 · 다음 실행 때 최대화할지 (지금 초점인 창일 때만 —
+        제목으로 이 창인지 확인한다)"""
+        if not self.is_active():
+            return
+        try:
+            proc = Gio.Subprocess.new(["hyprctl", "-j", "activewindow"],
+                                      Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE)
+        except GLib.Error:
+            return
+
+        def done(p, res):
+            try:
+                _ok, out, _err = p.communicate_utf8_finish(res)
+                import json
+                j = json.loads(out or "{}")
+            except (GLib.Error, ValueError):
+                return
+            if j.get("class") != self.app.get_application_id() or j.get("title") != self.get_title():
+                return
+            self._show_max(j.get("fullscreen") == 1)
+        proc.communicate_utf8_async(None, None, done)
+
+    def _show_max(self, maxed):
+        self.app.state["maximized"] = maxed
+        self.b_max.get_child().set_kind("restore" if maxed else "max")
+        self.b_max.set_tooltip_text("이전 크기로 복원" if maxed else "최대화")
+
+    def _minimize(self):
+        """SekaiOS 의 최소화는 숨김 작업 공간으로 옮기기 (작업 표시줄이 다시 꺼낸다) — hyprbars 의 최소화 단추와
+        같은 명령. GTK 의 최소화(iconify)는 Hyprland 가 받지 않는다. 기본 화면 모드(X11)는 xfwm4 가 한다"""
+        if HYPR:
+            try:
+                subprocess.Popen(["hyprctl", "dispatch", "movetoworkspacesilent", "special:min"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return
+            except OSError:
+                pass
+        self.iconify()
 
     def _build_tabbar(self):
         bar = Gtk.Box(spacing=2)
@@ -657,10 +838,10 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         mounts = self.mounts
         title = title_of(uri, mounts)
         if self.searching:
-            self.set_title("검색 결과")
+            self._set_win_title("검색 결과")
             self.address.set_location(uri, [(f"검색 결과 ({title})", uri)], ["system-search", "edit-find"])
         else:
-            self.set_title(title)
+            self._set_win_title(title)
             self.address.set_location(uri, crumbs(uri, mounts), location_icon(uri))
         self.search.set_placeholder_text(f"{title} 검색")
         self.nav.select_uri(uri)
@@ -2155,10 +2336,18 @@ class ExplorerWindow(Gtk.ApplicationWindow):
             self.go_forward()
 
     def _on_button(self, _w, ev):
+        if (HYPR and ev.type == Gdk.EventType._2BUTTON_PRESS and ev.button == 1
+                and ev.window == self.get_window() and self._in_titlebar(ev.x, ev.y)):
+            self._toggle_max()                  # 제목 표시줄의 빈 곳을 두 번 — 최대화 ↔ 복원
+            return True
         if ev.type == Gdk.EventType.BUTTON_PRESS and ev.button in (8, 9):
             self.view_nav_button(ev.button)
             return True
         return False
+
+    def _in_titlebar(self, x, y):
+        a = self._titlebar.get_allocation()
+        return a.x <= x < a.x + a.width and a.y <= y < a.y + a.height
 
     def _on_key(self, _w, ev):
         mods = ev.state & Gtk.accelerator_get_default_mod_mask()
@@ -2323,7 +2512,12 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         self._toast_src = GLib.timeout_add_seconds(secs, hide)
 
     def _on_wstate(self, _w, ev):
-        self.app.state["maximized"] = bool(ev.new_window_state & Gdk.WindowState.MAXIMIZED)
+        # 최대화 단추 — 최대화된 창이면 "이전 크기로 복원" (윈도우처럼). Hyprland 에서는 GTK 가 최대화를
+        #   알아보지 못해 Hyprland 에 묻는다 (_sync_max)
+        if HYPR:
+            self._sync_max_later(250)
+        else:
+            self._show_max(bool(ev.new_window_state & Gdk.WindowState.MAXIMIZED))
         return False
 
     def _on_close(self, *_):

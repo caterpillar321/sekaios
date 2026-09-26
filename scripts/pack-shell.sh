@@ -118,8 +118,7 @@ Depends: python3, python3-gi, python3-gi-cairo, gir1.2-gtk-3.0,
  gir1.2-gtksessionlock-0.1, libgtk-session-lock0, python3-pampy,
  libglib2.0-bin, sekai-winshot, gir1.2-gudev-1.0, pulseaudio-utils,
  gir1.2-gtksource-4, gir1.2-polkit-1.0
-Recommends: wireplumber, swaylock,
- network-manager-gnome
+Recommends: wireplumber, swaylock
 Provides: polkit-1-auth-agent
 Description: SekaiOS desktop shell
  Panel, taskbar, start menu and the system settings app for
@@ -334,7 +333,7 @@ Depends: sekai-shell (= ${FULL}),
  xdotool, xterm, gir1.2-wnck-3.0,
  wl-clipboard, cliphist, libnotify-bin, wayland-utils,
  pipewire, pipewire-audio, pipewire-pulse, wireplumber,
- network-manager, network-manager-gnome, network-manager-l10n, systemd-resolved,
+ network-manager, network-manager-l10n, systemd-resolved,
  wpasupplicant, wireless-regdb, iw, ntfs-3g, exfatprogs,
  bluez, wlsunset,
  cups, cups-client, cups-ipp-utils, avahi-daemon, libnss-mdns, ipp-usb,

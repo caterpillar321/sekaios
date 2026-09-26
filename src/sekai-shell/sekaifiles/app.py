@@ -64,7 +64,23 @@ FILES_CSS = """
 .fx-toolbar { padding: 8px 12px 4px 8px; }
 .fx-cmdbar { padding: 2px 12px 8px 10px; }
 /* 탭 — 탭 줄은 창 바탕색, 고른 탭은 아래 툴바와 같은 색으로 이어진다 (윈도우 11 탐색기) */
-.fx-tabbar { background: mix(@winbg, #000000, 0.12); padding: 6px 8px 0 8px; }
+.fx-tabbar { background: @fx_strip; padding: 6px 8px 0 8px; }
+/* 제목 표시줄 — 탭 + 창 단추 (윈도우 11 탐색기). 창 단추는 다른 창의 제목 표시줄(hyprbars)과 같은 모양 */
+headerbar.fx-titlebar {
+    background: @fx_strip; background-image: none; border: none; box-shadow: none; border-radius: 0;
+    min-height: 0; padding: 0 0 0 8px; margin: 0;
+}
+headerbar.fx-titlebar .fx-tabbar { background: transparent; padding: 6px 0 0 0; }
+button.fx-cap {
+    background: transparent; background-image: none; border: none; border-radius: 0; box-shadow: none;
+    min-width: 46px; min-height: 36px; padding: 0; color: @fg;
+}
+button.fx-cap:hover { background: alpha(@fg, 0.10); }
+button.fx-cap:active { background: alpha(@fg, 0.16); }
+button.fx-cap.close:hover { background: #c42b1c; color: #ffffff; }
+button.fx-cap.close:active { background: #b22a1d; color: #ffffff; }
+/* GTK 의 창 그림자·둥근 모서리는 끈다 — 테두리·그림자는 Hyprland 가 그린다 */
+window.fx-window decoration, window.fx-window.csd decoration { box-shadow: none; border-radius: 0; margin: 0; border: none; }
 .fx-tab { padding: 5px 5px 5px 12px; border-radius: 8px 8px 0 0; min-height: 24px; }
 .fx-tab label { font-size: 13px; color: @text2; }
 .fx-tab:hover { background: alpha(@fg, 0.05); }
@@ -261,6 +277,9 @@ label.fx-app-group { font-size: 12px; font-weight: 600; color: @text2; padding: 
 
 def _load_css(a):
     prelude = "".join(f"@define-color {k} {a[k]};\n" for k in ("accent", "bg", "surface", "fg"))
+    # 제목 표시줄(탭 줄)은 툴바보다 어둡게 — 고른 탭이 툴바와 이어져 보이게. 다크는 더, 라이트는 조금
+    k = 0.07 if a.get("mode") == "light" else 0.22
+    prelude += f"@define-color fx_strip mix(mix(@surface, @fg, 0.035), #000000, {k});\n"
     body = ""
     for p in CSS_PATHS:
         if os.path.exists(p):

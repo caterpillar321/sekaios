@@ -457,8 +457,8 @@ class TrayBox(Gtk.Box):
         self.get_style_context().add_class("tray")
         self.icon_size = icon_size
         self.show_passive = show_passive
-        # 등록은 받되 그리지 않는 항목 (SNI Id) — 예: nm-applet. 네트워크 상태는 작업 표시줄의
-        #   빠른 설정 아이콘이 보여 주고, nm-applet 은 Wi-Fi 암호 요청(비밀 에이전트)을 맡아 계속 돈다
+        # 등록은 받되 그리지 않는 항목 (SNI Id) — 예: nm-applet (사용자가 직접 띄운 경우). 네트워크 상태는
+        #   작업 표시줄의 빠른 설정 아이콘이 보여 준다
         self.hidden_ids = frozenset(hidden_ids)
         self.items = {}
         self.host_registered = False

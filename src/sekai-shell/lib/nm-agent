@@ -15,7 +15,7 @@
 #    · 우리는 암호를 따로 보관하지 않는다 (SaveSecrets·DeleteSecrets 는 성공으로만 답한다).
 #      암호를 저장하는 것은 NetworkManager 자신이다 (시스템 소유 암호 — nmcli 로 만든 연결의 기본값).
 #    · VPN 은 아직 지원하지 않는다 (VPN 플러그인마다 인증 창이 따로 있다) — NoSecrets 로 답하고 기록만.
-#    · nm-applet 을 함께 띄운다면 "nm-applet --indicator --no-agent" 로 (에이전트가 둘이면 어느 쪽이 물을지 모른다).
+#    · SekaiOS 는 nm-applet 을 띄우지 않는다. 사용자가 따로 띄운다면 "--no-agent" 로 (에이전트가 둘이면 어느 쪽이 물을지 모른다).
 #
 #  실행: /usr/lib/sekai/nm-agent     (세션이 띄운다 — hyprland.conf, x11/session)
 #  SEKAI_DEBUG=1 이면 받은 요청을 표준 오류로 남긴다 (암호는 남기지 않는다).

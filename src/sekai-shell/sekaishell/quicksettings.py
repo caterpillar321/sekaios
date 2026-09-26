@@ -615,7 +615,7 @@ def wifi_connect(ssid, sec, pw, dev):
     """(작업 스레드) Wi-Fi 연결 → None(성공) · NEED_PW(암호를 물어야 한다) · 오류 한 줄.
     암호는 명령줄에 넣지 않는다 — 설정 앱의 wifi_connect_secret (메모리 파일 passwd-file) 을 그대로 쓴다.
     저장된 프로필이 있으면 그것으로 (암호를 다시 묻지 않는다). 새 보안 네트워크에 암호 없이 nmcli 로
-    연결하면 nm-applet(비밀 에이전트)이 따로 창을 띄우므로 먼저 프로필을 찾아 본다."""
+    연결하면 비밀 에이전트(nm-agent)가 따로 창을 띄우므로 먼저 프로필을 찾아 본다."""
     if pw is not None:
         try:
             from sekaisettings.pages.network import wifi_connect_secret

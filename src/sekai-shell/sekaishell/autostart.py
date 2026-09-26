@@ -15,7 +15,6 @@ GROUP = "[Desktop Entry]"
 
 # SekaiOS 세션이 직접 띄우는 것 — 자동 시작으로는 건너뛴다
 MANAGED = {
-    "nm-applet.desktop",        # 네트워크 트레이 아이콘 (--indicator --no-agent — 암호 창은 nm-agent)
     "im-launch.desktop",        # 입력기 — 세션이 ibus 를 직접 띄운다
 }
 
@@ -24,6 +23,9 @@ NEVER = {
     # "현재 언어로 표준 폴더 이름을 업데이트할까요?" — 예를 누르면 빈 새 폴더(~/바탕화면 …)를 만들고 그쪽을 쓰지만
     #   안의 파일은 옮기지 않아, 바탕화면·문서가 비어 보였다. 폴더 이름은 계정을 만들 때(첫 설정의 언어) 정한다 (윈도우처럼)
     "user-dirs-update-gtk.desktop",
+    # GNOME 의 네트워크 아이콘 — 네트워크 상태는 작업 표시줄의 빠른 설정이, Wi-Fi 암호 창은 nm-agent 가 맡는다.
+    #   예전 설치본에 남아 있어도 띄우지 않는다
+    "nm-applet.desktop",
     # 다른 DE 의 관리자 암호 창 — SekaiOS 는 자체 "사용자 계정 컨트롤"(/usr/lib/sekai/polkit-agent)을 띄운다.
     #   세션마다 하나만 등록할 수 있어서, 이것들이 먼저 뜨면 우리 창 대신 그쪽 창이 나온다
     "lxpolkit.desktop",

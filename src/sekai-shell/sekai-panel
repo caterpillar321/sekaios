@@ -1611,8 +1611,8 @@ class Panel(Gtk.Window, TaskbarMixin):
                             self.notifications.dnd)
 
         # ── 빠른 설정 (윈도우 11) — 네트워크·음량·배터리 아이콘을 한 버튼으로. 누르면 빠른 설정, 휠은 음량.
-        #   네트워크 상태는 NetworkManager 신호로 받아 여기에 보인다 (nm-applet 은 트레이에서 숨기고
-        #   Wi-Fi 암호 요청 같은 비밀 에이전트로만 계속 돈다)
+        #   네트워크 상태는 NetworkManager 신호로 받아 여기에 보인다 (GNOME 의 nm-applet 은 쓰지 않는다 —
+        #   Wi-Fi 암호 요청은 /usr/lib/sekai/nm-agent)
         self.qs = QuickSettings(run_limited, notifications=self.notifications,
                                 on_volume=lambda: self.refresh_sys(0))
         self.qs.before_open = self._close_for_qs

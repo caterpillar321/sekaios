@@ -45,7 +45,6 @@ sekai-idle >/dev/null 2>&1 &
 /usr/lib/sekai/keep-running sekai-panel >/dev/null 2>&1 &
 /usr/lib/sekai/keep-running /usr/lib/sekai/polkit-agent >/dev/null 2>&1 &
 /usr/lib/sekai/keep-running /usr/lib/sekai/nm-agent >/dev/null 2>&1 &
-nm-applet --indicator --no-agent >/dev/null 2>&1 &
 /usr/lib/sekai/keep-running /usr/lib/sekai/automount >/dev/null 2>&1 &
 
 # 왜 기본 화면 모드인지 알려 주기
