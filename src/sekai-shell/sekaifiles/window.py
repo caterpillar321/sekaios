@@ -20,7 +20,7 @@ from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 from . import opener  # noqa: E402
 from .addressbar import AddressBar  # noqa: E402
 from .common import (COMPUTER, HOME, TRASH, archive, copy_text, count_text, crumbs,  # noqa: E402
-                     dbg, edit_text, favorites, fileops, fit_pixbuf, fmt_size, gfile_of, home_dir,
+                     dbg, edit_text, favorites, fileops, fit_pixbuf, fmt_size, gfile_of, home_dir, icons,
                      image, is_in_trash, is_special, list_drives, local_path, location_icon, mount_names, norm_uri,
                      parse_location, properties, quote_path, split_ext, theme_icon, thumbable, thumbs,
                      title_of, uri_of_path, SORT_LABELS)
@@ -95,7 +95,47 @@ def _same_fs(a, b):
         return False
 
 
+class Tab:
+    """탭 하나 — 위치·뒤로/앞으로 기록·폴더 내용·검색·보기 모양은 탭마다.
+    툴바·주소 표시줄·왼쪽 창·보기 위젯은 창에 하나고, 탭을 바꾸면 그 탭의 것을 갈아 끼운다 (switch_tab)"""
+
+    def __init__(self):
+        self.uri = None
+        self.history = []
+        self.hpos = -1
+        self.searching = False
+        self.searcher = None
+        self.search_query = ""
+        self.saved_mode = None                  # 검색 결과·휴지통은 자세히 — 그 전 보기 모양
+        self.want_select = None                 # (uri 집합, 이름 바꾸기 시작?)
+        self.folder = None
+        self.search_model = None
+        self.model = None
+        self.view_mode = "details"
+        self.sel = []                           # 다른 탭으로 갈 때 고른 항목 · 스크롤 (돌아오면 되살린다)
+        self.scroll = None
+        self.button = self.box = self.icon = self.label = None
+
+
+def _tab_attr(name):
+    """창의 self.uri · self.model … 은 지금 탭의 것 (창 코드는 탭을 몰라도 된다)"""
+    return property(lambda self: getattr(self.tab, name), lambda self, v: setattr(self.tab, name, v))
+
+
 class ExplorerWindow(Gtk.ApplicationWindow):
+    uri = _tab_attr("uri")
+    history = _tab_attr("history")
+    hpos = _tab_attr("hpos")
+    searching = _tab_attr("searching")
+    searcher = _tab_attr("searcher")
+    search_query = _tab_attr("search_query")
+    _saved_mode = _tab_attr("saved_mode")
+    _want_select = _tab_attr("want_select")
+    folder = _tab_attr("folder")
+    search_model = _tab_attr("search_model")
+    model = _tab_attr("model")
+    view_mode = _tab_attr("view_mode")
+
     def __init__(self, app, uri=None, select=None):
         super().__init__(application=app, title="파일 탐색기")
         self.app = app
@@ -112,19 +152,13 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         for c in ("settings-window", "fx-window"):
             self.get_style_context().add_class(c)
 
+        self.tab = Tab()
+        self.tabs = [self.tab]
         self.view_mode = st.get("view") if st.get("view") in VIEW_MODES else "details"
         srt = st.get("sort") if isinstance(st.get("sort"), list) and len(st.get("sort")) == 2 else ["name", False]
         self.sort_field = srt[0] if srt[0] in SORT_LABELS else "name"
         self.sort_desc = bool(srt[1])
         self.show_hidden = bool(st.get("hidden"))
-        self.uri = None
-        self.history = []
-        self.hpos = -1
-        self.searching = False
-        self.searcher = None
-        self.search_query = ""
-        self._saved_mode = None                # 검색 결과 · 휴지통은 자세히로 — 그 전 보기 모양
-        self._want_select = None               # (uri 집합, 이름 바꾸기 시작?)
         self._thumb_src = 0
         self._sel_src = 0
         self._toast_src = 0
@@ -145,9 +179,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         self.fitter = self.icons.fitter
         self.icons.set_mode("large" if self.view_mode != "medium" else "medium")
         self.details = DetailsView(self, st.get("columns") if isinstance(st.get("columns"), dict) else None)
-        self.folder = FolderModel("folder", self.sort_field, self.sort_desc, self.show_hidden, self.fitter,
-                                  lambda ev, v: self._model_event(self.folder, ev, v))
-        self.search_model = None
+        self.folder = self._new_model("folder")
         self.model = self.folder
 
         # ── 틀 ──
@@ -156,6 +188,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         top = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         top.get_style_context().add_class("fx-top")
         root.pack_start(top, False, False, 0)
+        top.pack_start(self._build_tabbar(), False, False, 0)
         top.pack_start(self._build_toolbar(), False, False, 0)
         top.pack_start(self._build_cmdbar(), False, False, 0)
 
@@ -227,6 +260,192 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         self.root_box = root
         root.show_all()
         self.navigate(uri or HOME, select=select)
+
+    # ════════════════════════════════════════════════════════
+    #  탭 (윈도우 11 탐색기처럼 — Ctrl+T 새 탭, Ctrl+W 닫기, Ctrl+Tab 다음, 가운데 단추로 새 탭에서 열기)
+    # ════════════════════════════════════════════════════════
+    def _new_model(self, kind):
+        """탭마다 따로 — 알림에 그 모델 자신을 실어 보낸다 (_model_event 는 지금 탭의 모델 것만 받는다)"""
+        box = []
+        m = FolderModel(kind, self._sort_for(kind), self.sort_desc, self.show_hidden, self.fitter,
+                        lambda ev, v: self._model_event(box[0], ev, v))
+        box.append(m)
+        m.dimmed = set(self._cut_uris)
+        return m
+
+    def _build_tabbar(self):
+        bar = Gtk.Box(spacing=2)
+        bar.get_style_context().add_class("fx-tabbar")
+        self.tabbox = Gtk.Box(spacing=2)
+        bar.pack_start(self.tabbox, False, False, 0)
+        plus = self._tbtn(["list-add-symbolic"], "새 탭 (Ctrl+T)", lambda: self.new_tab())
+        plus.get_style_context().add_class("fx-tab-new")
+        plus.set_valign(Gtk.Align.CENTER)
+        bar.pack_start(plus, False, False, 0)
+        self.tabbox.pack_start(self._tab_widget(self.tab), False, False, 0)
+        return bar
+
+    def _tab_widget(self, t):
+        eb = Gtk.EventBox()
+        box = Gtk.Box(spacing=8)
+        box.get_style_context().add_class("fx-tab")
+        img = Gtk.Image()
+        lbl = Gtk.Label(xalign=0)
+        lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        lbl.set_width_chars(12)
+        lbl.set_max_width_chars(22)
+        close = Gtk.Button()
+        close.set_relief(Gtk.ReliefStyle.NONE)
+        close.set_focus_on_click(False)
+        close.get_style_context().add_class("fx-tab-close")
+        close.add(image(["window-close-symbolic"], 12))
+        close.set_tooltip_text("탭 닫기 (Ctrl+W)")
+        close.connect("clicked", lambda *_: self.close_tab(t))
+        box.pack_start(img, False, False, 0)
+        box.pack_start(lbl, True, True, 0)
+        box.pack_end(close, False, False, 0)
+        eb.add(box)
+        eb.connect("button-press-event", lambda _w, ev: self._tab_press(t, ev))
+        t.button, t.box, t.icon, t.label = eb, box, img, lbl
+        eb.show_all()
+        return eb
+
+    def _tab_press(self, t, ev):
+        if ev.type != Gdk.EventType.BUTTON_PRESS:
+            return True
+        if ev.button == 1:
+            self.switch_tab(t)
+        elif ev.button == 2:
+            self.close_tab(t)                   # 가운데 단추 — 닫기 (윈도우·브라우저처럼)
+        return True
+
+    def _update_tab_button(self, t):
+        if t.label is None:
+            return
+        uri = t.uri or HOME
+        title = "검색 결과" if t.searching else title_of(uri, self.mounts)
+        t.label.set_text(title)
+        names = ["system-search", "edit-find"] if t.searching else location_icon(uri)
+        t.icon.set_from_pixbuf(icons().get(Gio.ThemedIcon.new_from_names([theme_icon(names)]), 16))
+        p = local_path(uri)
+        t.button.set_tooltip_text(p or title)
+        ctx = t.box.get_style_context()
+        if t is self.tab:
+            ctx.add_class("active")
+        else:
+            ctx.remove_class("active")
+
+    def new_tab(self, uri=None, activate=True, after_current=False):
+        """새 탭 — activate 가 아니면 뒤에서 연다 (가운데 단추·"새 탭에서 열기")"""
+        t = Tab()
+        t.view_mode = self._saved_mode or self.view_mode    # 지금 탭의 보기 모양을 물려받는다
+        t.folder = self._new_model("folder")
+        t.model = t.folder
+        i = self.tabs.index(self.tab) + 1 if after_current else len(self.tabs)
+        self.tabs.insert(i, t)
+        w = self._tab_widget(t)
+        self.tabbox.pack_start(w, False, False, 0)
+        self.tabbox.reorder_child(w, i)
+        # 위치·기록·폴더 읽기를 먼저 — 그다음에 보이면(switch_tab) 창이 이 탭의 것을 되살린다
+        uri = norm_uri(uri) or HOME
+        t.uri, t.history, t.hpos = uri, [uri], 0
+        if uri not in (HOME, COMPUTER):
+            t.folder.kind = "trash" if is_in_trash(uri) else "folder"
+            t.folder.sort = self._sort_for(t.folder.kind)
+            if t.folder.kind == "trash":
+                t.saved_mode, t.view_mode = t.view_mode, "details"
+            t.folder.load(Gio.File.new_for_uri(uri))
+        self._update_tab_button(t)
+        if activate:
+            self.switch_tab(t)
+        return t
+
+    def open_new_tab(self, uri):
+        """다른 곳을 새 탭에서 (뒤에서 — 지금 보던 것은 그대로)"""
+        if uri:
+            self.new_tab(uri, activate=False, after_current=True)
+
+    def switch_tab(self, t):
+        if t is self.tab or t not in self.tabs:
+            return
+        cur = self.tab
+        if self._page_name() == "folder":
+            cur.sel = self.selected_uris()
+            cur.scroll = self._active_view().scroll.get_vadjustment().get_value()
+        else:
+            cur.sel, cur.scroll = [], None
+        self.tab = t
+        self._restore_tab()
+
+    def _restore_tab(self):
+        """지금 탭(self.tab)의 위치·모델·검색·보기 모양을 창에 되살린다"""
+        t = self.tab
+        if self.thumbnailer is not None:
+            try:
+                self.thumbnailer.cancel_all()
+            except Exception:
+                pass
+        self._typeahead = ""
+        self.search.handler_block_by_func(self._on_search_changed)
+        self.search.set_text(t.search_query if t.searching else "")
+        self.search.handler_unblock_by_func(self._on_search_changed)
+        uri = t.uri or HOME
+        if t.searching:
+            page = "folder"
+            self.details.set_kind("search")
+        elif uri == HOME:
+            page = "home"
+            self.home_page.refresh()
+        elif uri == COMPUTER:
+            page = "computer"
+            self.computer_page.refresh()
+        else:
+            page = "folder"
+            self.details.set_kind(t.folder.kind)
+        self.stack.set_visible_child_name(page)
+        if page == "folder":
+            self.details.set_sort_indicator(t.model.sort, self.sort_desc)
+            self.empty.hide()
+            self._apply_view(list(t.sel))
+            self._update_empty()
+            self._set_busy(bool(t.model.loading))
+            if t.scroll is not None:
+                sc, val = self._active_view().scroll, t.scroll
+                GLib.idle_add(lambda: (sc.get_vadjustment().set_value(val), False)[1])
+        else:
+            self._set_busy(False)
+        self._sync_view_toggles()
+        self._update_location()
+        self._update_commands()
+        self._update_status()
+        for x in self.tabs:
+            self._update_tab_button(x)
+        GLib.idle_add(lambda: (self.focus_view(), False)[1])
+
+    def close_tab(self, t=None):
+        """마지막 탭이면 창을 닫는다"""
+        t = t or self.tab
+        if t not in self.tabs:
+            return
+        if len(self.tabs) == 1:
+            self.close()
+            return
+        i = self.tabs.index(t)
+        if t.searcher is not None:
+            t.searcher.cancel()
+        for m in (t.folder, t.search_model):
+            if m is not None:
+                m.stop()
+        self.tabs.remove(t)
+        if t.button is not None:
+            t.button.destroy()
+        if t is self.tab:
+            self.tab = self.tabs[min(i, len(self.tabs) - 1)]
+            self._restore_tab()
+
+    def cycle_tab(self, step):
+        i = (self.tabs.index(self.tab) + step) % len(self.tabs)
+        self.switch_tab(self.tabs[i])
 
     # ════════════════════════════════════════════════════════
     #  틀 만들기
@@ -448,6 +667,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         self.b_back.set_sensitive(self.hpos > 0)
         self.b_fwd.set_sensitive(self.hpos < len(self.history) - 1)
         self.b_up.set_sensitive(self._parent_uri() is not None)
+        self._update_tab_button(self.tab)
 
     def _parent_uri(self):
         u = self.uri
@@ -652,9 +872,10 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         self.sort_field, self.sort_desc = field, bool(desc)
         self.app.state["sort"] = [field, bool(desc)]
         self.app.save_state()
-        self.folder.set_sort(self._sort_for(self.folder.kind), self.sort_desc)
-        if self.search_model is not None:
-            self.search_model.set_sort(self._sort_for("search"), self.sort_desc)
+        for t in self.tabs:                     # 정렬은 창 전체 — 모든 탭에
+            t.folder.set_sort(self._sort_for(t.folder.kind), self.sort_desc)
+            if t.search_model is not None:
+                t.search_model.set_sort(self._sort_for("search"), self.sort_desc)
         self.details.set_sort_indicator(self.model.sort, self.sort_desc)
         self._schedule_thumbs()
 
@@ -668,7 +889,8 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         self.show_hidden = not self.show_hidden
         self.app.state["hidden"] = self.show_hidden
         self.app.save_state()
-        self.folder.set_show_hidden(self.show_hidden)
+        for t in self.tabs:
+            t.folder.set_show_hidden(self.show_hidden)
         if self.search_model is not None and self.searching:
             self._start_search(self.search_query)
         self._update_status()
@@ -921,8 +1143,20 @@ class ExplorerWindow(Gtk.ApplicationWindow):
     def view_activated(self):
         self.open_selected()
 
-    def open_selected(self, new_window=False):
+    def open_selected(self, new_window=False, new_tab=False):
         page = self._page_name()
+        if new_tab:
+            if page == "home":
+                for t in self.home_page.selected_tiles():
+                    self.open_new_tab(t.uri)
+            elif page == "computer":
+                for d in self.computer_page.selected_drives()[:1]:
+                    self.open_new_tab(d.root_uri)
+            else:
+                for e in self.selected_entries():
+                    if e.is_dir:
+                        self.open_new_tab(e.target or e.uri)
+            return
         if page == "home":
             tiles = self.home_page.selected_tiles()
             if tiles:
@@ -1107,9 +1341,10 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         files, cut = owned if owned else ([], False)
         new = {f.get_uri() for f in files} if cut else set()
         self._cut_uris = new
-        for m in (self.folder, self.search_model):
-            if m is not None:
-                m.set_dimmed(new)
+        for t in self.tabs:
+            for m in (t.folder, t.search_model):
+                if m is not None:
+                    m.set_dimmed(new)
 
     def paste(self, into=None):
         if not self._need_ops():
@@ -1397,9 +1632,11 @@ class ExplorerWindow(Gtk.ApplicationWindow):
             dbg("썸네일 적용 실패", ex)
 
     def icon_theme_changed(self):
-        for m in (self.folder, self.search_model):
-            if m is not None:
-                m.refill_icons()
+        for t in self.tabs:
+            for m in (t.folder, t.search_model):
+                if m is not None:
+                    m.refill_icons()
+            self._update_tab_button(t)
         self.nav.rebuild()
         if self._page_name() == "home":
             self.home_page.refresh()
@@ -1447,9 +1684,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         if self.searcher is not None:
             self.searcher.cancel()
         if self.search_model is None:
-            self.search_model = FolderModel("search", self._sort_for("search"), self.sort_desc, self.show_hidden,
-                                            self.fitter, lambda ev, v: self._model_event(self.search_model, ev, v))
-            self.search_model.dimmed = set(self._cut_uris)
+            self.search_model = self._new_model("search")
         sm = self.search_model
         sm.sort = self._sort_for("search")
         sm.desc = self.sort_desc
@@ -1470,20 +1705,23 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         self._update_location()
         self._update_commands()
         self._update_status()
+        t = self.tab                            # 결과는 이 탭으로 (그사이 다른 탭으로 가도)
         s = self.searcher = Searcher(base, q, self.show_hidden,
-                                     lambda batch: self._search_batch(s, batch),
-                                     lambda n, cut: self._search_done(s, n, cut))
+                                     lambda batch: self._search_batch(t, s, batch),
+                                     lambda n, cut: self._search_done(t, s, n, cut))
         s.start()
 
-    def _search_batch(self, s, batch):
-        if s is not self.searcher or self.search_model is None:
+    def _search_batch(self, t, s, batch):
+        if s is not t.searcher or t.search_model is None:
             return
-        self.search_model.add_entries(batch)
+        t.search_model.add_entries(batch)
 
-    def _search_done(self, s, n, truncated):
-        if s is not self.searcher or self.search_model is None:
+    def _search_done(self, t, s, n, truncated):
+        if s is not t.searcher or t.search_model is None:
             return
-        self.search_model.loading = False
+        t.search_model.loading = False
+        if t is not self.tab:                   # 뒤에 있는 탭 — 돌아오면 _restore_tab 이 보인다
+            return
         self._set_busy(False)
         self._update_empty()
         self._update_status()
@@ -1753,6 +1991,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
             return m
         _mitem(m, "열기", self.open_selected, None, "Enter", True, bold=True)
         if n == 1 and e.is_dir:
+            _mitem(m, "새 탭에서 열기", lambda: self.open_selected(new_tab=True), ["tab-new-symbolic", "list-add-symbolic"])
             _mitem(m, "새 창에서 열기", lambda: self.open_selected(new_window=True), ["window-new-symbolic"])
         files = [x for x in sel if not x.is_dir]
         if files and len(files) == n:
@@ -1823,6 +2062,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
             if tiles:
                 t = tiles[0]
                 _mitem(m, "열기", lambda: self.navigate(t.uri), None, "Enter", bold=True)
+                _mitem(m, "새 탭에서 열기", lambda: self.open_new_tab(t.uri), ["tab-new-symbolic", "list-add-symbolic"])
                 _mitem(m, "새 창에서 열기", lambda: self.open_new_window(t.uri), ["window-new-symbolic"])
                 _sep(m)
                 _mitem(m, "경로 복사", lambda: copy_text(quote_path(t.path)), ["edit-copy-symbolic"])
@@ -1852,6 +2092,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
             d = ds[0]
             _mitem(m, "열기", lambda: self.open_drive(d), None, "Enter", bold=True)
             if d.root_uri:
+                _mitem(m, "새 탭에서 열기", lambda: self.open_new_tab(d.root_uri), ["tab-new-symbolic", "list-add-symbolic"])
                 _mitem(m, "새 창에서 열기", lambda: self.open_new_window(d.root_uri), ["window-new-symbolic"])
             if d.removable and (d.can_eject or d.can_unmount):
                 _sep(m)
@@ -1873,6 +2114,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
             d = row.drive
             _mitem(m, "열기", lambda: self.open_drive(d), None, None, bold=True)
             if d.root_uri:
+                _mitem(m, "새 탭에서 열기", lambda: self.open_new_tab(d.root_uri), ["tab-new-symbolic", "list-add-symbolic"])
                 _mitem(m, "새 창에서 열기", lambda: self.open_new_window(d.root_uri), ["window-new-symbolic"])
             if d.removable and (d.can_eject or d.can_unmount):
                 _sep(m)
@@ -1882,6 +2124,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
                    ["document-properties-symbolic"], None, properties is not None and bool(d.root_uri))
         else:
             _mitem(m, "열기", lambda: self.navigate(uri), None, None, bold=True)
+            _mitem(m, "새 탭에서 열기", lambda: self.open_new_tab(uri), ["tab-new-symbolic", "list-add-symbolic"])
             _mitem(m, "새 창에서 열기", lambda: self.open_new_window(uri), ["window-new-symbolic"])
             if uri == TRASH:
                 _sep(m)
@@ -1933,7 +2176,18 @@ class ExplorerWindow(Gtk.ApplicationWindow):
             self.new_folder()
             return True
         if ctrl and kv == K.KEY_w:
-            self.close()
+            self.close_tab()                    # 마지막 탭이면 창을 닫는다
+            return True
+        if ctrl and not shift and kv == K.KEY_t:
+            self.new_tab()
+            return True
+        if ctrl and ev.keyval in (K.KEY_Tab, K.KEY_ISO_Left_Tab, K.KEY_Page_Down, K.KEY_Page_Up):
+            back = ev.keyval in (K.KEY_ISO_Left_Tab, K.KEY_Page_Up) or (shift and ev.keyval == K.KEY_Tab)
+            self.cycle_tab(-1 if back else 1)
+            return True
+        if ctrl and not shift and K.KEY_1 <= ev.keyval <= K.KEY_9:
+            n = ev.keyval - K.KEY_1
+            self.switch_tab(self.tabs[-1] if n == 8 else self.tabs[min(n, len(self.tabs) - 1)])
             return True
         if (ctrl and kv == K.KEY_l) or (alt and kv == K.KEY_d):
             self.address.begin_edit()
@@ -2089,11 +2343,12 @@ class ExplorerWindow(Gtk.ApplicationWindow):
 
     def _on_destroy(self, *_):
         """감시 · 작업 스레드 · 신호를 거둔다 (닫힌 창이 드라이브·클립보드 알림을 받지 않게)"""
-        self.folder.stop()
-        if self.search_model is not None:
-            self.search_model.stop()
-        if self.searcher is not None:
-            self.searcher.cancel()
+        for t in self.tabs:
+            for m in (t.folder, t.search_model):
+                if m is not None:
+                    m.stop()
+            if t.searcher is not None:
+                t.searcher.cancel()
         if self.thumbnailer is not None:
             try:
                 self.thumbnailer.cancel_all()

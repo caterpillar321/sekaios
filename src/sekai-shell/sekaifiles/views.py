@@ -185,6 +185,11 @@ class _Base:
         if bw is not None and ev.window != bw:
             return False                        # 자세히 보기의 머리글
         pos = self.pos_at_bin(ev.x, ev.y)
+        if ev.button == 2 and pos is not None:
+            e = self.host.model.entry_at(pos) if self.host.model is not None else None
+            if e is not None and e.is_dir:
+                self.host.open_new_tab(e.target or e.uri)   # 가운데 단추 — 폴더를 새 탭에서 (뒤에서)
+            return True
         if ev.button == 3:
             w.grab_focus()
             if pos is None:
@@ -348,6 +353,11 @@ class IconsView(_Base):
             self.host.view_nav_button(ev.button)
             return True
         pos = self.pos_at_bin(ev.x, ev.y)
+        if ev.button == 2 and pos is not None:
+            e = self.host.model.entry_at(pos) if self.host.model is not None else None
+            if e is not None and e.is_dir:
+                self.host.open_new_tab(e.target or e.uri)   # 가운데 단추 — 폴더를 새 탭에서 (뒤에서)
+            return True
         if ev.button == 3:
             w.grab_focus()
             if pos is None:

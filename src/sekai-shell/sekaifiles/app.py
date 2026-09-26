@@ -63,6 +63,22 @@ FILES_CSS = """
 .fx-top { background: @fx_top; border-bottom: 1px solid @line; }
 .fx-toolbar { padding: 8px 12px 4px 8px; }
 .fx-cmdbar { padding: 2px 12px 8px 10px; }
+/* 탭 — 탭 줄은 창 바탕색, 고른 탭은 아래 툴바와 같은 색으로 이어진다 (윈도우 11 탐색기) */
+.fx-tabbar { background: mix(@winbg, #000000, 0.12); padding: 6px 8px 0 8px; }
+.fx-tab { padding: 5px 5px 5px 12px; border-radius: 8px 8px 0 0; min-height: 24px; }
+.fx-tab label { font-size: 13px; color: @text2; }
+.fx-tab:hover { background: alpha(@fg, 0.05); }
+.fx-tab.active {
+    background: @fx_top;
+    box-shadow: inset 0 1px alpha(@fg, 0.10), inset 1px 0 alpha(@fg, 0.07), inset -1px 0 alpha(@fg, 0.07);
+}
+.fx-tab.active label { color: @fg; }
+button.fx-tab-close {
+    background: transparent; background-image: none; border: none; box-shadow: none;
+    border-radius: 4px; padding: 3px; min-height: 0; min-width: 0; opacity: 0.65;
+}
+button.fx-tab-close:hover { background: alpha(@fg, 0.10); opacity: 1; }
+button.fx-tab-new { margin-bottom: 3px; }
 button.fx-tool, button.fx-cmd, button.fx-crumb, button.fx-crumb-sep, button.fx-eject, button.fx-status-btn {
     background: transparent;
     background-image: none;

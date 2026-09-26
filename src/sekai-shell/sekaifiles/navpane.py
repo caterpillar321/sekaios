@@ -161,7 +161,7 @@ class NavPane(Gtk.Box):
         if ev.button == 2:
             row = self.list.get_row_at_y(int(ev.y))
             if row is not None and row.kind == "loc" and row.uri:
-                self.host.open_new_window(row.uri)      # 가운데 단추 — 새 창에서
+                self.host.open_new_tab(row.uri)         # 가운데 단추 — 새 탭에서 (윈도우 11 탐색기처럼)
                 return True
         return False
 
