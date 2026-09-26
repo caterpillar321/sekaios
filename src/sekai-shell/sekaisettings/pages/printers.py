@@ -506,11 +506,15 @@ def driver_score(drv, mfg, mdl):
 def best_driver(drivers, dev):
     """(추천 드라이버|None, 설명) — IPP Everywhere 를 지원하면 그것, 아니면 장치 ID·모델이 가장 맞는 것.
     그래도 없으면 프린터가 PostScript 를 알아들을 때만 일반 PostScript 드라이버"""
-    if dev.get("driverless") and _scheme(dev["uri"]) in _IPP_SCHEMES:
+    mfg, mdl, ids = _devid(dev.get("devid", ""))
+    cmd = ids.get("CMD") or ids.get("COMMAND SET") or ""
+    # 드라이버 없이 쓰는 프린터(IPP Everywhere) — 장치 ID 의 명령어에 URF·PWG 래스터·PCLm 이 있으면 그렇다
+    #   ('직접 추가' 마법사의 장치 목록은 driverless 표시를 모르므로 명령어로도 본다)
+    driverless = dev.get("driverless") or re.search(r"(?i)\b(urf|pwgraster|pwg|pclm)\b", cmd.replace(",", " "))
+    if driverless and (_scheme(dev["uri"]) in _IPP_SCHEMES or "_ipp" in dev["uri"]):
         d = next((x for x in drivers if x["name"] == "everywhere"), None)
         if d is not None:
             return d, "everywhere"
-    mfg, mdl, ids = _devid(dev.get("devid", ""))
     if not mdl and dev.get("model"):
         mfg, mdl = _split_mm(dev["model"])
         mdl = f"{mfg} {mdl}".strip()
@@ -523,8 +527,9 @@ def best_driver(drivers, dev):
             best, top = d, sc
     if best is not None:
         return best, "match"
-    cmd = ids.get("CMD") or ids.get("COMMAND SET") or ""
-    if re.search(r"(?i)\b(postscript|ps|pdf)\b", cmd.replace(",", " ")):
+    # 일반 PostScript 드라이버는 PostScript 를 알아들을 때만 — PDF 만 받는 프린터(드라이버 없이 쓰는 것)에
+    #   PostScript 를 보내면 인쇄가 깨지거나 아예 안 된다
+    if re.search(r"(?i)\b(postscript|ps)\b", cmd.replace(",", " ")):
         d = next((x for x in drivers if x["name"] == "drv:///sample.drv/generic.ppd"), None)
         if d is not None:
             return d, "generic"
@@ -2072,9 +2077,11 @@ class _Props:
         head, _t, _s = _head(_title(p), driver_label(p["model"].replace(" - IPP Everywhere", "")) or None)
         box.pack_start(head, False, False, 0)
         s = _sect(box, "일반")
-        self.info_e = _entry(p["info"] or name, width=28)
+        # 길이 제한은 저장할 때(_text_error, 127바이트) 본다 — 칸이 글자 수로 자르면 100자가 넘는 기존 이름이
+        #   잘린 채 함께 저장되었다
+        self.info_e = _entry(p["info"] or name, width=28, max_len=0)
         row(s, "프린터 이름", "목록과 앱의 인쇄 창에 보이는 이름", control=self.info_e)
-        self.loc_e = _entry(p["location"], width=28, placeholder="예: 2층 사무실")
+        self.loc_e = _entry(p["location"], width=28, placeholder="예: 2층 사무실", max_len=0)
         row(s, "위치", None, control=self.loc_e)
         row(s, "대기열 이름", "명령줄(lp -d …)과 다른 프로그램에서 쓰는 이름 — 바꿀 수 없습니다", control=info(name))
         row(s, "연결", None, control=info(_conn_text(p["uri"])))
@@ -2104,6 +2111,9 @@ class _Props:
             if self.alive:
                 self.drv_row.title_label.set_text(self._drv_text(drv["mm"] if drv["name"] != "everywhere"
                                                                  else "IPP Everywhere"))
+        if self.page.printer(self.name) is None:
+            self.foot.say("이 프린터는 그 사이 제거되었습니다.", error=True)
+            return
         _DriverDialog(self.page, self.name, self.d, changed)
 
     def _response(self, _d, resp):
@@ -2115,6 +2125,11 @@ class _Props:
         err = _text_error(info_, "프린터 이름") or _text_error(loc, "위치")
         if err:
             self.foot.say(err, error=True)
+            return
+        if page.printer(name) is None:
+            # 창을 연 사이 다른 곳에서 지워졌다 — lpadmin -p 는 없는 이름이면 빈 대기열을 새로 만든다
+            self.foot.say("이 프린터는 그 사이 제거되었습니다.", error=True)
+            self.ok.set_sensitive(False)
             return
         args, pairs = [], []
         if info_ != (p["info"] or name):
@@ -2669,6 +2684,24 @@ class PrintersPage:
 
     # ── 명령 실행 ──
     def _admin(self, steps, helper_args, done, direct=None, undo=None):
+        """_admin_run 앞에서 — 있는 프린터를 고치는 명령(lpadmin -p 이름 …, -v 없이)이면 그 프린터가 아직 있는지
+        먼저 본다. lpadmin -p 는 없는 이름이면 빈 대기열(file:///dev/null)을 새로 만들어 버린다
+        (속성 창을 연 사이 다른 곳에서 지웠을 때)"""
+        modify = next((c for c, _m in steps if c[:2] == ["lpadmin", "-p"] and len(c) > 2
+                       and "-v" not in c and "-x" not in c), None)
+        if modify is None:
+            self._admin_run(steps, helper_args, done, direct, undo)
+            return
+
+        def checked(ok, _out, err):
+            # (CUPS 가 멈춘 것 같은 다른 실패는 그대로 진행해 lpadmin 이 까닭을 알리게 한다)
+            if not ok and re.search(r"(?i)invalid destination|not exist|없", err or ""):
+                done(False, "이 프린터는 그 사이 제거되었습니다")
+                return
+            self._admin_run(steps, helper_args, done, direct, undo)
+        run_async(["env", "LC_ALL=C", "lpstat", "-p", modify[2]], checked)
+
+    def _admin_run(self, steps, helper_args, done, direct=None, undo=None):
         """CUPS 관리 명령들을 차례로. steps = [(명령, 꼭 성공해야 하나)].
         관리 권한이 있으면(또는 direct) 직접 — 권한 문제로 막히면 도우미로. 없으면 처음부터 도우미(pkexec).
         undo: 직접 하다 첫 명령이 (권한 말고 다른 이유로) 실패하면 치울 명령. done(성공?, 이유)"""

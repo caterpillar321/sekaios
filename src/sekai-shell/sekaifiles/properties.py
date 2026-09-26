@@ -910,10 +910,21 @@ def _set_hidden(path, on):
         except FileNotFoundError:
             pass
         return
-    tmp = f"{hf}.{os.getpid()}.tmp"
-    with open(tmp, "w", encoding="utf-8", errors="surrogateescape") as f:
-        f.write("\n".join(names) + "\n")
-    os.replace(tmp, hf)
+    # 임시 파일은 새로 만든다 (O_EXCL — 다른 사람이 같은 이름의 링크를 미리 심어 두어도 따라가지 않는다.
+    #   함께 쓰는 폴더에서 이름을 알 수 있는 임시 파일을 열면 링크가 가리키는 남의 파일을 덮어쓸 수 있었다)
+    import tempfile
+    fd, tmp = tempfile.mkstemp(prefix=".hidden.", suffix=".tmp", dir=os.path.dirname(hf) or ".")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape") as f:
+            f.write("\n".join(names) + "\n")
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, hf)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def show_properties(gfiles, parent=None):

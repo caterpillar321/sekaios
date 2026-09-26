@@ -1695,13 +1695,22 @@ def _common_place(items):
 
 
 def _infos(job, files):
+    """지울 항목들의 정보. 이미 없는 것은 조용히 뺀다 — 그 밖의 오류(권한·입출력·끊긴 네트워크 드라이브)는
+    알린다 (예전엔 조용히 빠져서, 지우지 못했는데도 성공으로 끝났다)"""
     out = []
     for f in files:
         job.checkpoint()
-        try:
-            info = _qinfo(f, SCAN_ATTRS, job.cancellable)
-        except GLib.Error:
-            info = None
+        while True:
+            try:
+                info = _qinfo(f, SCAN_ATTRS, job.cancellable)
+            except GLib.Error as e:
+                if _is(e, _IOE.CANCELLED):
+                    raise Cancelled()
+                if job.error(e, _info_name(f), "read") == "skip":
+                    info = None
+                    break
+                continue
+            break
         if info is not None:
             out.append((f, info))
     return out

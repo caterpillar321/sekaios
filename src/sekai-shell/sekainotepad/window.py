@@ -589,6 +589,10 @@ class NotepadWindow(Gtk.ApplicationWindow):
         if doc is None:
             done(False)
             return
+        if getattr(doc, "loading", False):
+            # 아직 읽는 중 — 빈 글 칸을 그 경로에 저장하면 원본이 0바이트가 되었다
+            done(False)
+            return
         if save_as or doc.path is None:
             self.switch_to(doc)
             self._save_as_dialog(doc, lambda path, enc: self._write(doc, path, enc, done) if path else done(False))

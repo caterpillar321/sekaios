@@ -560,6 +560,10 @@ class FolderModel:
         def done(out):
             self._change_busy = False
             if gen != self.gen:
+                # 그 사이 다른 폴더를 읽었다 — 결과는 버리되, 새 폴더에서 모아 둔 바뀜은 처리한다
+                #   (안 그러면 다음 바뀜이 올 때까지 새 폴더에 복사한 파일이 안 보였다)
+                if self._changed:
+                    self._schedule_changes()
                 return False
             added = []
             for uri, e in out:

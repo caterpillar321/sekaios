@@ -420,7 +420,7 @@ def _card(d):
             "icons": ([name] if name else []) + CARD_ICONS, "profiles": profiles, "active": active}
 
 
-def fetch():
+def fetch(allow_partial=False):
     """소리 서버의 지금 상태 → 화면에 그릴 모양. {"state": "ok" | "down" | "missing", …}"""
     r = _pactl(["-f", "json", "info"])
     if r is None:
@@ -434,13 +434,20 @@ def fetch():
     if not isinstance(everything, dict):
         everything = {}
     raw = {}
+    failed = 0
     for key, kind in (("sinks", "sinks"), ("sources", "sources"), ("sink_inputs", "sink-inputs"),
                       ("source_outputs", "source-outputs"), ("cards", "cards")):
         items = everything.get(key)
         if not isinstance(items, list):          # 한 번에 읽은 것이 깨졌다 — 종류마다 따로
             code, out = _pactl(["-f", "json", "list", kind]) or (-1, "")
             items = _loads(out) if code == 0 else None
+            if not isinstance(items, list):
+                failed += 1
         raw[key] = [x for x in items if isinstance(x, dict)] if isinstance(items, list) else []
+    if failed and not allow_partial:
+        # 서버는 살아 있는데 목록을 읽지 못했다 (블루투스 프로필을 바꾸는 중처럼 잠깐 굼뜰 때) — "장치 0개"로
+        #   그리면 고른 장치가 풀리고 입력 테스트·믹서가 비었다. 지금 화면을 두고 조금 뒤에 다시 읽는다
+        return {"state": "busy"}
     dummy = ("auto_null", "auto_null.monitor")     # 장치가 하나도 없을 때 서버가 세우는 가짜 출력
     sinks = [_device(d, "sink") for d in raw["sinks"] if d.get("name") not in dummy]
     sources = [_device(d, "source") for d in raw["sources"]
@@ -1105,6 +1112,7 @@ class SoundPage:
         self.grabbed = set()                # 사람이 잡고 있는 슬라이더 · 펼쳐 둔 콤보
         self.pending = None                 # 잡고 있는 동안 읽은 상태 — 놓으면 그린다
         self.fetching = self.again = False
+        self._busy_n = 0                    # 목록을 거푸 못 읽은 횟수 (_show)
         self.soon_src = 0
         self.sub = self.sub_cancel = None   # pactl subscribe
         self.sub_src = 0
@@ -1202,9 +1210,11 @@ class SoundPage:
             return
         self.fetching = True
 
+        partial = self._busy_n >= 3                  # 세 번 거푸 못 읽었으면 읽은 만큼이라도 그린다
+
         def work():
             try:
-                data = fetch()
+                data = fetch(partial)
             except Exception as e:           # 읽기가 죽어도 페이지는 살아 있게
                 import traceback
                 traceback.print_exc()
@@ -1229,6 +1239,11 @@ class SoundPage:
             return
         self.pending = None
         st = data.get("state")
+        if st == "busy":
+            self._busy_n += 1
+            self.soon(1000)
+            return
+        self._busy_n = 0
         if st != "ok":
             self.notice_text.set_text(TEXT_MISSING if st == "missing" else TEXT_DOWN)
             _reveal(self.notice, True)
@@ -1316,6 +1331,8 @@ class SoundPage:
     def _retry(self):
         self.sub_src = 0
         self._watch()
+        if self.sub is not None:
+            self.soon(500)                    # 다시 붙었다 — 끊긴 동안 바뀐 것(서버가 다시 뜬 것)을 읽는다
         return False
 
     def _unwatch(self):

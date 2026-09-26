@@ -107,6 +107,8 @@ def _encrypted(volume):
 
 def _eligible(volume):
     """자동으로 연결해도 되는 이동식 드라이브인가"""
+    if os.path.exists("/run/sekai-installing"):
+        return False                # 설치 프로그램이 디스크를 나누고 포맷하는 중 (sekai-install-backend)
     try:
         if not volume.can_mount() or not volume.should_automount():
             return False

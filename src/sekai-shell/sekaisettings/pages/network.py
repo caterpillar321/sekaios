@@ -84,12 +84,14 @@ def _fields(line):
 
 
 def parse_kv(text):
-    """nmcli -t 의 '이름:값' 줄들 (connection show <UUID> · device show) → {이름: 값}. 이름에는 : 가 없다"""
+    """nmcli -t 의 '이름:값' 줄들 (connection show <UUID> · device show) → {이름: 값}. 이름에는 : 가 없다.
+    이 상세 출력은 값을 이스케이프하지 않는다 (목록 출력·-g 와 다르다 — nmcli 1.52 에서 확인) → 풀지 않는다.
+    풀면 'CORP\\hong' 같은 사용자 이름이 'CORPhong' 으로 읽혀, 암호만 바꿔도 사용자 이름을 망가뜨려 저장했다"""
     out = {}
     for line in (text or "").splitlines():
         k, sep, v = line.partition(":")
         if sep:
-            out[k.strip()] = _unescape(v).strip()
+            out[k.strip()] = v.strip()
     return out
 
 
@@ -282,6 +284,12 @@ def is_enterprise(sec):
     return "802.1X" in (sec or "").upper()
 
 
+def passwd_file_value(secret):
+    """nmcli passwd-file 의 값 — 바이트마다 \\ooo(8진수)로 적는다. nmcli 는 이 파일의 값에서 \\ 이스케이프를 풀고
+    앞뒤 공백을 지운다 → 그대로 적으면 "my\\pass"·"끝에 공백 " 같은 암호가 바뀌어 "암호가 맞지 않습니다"가 났다"""
+    return "".join("\\%03o" % b for b in secret.encode("utf-8"))
+
+
 def _up_secret(uuid, field, secret, timeout=45):
     """연결을 켠다. 비밀번호는 명령줄에 넣지 않고 `connection up … passwd-file` 로 메모리 파일(memfd)에
     담아 넘긴다 — NetworkManager 는 이렇게 받은 시스템 소유(flags 0) 비밀번호를 프로필에 저장한다.
@@ -291,7 +299,7 @@ def _up_secret(uuid, field, secret, timeout=45):
         return None if ok else (err or "알 수 없는 오류")
     fd = os.memfd_create("sekai-net", os.MFD_CLOEXEC)
     try:
-        os.write(fd, f"{field}:{secret}\n".encode())
+        os.write(fd, f"{field}:{passwd_file_value(secret)}\n".encode())
         os.lseek(fd, 0, os.SEEK_SET)
         ok, _o, err = _nmrun(["-w", str(timeout), "connection", "up", uuid, "passwd-file", f"/dev/fd/{fd}"],
                              timeout + 15, pass_fds=(fd,))

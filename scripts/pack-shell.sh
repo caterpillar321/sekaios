@@ -220,10 +220,12 @@ if [ "$1" = "configure" ]; then
     done
     rmdir /usr/share/sekai/grub 2>/dev/null || true
     # 마우스 커서 기본값 — DMZ-White (앱이 따로 고르지 않을 때 쓰는 /usr/share/icons/default).
-    #   관리자가 직접 고른 것(수동)이 있으면 그대로 둔다
-    if update-alternatives --query x-cursor-theme 2>/dev/null | grep -q '^Status: auto' \
-       && [ -e /usr/share/icons/DMZ-White/cursor.theme ]; then
-        update-alternatives --set x-cursor-theme /usr/share/icons/DMZ-White/cursor.theme >/dev/null 2>&1 || true
+    #   한 번만 한다 — 관리자가 직접 고른 것(수동)이나 auto 로 되돌린 것을 업데이트마다 덮어쓰지 않게
+    if [ ! -e /var/lib/sekai/cursor-default-set ] && [ -e /usr/share/icons/DMZ-White/cursor.theme ]; then
+        if update-alternatives --query x-cursor-theme 2>/dev/null | grep -q '^Status: auto'; then
+            update-alternatives --set x-cursor-theme /usr/share/icons/DMZ-White/cursor.theme >/dev/null 2>&1 || true
+        fi
+        mkdir -p /var/lib/sekai && touch /var/lib/sekai/cursor-default-set
     fi
     # "폴더에 표시"(org.freedesktop.FileManager1)는 파일 탐색기(sekai-files)가 맡는다. 예전 설치본에
     #   Thunar 가 남아 있으면 같은 이름을 서비스 파일 둘이 주장해 어느 쪽이 뜰지 모른다 → Thunar 것을
@@ -325,6 +327,9 @@ cat >> "$STAGE_D/usr/share/doc/sekai-desktop/copyright" <<'THEME'
           https://github.com/caterpillar321/sekaios
           (third_party/fluent-gtk-theme, scripts/build-theme.sh)
 THEME
+# 이 패키지를 만든 소스의 커밋 — 옛 패키지에 맞는 소스(GPL-3 6조)를 찾을 수 있게
+printf '          이 패키지를 만든 소스: 커밋 %s\n          GPL-3.0 전문은 테마 폴더의 COPYING 에도 있다 (usr/share/themes/Sekai-*/COPYING)\n' \
+    "$(git -C "$P" rev-parse HEAD 2>/dev/null || echo 알수없음)" >> "$STAGE_D/usr/share/doc/sekai-desktop/copyright"
 
 cat > "$STAGE_D/DEBIAN/control" <<CTRL
 Package: sekai-desktop

@@ -239,12 +239,49 @@ def _root(a, n):
     return r
 
 
+_PI_CACHE = {}
+
+
+def _pi_at(prec):
+    """prec 자리의 π — 큰 각도를 2π 로 줄일 때 (각도의 자릿수만큼 π 가 더 정확해야 한다. 80자리로는 1e28 쯤부터
+    결과가 틀렸다). 마친 π 는 기억해 둔다. 마친 공식: π = 16·atan(1/5) − 4·atan(1/239)"""
+    if prec <= 78:
+        return _PI
+    for p, v in _PI_CACHE.items():
+        if p >= prec:
+            return v
+    with localcontext(CTX) as c:
+        c.prec = prec + 10
+        eps = Decimal(10) ** -(prec + 8)
+
+        def atan_inv(n):
+            x = Decimal(1) / n
+            x2 = x * x
+            s = t = x
+            k = 1
+            while True:
+                t = -t * x2
+                k += 2
+                d = t / k
+                if abs(d) < eps:
+                    return s
+                s += d
+        v = 16 * atan_inv(5) - 4 * atan_inv(239)
+    _PI_CACHE[prec] = v
+    return v
+
+
 def _sin_series(x, cos=False):
     """라디안 x 의 sin (cos=True 면 cos) — [-π, π] 로 줄여 테일러 급수"""
+    if x.is_finite() and x.adjusted() > 4000:
+        raise CalcError("잘못된 입력입니다")          # 각도가 너무 커서 한 바퀴 안의 자리를 알 수 없다
     with localcontext(CTX) as c:
-        c.prec = PREC + 12
-        two_pi = 2 * _PI
+        need = PREC + 12 + max(0, x.adjusted())
+        c.prec = need
+        two_pi = 2 * _pi_at(need)
         x = x % two_pi
+        c.prec = PREC + 12
+        x = +x
         if x > _PI:
             x -= two_pi
         elif x < -_PI:
@@ -498,9 +535,10 @@ class Engine:
 
     def _new_calc_if_done(self):
         if self.done:
-            ang, fe = self.angle, self.fe
+            ang, fe, last = self.angle, self.fe, self.last
             self.clear()
-            self.angle, self.fe = ang, fe
+            # 마지막 연산은 남긴다 — 새 수를 넣고 = 만 누르면 그 수에 되풀이한다 (윈도우: 2 + 3 = 4 = → 7)
+            self.angle, self.fe, self.last = ang, fe, last
 
     def _fail(self, msg, text=None):
         self.error = msg
@@ -695,14 +733,19 @@ class Engine:
             return
         self._new_calc_if_done()
         op = self.ops[-1] if self.ops and self.ops[-1] != "(" else None
-        with localcontext(CTX):
-            if op in ("*", "/"):
-                r = self.value / 100
-            elif op in ("+", "-"):
-                r = self.vals[-1] * self.value / 100
-            else:
-                r = Decimal(0)
-        self.value = _check(r)
+        try:
+            with localcontext(CTX):
+                if op in ("*", "/"):
+                    r = self.value / 100
+                elif op in ("+", "-"):
+                    r = self.vals[-1] * self.value / 100
+                else:
+                    r = Decimal(0)
+            r = _check(r)
+        except CalcError as e:                   # 넘침 — 예전엔 예외가 새어 나가 화면이 멈췄다
+            self._fail(str(e))
+            return
+        self.value = r
         self.entry = None
         self.operand_text = fmt(self.value)
         self.fresh = True
@@ -798,6 +841,21 @@ class Engine:
                 self._fail(str(e), text)
                 return None
             self.value, self.done_text = r, text
+            return text, r
+        if not self.ops and not self.groups and self.last:
+            # 결과를 낸 뒤 새 수(또는 그 결과에 함수)를 넣고 = — 마지막 연산을 그 수에 되풀이 (2 + 3 = 4 = → 7)
+            op, b = self.last
+            a = self.value
+            text = f"{fmt(a, sci=self.fe)} {BINARY[op][0]} {fmt(b, sci=self.fe)} ="
+            try:
+                r = binary(op, a, b)
+            except CalcError as e:
+                self._fail(str(e), text)
+                return None
+            ang, fe = self.angle, self.fe
+            self.clear()
+            self.angle, self.fe, self.last = ang, fe, (op, b)
+            self.value, self.done, self.done_text = r, True, text
             return text, r
         if not self.ops and not self.operand_text:
             # 숫자 하나에 = — 식에 "5 =" 만 보인다

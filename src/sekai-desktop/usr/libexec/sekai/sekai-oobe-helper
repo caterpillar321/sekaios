@@ -133,7 +133,10 @@ def _connect_secret(ssid, pw):
     field = "802-11-wireless-security.wep-key0" if km == "none" else "802-11-wireless-security.psk"
     fd = os.memfd_create("sekai-wifi", os.MFD_CLOEXEC)
     try:
-        os.write(fd, f"{field}:{pw}\n".encode())
+        # 값은 바이트마다 \\ooo(8진수)로 — nmcli 가 passwd-file 의 \\ 이스케이프를 풀고 앞뒤 공백을 지우므로
+        #   그대로 적으면 역슬래시·앞뒤 공백이 든 암호가 바뀌었다 (설정 앱의 passwd_file_value 와 같다)
+        val = "".join("\\%03o" % b for b in pw.encode("utf-8"))
+        os.write(fd, f"{field}:{val}\n".encode())
         os.lseek(fd, 0, os.SEEK_SET)
         try:
             r = subprocess.run(["nmcli", "-w", "45", "connection", "up", "uuid", uuid,

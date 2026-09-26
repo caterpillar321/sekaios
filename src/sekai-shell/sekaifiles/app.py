@@ -79,8 +79,10 @@ button.fx-cap:hover { background: alpha(@fg, 0.10); }
 button.fx-cap:active { background: alpha(@fg, 0.16); }
 button.fx-cap.close:hover { background: #c42b1c; color: #ffffff; }
 button.fx-cap.close:active { background: #b22a1d; color: #ffffff; }
-/* GTK 의 창 그림자·둥근 모서리는 끈다 — 테두리·그림자는 Hyprland 가 그린다 */
-window.fx-window decoration, window.fx-window.csd decoration { box-shadow: none; border-radius: 0; margin: 0; border: none; }
+/* GTK 의 창 그림자·둥근 모서리는 끈다 — Hyprland 에서만. 그림자·크기 조절 자리는 Hyprland 가 창 둘레에 따로 둔다. 기본 화면 모드(X11)의 xfwm4 는
+   GTK 가 그린 제목 표시줄 창에 테두리를 그리지 않으므로 GTK 의 그림자 자리(가장자리 끌어 크기 조절)를 남긴다 */
+window.fx-window.fx-hypr decoration, window.fx-window.fx-hypr.csd decoration { box-shadow: none; border-radius: 0; margin: 0; border: none; }
+.fx-tabbar scrolledwindow, .fx-tabbar viewport { background: transparent; border: none; }
 .fx-tab { padding: 5px 5px 5px 12px; border-radius: 8px 8px 0 0; min-height: 24px; }
 .fx-tab label { font-size: 13px; color: @text2; }
 .fx-tab:hover { background: alpha(@fg, 0.05); }

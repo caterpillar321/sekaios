@@ -285,8 +285,9 @@ class Document:
             GLib.idle_add(lambda: (self.win.open_paths(paths), False)[1])
 
     # ── 읽기 ──
-    def load(self, path, forced, allow_big, allow_binary, done):
-        """작업 스레드에서 읽고, 메인 스레드에서 done(상태, 정보). 상태는 textcodec.read_file 의 것"""
+    def load(self, path, forced, allow_big, allow_binary, done, keep_on_fail=False):
+        """작업 스레드에서 읽고, 메인 스레드에서 done(상태, 정보). 상태는 textcodec.read_file 의 것.
+        keep_on_fail — 다시 읽기: 파일이 없거나 읽지 못하면 글 칸을 그대로 둔다"""
         self.loading = True
         self.path = path
         self._sync_tab()
@@ -308,6 +309,14 @@ class Document:
             if status == "ok":
                 text, enc, eol, stamp = info
                 self._set_loaded(text, enc, eol, stamp)
+            elif keep_on_fail:
+                # 다시 읽으려는 사이 파일이 지워졌거나 읽을 수 없다 — 글 칸을 비우지 않는다 (유일한 사본일 수 있다)
+                self.buffer.set_modified(True)
+                self._stale = True
+                why = ("다른 프로그램에서 파일이 삭제되었거나 이동되었습니다. 저장하면 다시 만들어집니다."
+                       if status == "missing" else "파일을 다시 읽지 못했습니다. 지금 내용은 그대로 두었습니다.")
+                self.notice.show_notice(why, [("닫기", self.notice.hide_notice)])
+                self.win.doc_state_changed(self)
             elif status == "missing":                # 없는 파일 — 그 이름의 새 문서 (저장하면 만들어진다)
                 self._set_loaded("", textcodec.DEFAULT_ENCODING, textcodec.DEFAULT_EOL, None)
             done(status, info)
@@ -343,7 +352,7 @@ class Document:
                 GLib.idle_add(lambda: (self.view.scroll_to_mark(b.get_insert(), 0.2, False, 0, 0), False)[1])
             if done:
                 done(status, info)
-        self.load(path, None, True, True, after)
+        self.load(path, None, True, True, after, keep_on_fail=True)
 
     # ── 저장 ──
     def write(self, path, enc, data, done):

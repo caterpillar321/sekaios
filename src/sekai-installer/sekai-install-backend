@@ -54,6 +54,10 @@ cleanup() {
     return 0
 }
 trap 'die "중단되었습니다"' INT TERM
+# 설치하는 동안의 표지 — 라이브 세션의 자동 연결(/usr/lib/sekai/automount)이 새로 만든 파티션을 연결하지 않게
+#   (먼저 연결되면 mkfs 가 "사용 중"으로 실패했다). 어떻게 끝나든 지운다
+INSTALLING=/run/sekai-installing
+trap 'rm -f "$INSTALLING"' EXIT
 
 : > "$LOG"
 log "SekaiOS 설치 $(date)"
@@ -99,6 +103,7 @@ done
 # ── 1. 파티션 ────────────────────────────────────────────
 step 1 "디스크 준비"
 prog 1 "디스크를 비우는 중"
+: > "$INSTALLING"
 cleanup
 swapoff -a 2>/dev/null || true
 for p in $(lsblk -ln -o NAME "$DISK" | tail -n +2); do umount -f "/dev/$p" 2>/dev/null || true; done
@@ -121,6 +126,11 @@ if [ "$SWAP_MB" -gt 0 ]; then SWAP_DEV="${PFX}2"; else SWAP_DEV=""; fi
 ROOT_DEV="${PFX}${PN}"
 for i in 1 2 3 4 5; do [ -b "$ROOT_DEV" ] && break; sleep 1; done
 [ -b "$ESP_DEV" ] && [ -b "$ROOT_DEV" ] || die "파티션을 만들지 못했습니다"
+# 새 파티션 자리에 남아 있던 옛 파일 시스템 서명을 지운다 (자동 연결·mkfs 가 옛것으로 착각하지 않게)
+for p in "$ESP_DEV" ${SWAP_DEV:+"$SWAP_DEV"} "$ROOT_DEV"; do
+    umount -f "$p" 2>/dev/null || true
+    run wipefs -a "$p"
+done
 prog 2
 
 # ── 2. 포맷 ──────────────────────────────────────────────

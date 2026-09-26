@@ -17,6 +17,7 @@ import math
 import os
 import re
 import stat
+import struct
 import tempfile
 import threading
 import traceback
@@ -540,13 +541,55 @@ def _full_oriented(path, fmt, data=None):
     return orient(pb, ori), opts
 
 
+def _rotation_loses(data, fmt):
+    """다시 인코딩하면 잃는 것 (까닭 글 또는 None) — GdkPixbuf 는 첫 쪽·첫 장면만, 8비트로만 쓴다"""
+    try:
+        if fmt == "png":
+            i = 8
+            while i + 8 <= len(data):
+                ln = struct.unpack(">I", data[i:i + 4])[0]
+                typ = data[i + 4:i + 8]
+                if typ == b"IHDR" and data[i + 16] == 16:
+                    return "16비트 색 정보"
+                if typ == b"acTL":
+                    return "움직이는 그림의 다른 장면"
+                if typ in (b"IDAT", b"IEND"):
+                    break
+                i += 12 + ln
+        elif fmt == "tiff":
+            t = exif._Tiff(lambda off, n: data[off:off + n])
+            ifd0 = t.entries(t.ifd0)
+            n = struct.unpack(t.e + "H", data[t.ifd0:t.ifd0 + 2])[0]
+            nxt = t.ifd0 + 2 + 12 * n
+            if struct.unpack(t.e + "I", data[nxt:nxt + 4])[0] != 0 or 0x014A in ifd0:
+                return "다른 쪽(여러 쪽 TIFF·RAW 의 본 그림)"
+            bps = t.value(ifd0[0x0102]) if 0x0102 in ifd0 else 8
+            if any(b > 8 for b in (bps if isinstance(bps, tuple) else (bps,)) if isinstance(b, int)):
+                return "16비트 색 정보"
+        elif fmt == "jpeg":
+            return exif.jpeg_extra(data)
+    except (ValueError, struct.error, IndexError, TypeError):
+        return None
+    return None
+
+
 def save_rotated(path, quarter, fmt):
-    """회전을 파일에 저장 (JPEG 은 품질 95 로 다시 쓰되 EXIF·ICC 는 옮겨 싣는다)"""
+    """회전을 파일에 저장. JPEG 은 EXIF 방향 표시만 바꾼다 (무손실 — 그림·메타데이터·뒤에 붙은 자료가 그대로).
+    방향 표시가 없는 JPEG 과 PNG·BMP·TIFF 는 다시 인코딩한다 (JPEG 은 품질 95, EXIF·ICC 는 옮겨 싣는다) —
+    그러면 잃는 것(여러 쪽·움직임·16비트·보조 그림)이 있으면 저장하지 않는다 (LoadError — 보기만 돌린다)"""
     if fmt not in ROTATE_SAVE:
         raise LoadError("회전한 상태로 저장할 수 없는 형식입니다.")
     real = os.path.realpath(path)
     with open(real, "rb") as f:
         orig = f.read()
+    if fmt == "jpeg":
+        data = exif.rotate_jpeg_lossless(orig, quarter)
+        if data is not None:
+            write_atomic(real, data)
+            return
+    why = _rotation_loses(orig, fmt)
+    if why:
+        raise LoadError(f"파일에 저장하면 잃는 것이 있어 보기만 돌렸습니다 ({why}).")
     pb, opts = _full_oriented(real, fmt, orig)
     pb = rotate(pb, quarter)
     data = _encode(pb, fmt, opts)

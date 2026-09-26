@@ -64,6 +64,8 @@ for variant in Light Dark; do
         fi
         cp -r "$TMP/assets" "$d/gtk-$g/assets"
     done
+    # 라이선스 전문을 파일과 함께 (GPL-3.0)
+    cp "$P/third_party/fluent-gtk-theme/COPYING" "$d/COPYING"
     icons=$([ "$variant" = Dark ] && echo Papirus-Dark || echo Papirus-Light)
     cat > "$d/index.theme" <<EOF
 [Desktop Entry]

@@ -72,6 +72,7 @@ class Thumbnailer:
         self._mem = OrderedDict()               # (uri, mtime, size) → pixbuf
         self._mem_lock = threading.Lock()
         self._pix_mimes = None
+        self._stopped = False                   # shutdown() 뒤 — 작업 스레드가 끝난다
         self._root = cache_root()
         self._tools = {"ffmpegthumbnailer": shutil.which("ffmpegthumbnailer"),
                        "pdftoppm": shutil.which("pdftoppm")}
@@ -103,8 +104,21 @@ class Thumbnailer:
             self._reqs.clear()
             self._queue.clear()
 
+    def shutdown(self):
+        """창이 닫힐 때 — 작업 스레드를 끝내고 기억해 둔 그림을 버린다 (창마다 하나라, 안 그러면 닫은 창마다
+        스레드 둘과 그림 캐시(최대 수십 MB)가 프로세스에 남았다)"""
+        with self._lock:
+            self._stopped = True
+            for req in self._reqs.values():
+                req.cancelled = True
+            self._reqs.clear()
+            self._queue.clear()
+            self._cond.notify_all()
+        with self._mem_lock:
+            self._mem.clear()
+
     def _ensure_workers(self):
-        if len(self._threads) >= self._nworkers:
+        if self._stopped or len(self._threads) >= self._nworkers:
             return
         while len(self._threads) < self._nworkers:
             t = threading.Thread(target=self._work, daemon=True, name="sekai-thumbs")
@@ -129,8 +143,10 @@ class Thumbnailer:
     def _work(self):
         while True:
             with self._lock:
-                while not self._queue:
+                while not self._queue and not self._stopped:
                     self._cond.wait()
+                if self._stopped:
+                    return
                 req = self._queue.pop()
             if req.cancelled:
                 continue

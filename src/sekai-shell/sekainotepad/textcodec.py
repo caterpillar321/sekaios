@@ -100,11 +100,22 @@ def decode(data, forced=None):
         body = data[len(bom):] if data.startswith(bom) else data
         # 짝이 맞지 않는 서로게이트 따위 — 깨진 글자 하나로 파일 전체를 못 여는 일은 없게
         return body.decode(codec, errors="replace"), key
-    for key, codec in (("utf-8", "utf-8"), ("cp949", "cp949")):
-        try:
-            return data.decode(codec), key
-        except UnicodeDecodeError:
-            pass
+    try:
+        return data.decode("utf-8"), "utf-8"
+    except UnicodeDecodeError:
+        pass
+    # UTF-8 인데 몇 바이트만 깨진 파일(끝이 잘렸거나 한두 곳이 망가짐)은 UTF-8 로 — 깨진 곳만 � 로 보인다.
+    #   예전엔 파일 전체를 Latin-1 로 열어 한글이 모두 깨졌고, 거기에 글을 더해 UTF-8 로 저장하면 파일 전체가
+    #   이중으로 인코딩되었다
+    text = data.decode("utf-8", errors="replace")
+    bad = text.count("\ufffd") - data.count(b"\xef\xbf\xbd")
+    multi = sum(1 for ch in text if ch > "\x7f" and ch != "\ufffd")
+    if bad <= max(3, len(data) // 4000) and multi >= 4 * bad:
+        return text, "utf-8"
+    try:
+        return data.decode("cp949"), "cp949"
+    except UnicodeDecodeError:
+        pass
     return data.decode("latin-1"), "latin-1"
 
 
@@ -143,6 +154,8 @@ def encode(text, key, eol, errors="strict"):
     (errors="replace" 면 ? 로 — 사용자가 "그대로 저장"을 골랐을 때)"""
     _k, _n, codec, bom = _BY_KEY.get(key, _BY_KEY[DEFAULT_ENCODING])
     nl = _EOL_BY_KEY.get(eol, _EOL_BY_KEY[DEFAULT_EOL])[2]
+    # 붙여넣기로 들어온 \r\n·\r 도 \n 으로 — 그대로 두면 CRLF 문서에서 \r\r\n 이 되었다
+    text = normalize(text)
     if nl != "\n":
         text = text.replace("\n", nl)
     return bom + text.encode(codec, errors=errors)

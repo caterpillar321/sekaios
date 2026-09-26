@@ -369,3 +369,70 @@ def splice_jpeg_meta(orig, new, width, height):
     parts += extra
     parts.append(new[nstart:])
     return b"".join(parts)
+
+
+# ── JPEG 무손실 회전 — 그림은 그대로 두고 EXIF 방향 표시만 바꾼다 ─────────────
+#   (다시 인코딩하면 화질이 한 번 더 깎이고, 뒤에 붙은 모션 포토 동영상·HDR 게인 맵이 사라진다)
+#   방향 값 → (좌우 뒤집기, 시계 방향 90° 횟수): 표시할 때 먼저 뒤집고 그다음 돌린다
+_ORI_TO = {1: (0, 0), 2: (1, 0), 3: (0, 2), 4: (1, 2), 5: (1, 3), 6: (0, 1), 7: (1, 1), 8: (0, 3)}
+_TO_ORI = {v: k for k, v in _ORI_TO.items()}
+
+
+def rotate_jpeg_lossless(data, quarter):
+    """EXIF 방향 태그를 quarter × 90°(시계 방향)만큼 더 돌린 JPEG 바이트. 방향 태그가 없거나 읽을 수 없으면 None
+    (태그를 새로 끼워 넣지는 않는다 — 그때는 부르는 쪽이 다시 인코딩할지 정한다)"""
+    try:
+        segs, _start = _segments(data)
+    except (ValueError, struct.error, IndexError):
+        return None
+    buf = bytearray(data)
+    new = None
+    for m, a, b in segs:
+        if m != 0xE1 or data[a + 4:a + 10] != b"Exif\0\0":
+            continue
+        base = a + 10
+
+        def rd(off, n, base=base, end=b):
+            lo = base + off
+            return bytes(buf[lo:min(lo + n, end)]) if lo < end else b""
+        try:
+            t = _Tiff(rd)
+            ifd0 = t.entries(t.ifd0)
+            ent = ifd0.get(ORIENTATION)
+            if ent is None or ent[0] != 3 or ent[1] != 1:
+                return None
+            field = base + ent[2]
+            cur = struct.unpack_from(t.e + "H", buf, field)[0]
+            flip, rot = _ORI_TO.get(cur, (0, 0))
+            new = _TO_ORI[(flip, (rot + quarter) % 4)]
+            struct.pack_into(t.e + "H", buf, field, new)
+        except (ValueError, struct.error, IndexError):
+            return None
+        break
+    if new is None:
+        return None
+    # XMP 에 적힌 방향도 같게 (한 글자를 한 글자로 — 조각 길이는 그대로)
+    for m, a, b in segs:
+        if m == 0xE1 and b"http://ns.adobe.com/xap/1.0/" in data[a + 4:a + 40]:
+            seg = _XMP_ORIENT.sub(lambda mo: mo.group(1) + str(new).encode(), bytes(buf[a:b]))
+            if len(seg) == b - a:
+                buf[a:b] = seg
+    return bytes(buf)
+
+
+def jpeg_extra(data):
+    """그림 말고 함께 든 자료가 있나 — 다시 인코딩하면 사라지는 것 (까닭 글 또는 None):
+    끝(EOI) 뒤에 붙은 자료(모션 포토 동영상 등), MPF 보조 그림(HDR 게인 맵·깊이 지도)"""
+    try:
+        segs, start = _segments(data)
+    except (ValueError, struct.error, IndexError):
+        return None
+    for m, a, b in segs:
+        if m == 0xE2 and data[a + 4:a + 8] == b"MPF\0":
+            return "함께 든 보조 그림(HDR·깊이 정보)"
+    # 압축된 그림 자료 안에서 0xFF 뒤에는 00 이나 재시작 표식만 온다 — 처음 나오는 FF D9 가 그림의 끝
+    end = data.find(b"\xff\xd9", start)
+    if end >= 0 and len(data) - (end + 2) > 64:
+        return "사진 뒤에 붙은 자료(모션 포토 동영상 등)"
+    return None
+

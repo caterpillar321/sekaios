@@ -144,6 +144,14 @@ class _CapIcon(Gtk.DrawingArea):
         return False
 
 
+def _under(uri, root):
+    """uri 가 root 이거나 그 안인가 ("…/USB2" 는 "…/USB" 안이 아니다)"""
+    if not uri or not root:
+        return False
+    r = root.rstrip("/")
+    return uri == r or uri.startswith(r + "/")
+
+
 class Tab:
     """탭 하나 — 위치·뒤로/앞으로 기록·폴더 내용·검색·보기 모양은 탭마다.
     툴바·주소 표시줄·왼쪽 창·보기 위젯은 창에 하나고, 탭을 바꾸면 그 탭의 것을 갈아 끼운다 (switch_tab)"""
@@ -163,6 +171,7 @@ class Tab:
         self.view_mode = "details"
         self.sel = []                           # 다른 탭으로 갈 때 고른 항목 · 스크롤 (돌아오면 되살린다)
         self.scroll = None
+        self.gone = False                       # 뒤쪽에 있는 동안 보던 폴더가 사라졌다 (돌아오면 윗폴더로)
         self.button = self.box = self.icon = self.label = None
 
 
@@ -186,7 +195,9 @@ class ExplorerWindow(Gtk.ApplicationWindow):
     view_mode = _tab_attr("view_mode")
 
     def __init__(self, app, uri=None, select=None):
-        super().__init__(application=app, title="파일 탐색기")
+        # 처음 제목은 앱 id — hyprland.conf 의 nobar 규칙이 이것으로 본 창을 고른다 (대화상자는 "파일 탐색기" 등
+        #   다른 제목이라 hyprbars 제목 표시줄이 붙는다). 폴더 이름은 창이 나타난 뒤에 건다 (_build_titlebar)
+        super().__init__(application=app, title=app.get_application_id() or "org.sekaios.Files")
         self.app = app
         st = app.state
         self.set_icon_name("system-file-manager")
@@ -200,7 +211,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         self._max_at_start = bool(st.get("maximized"))
         # 좁게도 줄어든다 — 화면 3분할 스냅(1280 화면이면 426px)까지. 좁으면 왼쪽 창을 숨긴다 (_on_alloc)
         self.set_size_request(380, 320)
-        for c in ("settings-window", "fx-window"):
+        for c in ("settings-window", "fx-window") + (("fx-hypr",) if HYPR else ()):
             self.get_style_context().add_class(c)
 
         self.tab = Tab()
@@ -329,7 +340,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
     # ── 제목 표시줄 ──
     def _build_titlebar(self):
         """탭이 제목 표시줄에 (윈도우 11 탐색기처럼). 이 창은 Hyprland 의 제목 표시줄(hyprbars)을 쓰지 않는다 —
-        hyprland.conf 의 nobar 규칙이 "처음 제목이 '파일 탐색기'인 창"을 고른다 (대화상자는 같은 앱이라도 그대로).
+        hyprland.conf 의 nobar 규칙이 "처음 제목이 앱 id(org.sekaios.Files)인 창"을 고른다 (대화상자는 그대로).
         그래서 폴더 이름은 창이 나타난 뒤에 제목으로 건다 (_set_win_title).
         빈 곳을 끌면 옮겨진다(가장자리로 끌면 스냅 — Hyprland 의 SEKAI_CLIENT_MOVE), 두 번 누르면 최대화 — GTK 가 한다.
         기본 화면 모드(X11)에서는 xfwm4 가 이 제목 표시줄을 알아보고 자기 것을 그리지 않는다 (GTK CSD)"""
@@ -357,15 +368,16 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         self._titlebar = hb
         self.set_titlebar(hb)
         hb.show_all()
-        self._win_title = self.get_title()
+        self._win_title = "파일 탐색기"               # navigate() 가 폴더 이름으로 바꾼다
         self._title_ready = False
+        self._maxed = False                          # Hyprland 에 물어 본 최대화 상태 (_show_max)
 
         def ready(*_):
             if self._max_at_start:
                 self._max_at_start = False
-                GLib.timeout_add(120, lambda: (self._toggle_max(), False)[1])
+                GLib.timeout_add(120, lambda: (self._maximize_at_start(), False)[1])
             if not self._title_ready:
-                # 처음 제목("파일 탐색기")이 Hyprland 에 자리 잡은 뒤 — 조금 기다렸다가 폴더 이름으로
+                # 처음 제목(앱 id)이 Hyprland 에 자리 잡은 뒤 — 조금 기다렸다가 폴더 이름으로
                 def go():
                     self._title_ready = True
                     self.set_title(self._win_title)
@@ -407,6 +419,32 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         else:
             self.maximize()
 
+    def _maximize_at_start(self):
+        """지난번에 최대화한 채 닫았다 — 이 창이 지금 초점 창이고 아직 최대화되지 않았을 때만 최대화한다
+        (fullscreen 1 은 초점 창을 뒤집는다 — 창 여럿이 한꺼번에 열리면 엉뚱한 창을 뒤집거나 두 번 뒤집었다)"""
+        if not HYPR:
+            self.maximize()
+            return
+        if not self.is_active():
+            return
+        try:
+            proc = Gio.Subprocess.new(["hyprctl", "-j", "activewindow"],
+                                      Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE)
+        except GLib.Error:
+            return
+
+        def done(p, res):
+            try:
+                _ok, out, _err = p.communicate_utf8_finish(res)
+                import json
+                j = json.loads(out or "{}")
+            except (GLib.Error, ValueError):
+                return
+            if (j.get("class") == self.app.get_application_id() and j.get("title") == self.get_title()
+                    and j.get("fullscreen") != 1 and self.is_active()):
+                self._toggle_max()
+        proc.communicate_utf8_async(None, None, done)
+
     def _sync_max_later(self, ms):
         if getattr(self, "_max_src", 0):
             GLib.source_remove(self._max_src)
@@ -441,6 +479,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         proc.communicate_utf8_async(None, None, done)
 
     def _show_max(self, maxed):
+        self._maxed = maxed
         self.app.state["maximized"] = maxed
         self.b_max.get_child().set_kind("restore" if maxed else "max")
         self.b_max.set_tooltip_text("이전 크기로 복원" if maxed else "최대화")
@@ -461,7 +500,18 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         bar = Gtk.Box(spacing=2)
         bar.get_style_context().add_class("fx-tabbar")
         self.tabbox = Gtk.Box(spacing=2)
-        bar.pack_start(self.tabbox, False, False, 0)
+        # 탭 줄은 잘릴 수 있다 (가로로 밀린다) — 탭 수만큼 창의 최소 폭이 커지면 좁은 스냅 칸에 들어가지 않았다.
+        #   고른 탭은 늘 보이는 곳으로 민다 (_show_tab)
+        sw = Gtk.ScrolledWindow()
+        sw.set_policy(Gtk.PolicyType.EXTERNAL, Gtk.PolicyType.NEVER)
+        sw.set_propagate_natural_width(True)
+        sw.set_propagate_natural_height(True)
+        sw.add(self.tabbox)
+        vp = sw.get_child()
+        if isinstance(vp, Gtk.Viewport):
+            vp.set_shadow_type(Gtk.ShadowType.NONE)
+        self._tab_sw = sw
+        bar.pack_start(sw, False, False, 0)
         plus = self._tbtn(["list-add-symbolic"], "새 탭 (Ctrl+T)", lambda: self.new_tab())
         plus.get_style_context().add_class("fx-tab-new")
         plus.set_valign(Gtk.Align.CENTER)
@@ -564,11 +614,12 @@ class ExplorerWindow(Gtk.ApplicationWindow):
     def _restore_tab(self):
         """지금 탭(self.tab)의 위치·모델·검색·보기 모양을 창에 되살린다"""
         t = self.tab
-        if self.thumbnailer is not None:
-            try:
-                self.thumbnailer.cancel_all()
-            except Exception:
-                pass
+        self._cancel_thumbs()
+        if getattr(t, "gone", False):
+            t.gone = False
+            GLib.idle_add(lambda: (self._folder_gone() if self.tab is t else None, False)[1])
+        if self.address.editing():
+            self.address.cancel_edit()           # 앞 탭에서 고치던 주소가 이 탭으로 넘어오지 않게
         self._typeahead = ""
         self.search.handler_block_by_func(self._on_search_changed)
         self.search.set_text(t.search_query if t.searching else "")
@@ -605,6 +656,16 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         for x in self.tabs:
             self._update_tab_button(x)
         GLib.idle_add(lambda: (self.focus_view(), False)[1])
+        GLib.timeout_add(50, lambda: (self._show_tab(t), False)[1])
+
+    def _show_tab(self, t):
+        """탭 줄이 잘려 있으면 이 탭이 보이게 민다"""
+        sw = getattr(self, "_tab_sw", None)
+        if sw is None or t not in self.tabs or t.button is None:
+            return
+        a = t.button.get_allocation()
+        if a.width > 1:
+            sw.get_hadjustment().clamp_page(a.x, a.x + a.width)
 
     def close_tab(self, t=None):
         """마지막 탭이면 창을 닫는다"""
@@ -843,11 +904,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
                 if len(self.history) > 100:
                     del self.history[0]
                 self.hpos = len(self.history) - 1
-        if self.thumbnailer is not None:
-            try:
-                self.thumbnailer.cancel_all()
-            except Exception:
-                pass
+        self._cancel_thumbs()
         self.uri = uri
         self._typeahead = ""
         self._want_select = (set(select), rename) if select else None
@@ -1145,6 +1202,15 @@ class ExplorerWindow(Gtk.ApplicationWindow):
     #  모델 알림
     # ════════════════════════════════════════════════════════
     def _model_event(self, m, ev, val):
+        if ev == "gone" and m is not self.model:
+            # 뒤쪽 탭(또는 검색 결과 밑에 깔린 지금 탭의 폴더)이 보던 폴더가 사라졌다
+            if m is self.tab.folder:
+                self._folder_gone()
+            else:
+                for t in self.tabs:
+                    if t.folder is m:
+                        t.gone = True            # 그 탭으로 돌아오면 윗폴더로 (_restore_tab)
+            return
         if m is not self.model:
             return
         if ev == "store":
@@ -1501,11 +1567,20 @@ class ExplorerWindow(Gtk.ApplicationWindow):
                     opener.error(self, f"‘{name}’을(를) 꺼낼 수 없습니다.", e.message)
                 return
             self.toast(f"이제 ‘{name}’을(를) 안전하게 제거할 수 있습니다.")
-            if root and self.uri and self.uri.startswith(root.rstrip("/")):
+            if _under(self.uri, root):
                 self.navigate(COMPUTER)
-        # 지금 보는 폴더가 그 안이면 먼저 나온다 (열어 둔 감시 때문에 '사용 중'이 되지 않게)
-        if root and self.uri and self.uri.startswith(root.rstrip("/")) and self._page_name() == "folder":
+        # 지금 보는 폴더가 그 안이면 먼저 나온다 (열어 둔 감시 때문에 '사용 중'이 되지 않게).
+        #   뒤쪽 탭도 — 그 탭의 감시·검색을 멈추고, 돌아오면 내 PC 로
+        if _under(self.uri, root) and self._page_name() == "folder":
             self.navigate(COMPUTER)
+        for t in self.tabs:
+            if t is not self.tab and _under(t.uri, root):
+                for mm in (t.folder, t.search_model):
+                    if mm is not None:
+                        mm.stop()
+                if t.searcher is not None:
+                    t.searcher.cancel()
+                t.gone = True
         m, v = d.mount, d.volume
         if m is not None and m.can_eject():
             m.eject_with_operation(Gio.MountUnmountFlags.NONE, op, None, done, "eject_with_operation")
@@ -1867,6 +1942,23 @@ class ExplorerWindow(Gtk.ApplicationWindow):
                 dbg("썸네일 요청 실패", ex)
                 break
         return False
+
+    def _cancel_thumbs(self):
+        """기다리던 썸네일 요청을 모두 거둔다 (폴더·탭을 옮길 때). 취소된 요청은 알려 오지 않으므로 아직 그림이
+        없는 항목의 "요청함" 표시를 지운다 — 안 그러면 그 탭으로 돌아와도 다시 요청하지 않아 끝까지 아이콘으로 남았다"""
+        if self.thumbnailer is None:
+            return
+        try:
+            self.thumbnailer.cancel_all()
+        except Exception:
+            pass
+        for t in self.tabs:
+            for m in (t.folder, t.search_model):
+                if m is None:
+                    continue
+                for e in m.entries.values():
+                    if e.thumb_req and e.thumb is None:
+                        e.thumb_req = 0
 
     def _thumb_ready(self, m, uri, pb):
         if pb is None:
@@ -2601,10 +2693,17 @@ class ExplorerWindow(Gtk.ApplicationWindow):
 
     def _on_close(self, *_):
         st = self.app.state
-        if not (self.get_window() and self.get_window().get_state() & Gdk.WindowState.MAXIMIZED):
+        # 최대화했는지 — Hyprland 의 최대화(fullscreen 1)는 GTK 가 모르므로 물어 둔 것(_show_max)으로.
+        #   최대화된 크기는 "보통 크기"로 적지 않는다 (다음에 거의 화면만 한 크기로 최대화 안 된 채 열렸다)
+        if HYPR:
+            maxed = self._maxed
+        else:
+            gw = self.get_window()
+            maxed = bool(gw and gw.get_state() & Gdk.WindowState.MAXIMIZED)
+        st["maximized"] = maxed
+        if not maxed:
             w, h = self.get_size()
             st["size"] = [w, h]
-            st["maximized"] = False
         st["nav_width"] = self.paned.get_position()
         cols = dict(st.get("columns") or {}) if isinstance(st.get("columns"), dict) else {}
         cols.update(self.details.widths())
@@ -2624,7 +2723,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
                 t.searcher.cancel()
         if self.thumbnailer is not None:
             try:
-                self.thumbnailer.cancel_all()
+                self.thumbnailer.shutdown()
             except Exception:
                 pass
         try:

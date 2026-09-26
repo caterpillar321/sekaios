@@ -149,6 +149,10 @@ class PhotosApp(Gtk.Application):
             p = cl.create_file_for_arg(n).get_path()
             (paths if p else bad).append(p or n)
         win = None if new else self.get_active_window()
+        if win is not None and (getattr(win, "_closing", False) or not win.get_visible()):
+            # 닫았지만 회전 저장을 마치려고 숨겨 둔 창 — 여기에 열면 저장이 끝나는 순간 창째 사라졌다
+            win = next((w for w in self.get_windows()
+                        if w.get_visible() and not getattr(w, "_closing", False)), None)
         fresh = win is None
         if fresh:
             win = PhotosWindow(self, self.pools)

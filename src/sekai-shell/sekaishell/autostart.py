@@ -33,6 +33,9 @@ NEVER = {
     "polkit-mate-authentication-agent-1.desktop",
     "polkit-kde-authentication-agent-1.desktop",
     "lxqt-policykit-agent.desktop",
+    # 다른 DE 의 프린터 알림 애플릿(system-config-printer) — 프린터는 설정 › 프린터가 맡는다.
+    #   예전 설치본에 남아 있으면 자기 알림·드라이버 설치 창을 띄워 겹쳤다
+    "print-applet.desktop",
 }
 
 

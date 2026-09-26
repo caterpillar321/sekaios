@@ -423,7 +423,7 @@ class Agent:
         except GLib.Error as e:
             if "already registered" in e.message:
                 log("이 사용자의 네트워크 암호 에이전트가 이미 떠 있습니다 — 끝냅니다.")
-                self.quit(2)
+                self.quit(75)                # keep-running 이 1분 뒤에 다시 해 본다
                 return
             log("NetworkManager 에 등록하지 못했습니다:", e.message)
             self.quit(1)

@@ -64,6 +64,8 @@ CHUNK = 1 << 20
 BSDTAR_OPTS = ["--no-same-owner", "--no-acls", "--no-xattrs", "--no-fflags"]
 # bsdtar 는 암호가 필요한데 --passphrase 가 없으면 터미널에서 묻는다 — 터미널이 없으면 "Enter passphrase:" 를
 #   끝없이 되풀이하며 멈춘다. 그래서 늘 주고(모르면 이 값), 새 세션에서 돌려 터미널에 닿지 않게 한다
+#   (암호가 명령줄에 실리므로 도는 동안 같은 컴퓨터의 다른 계정이 ps 로 볼 수 있다. 표준 입력으로 주면 틀린 암호일 때
+#    줄바꿈 없는 "Enter passphrase:" 를 끝없이 내며 멈춘다 — 혼자 쓰는 데스크톱이라 명령줄 쪽을 택했다)
 NO_PASS = "\x01sekai-no-passphrase"
 _UMASK = os.umask(0)
 os.umask(_UMASK)
@@ -238,6 +240,8 @@ class _Sink:
         self.real = os.path.realpath(dest)
         self.unsafe = []
         self.dir_times = []
+        self.links = []                             # 이번에 만든 링크 (다 푼 뒤 다시 본다 — verify_links)
+        self.moved = []                             # bsdtar 임시 폴더에서 옮겨 온 것 (파일·폴더·링크)
         self.bytes_progress = bytes_progress        # False 면 진행률은 압축 파일에서 읽은 양 (tar·gz)
 
     def _inside(self, p):
@@ -361,7 +365,9 @@ class _Sink:
             except OSError as e:
                 _unlink(tmp)
                 job.cur_bytes = 0
-                if job.error(e, disp, "extract") == "skip":
+                # tar·gz 는 한 번에 읽어 나가는 흐름이라 같은 항목을 다시 읽을 수 없다 — "건너뛰기"만
+                #   (다시 시도하면 되감기에 실패해 "압축 파일이 손상"으로 잘못 알렸다)
+                if job.error(e, disp, "extract", can_retry=self.bytes_progress) == "skip" or not self.bytes_progress:
                     job.item_done(1, size if self.bytes_progress else 0)
                     return False
             except (zipfile.BadZipFile, zlib.error, EOFError, lzma.LZMAError, tarfile.TarError):
@@ -371,17 +377,27 @@ class _Sink:
                           reason="압축 파일이 손상되어 이 항목을 풀 수 없습니다.")
                 job.item_done(1, size if self.bytes_progress else 0)
                 return False
+            except NotImplementedError:                 # zip 의 "강한 암호화" 등 — 이 항목만 건너뛴다
+                _unlink(tmp)
+                job.cur_bytes = 0
+                self.refuse(disp, "지원하지 않는 압축·암호화 방식")
+                return False
+            except BaseException:
+                _unlink(tmp)                             # 만들다 만 임시 파일을 남기지 않는다
+                raise
 
     def symlink(self, rel, link, disp=None):
         disp = disp or rel
         p = self.path_for(rel)
-        if p is None or not link or os.path.isabs(link):
+        if p is None or not link or "\0" in link or os.path.isabs(link):
             self.refuse(disp, "대상 폴더 밖을 가리키는 링크")
             return
         resolved = os.path.normpath(os.path.join(os.path.dirname(p), link))
+        # 글자로만 정리하면(normpath) "앞서 만든 링크/.." 가 그 링크를 따라간 뒤의 윗폴더라는 것을 놓친다 —
+        #   링크를 실제로 따라가며 푼 자리(realpath)도 본다
         if not (resolved == self.real or resolved.startswith(self.real.rstrip("/") + "/")
                 or resolved == self.dest or resolved.startswith(self.dest.rstrip("/") + "/")) \
-                or not self._inside(resolved):
+                or not self._inside(resolved) or not self._inside(os.path.join(os.path.dirname(p), link)):
             self.refuse(disp, "대상 폴더 밖을 가리키는 링크")
             return
         target = self._prepare(rel, disp, _guess_meta(os.path.basename(rel), False, 0, 0))
@@ -395,6 +411,7 @@ class _Sink:
             _unlink(tmp)
             self.refuse(disp, F._explain_errno(e.errno))
             return
+        self.links.append((target, disp))
         self.job.item_done(1, 0)
 
     def hardlink(self, rel, link_rel, size, disp=None):
@@ -406,6 +423,29 @@ class _Sink:
             return
         st = os.stat(src)
         self.file(rel, st.st_size, st.st_mtime, st.st_mode, lambda: open(src, "rb"), disp)
+
+    def verify_links(self):
+        """다 푼 뒤 — 이번에 만든 링크를 실제로 따라가 대상 폴더 밖을 가리키는 것을 지운다.
+        만들 때 하나씩 검사해도, 뒤에 만든 링크가 앞 링크 경로의 뜻을 바꿀 수 있다 (링크를 겹쳐 밖으로 나가기).
+        하나를 지우면 다른 것의 뜻이 또 바뀔 수 있어 더 지울 것이 없을 때까지 되풀이한다"""
+        links = list(self.links)
+        for top in self.moved:                      # bsdtar — 옮겨 온 것 안의 링크까지
+            if os.path.islink(top):
+                links.append((top, os.path.relpath(top, self.dest)))
+            elif os.path.isdir(top):
+                for dirpath, dirnames, filenames in os.walk(top):
+                    for nm in dirnames + filenames:
+                        q = os.path.join(dirpath, nm)
+                        if os.path.islink(q):
+                            links.append((q, os.path.relpath(q, self.dest)))
+        while True:
+            bad = [(q, d) for q, d in links if os.path.islink(q) and not self._inside(q)]
+            if not bad:
+                return
+            for q, d in bad:
+                _unlink(q)
+                self.unsafe.append((display_text(d), "대상 폴더 밖을 가리키는 링크"))
+            links = [(q, d) for q, d in links if (q, d) not in bad]
 
     def finish(self):
         for p, mt in reversed(self.dir_times):
@@ -774,6 +814,7 @@ def _x_bsdtar(job, arc, dest, arc_name):
         if not existed and not os.path.lexists(dest):
             os.rename(staging, dest)                   # 새 폴더 — 통째로 (같은 드라이브라 바로 끝난다)
             staging = None
+            sink.moved.append(dest)
         else:
             _merge(job, sink, staging, "")
     finally:
@@ -785,6 +826,7 @@ def _x_bsdtar(job, arc, dest, arc_name):
 def _check_staging(staging, dest, sink):
     """bsdtar 가 풀어 놓은 것 중 대상 밖을 가리키는 링크·장치 파일을 지운다"""
     real_dest = os.path.realpath(dest)
+    real_staging = os.path.realpath(staging)
     for dirpath, dirnames, filenames in os.walk(staging):
         rel_dir = os.path.relpath(dirpath, staging)
         for nm in dirnames + filenames:
@@ -798,8 +840,11 @@ def _check_staging(staging, dest, sink):
                 # 옮긴 뒤의 자리에서 풀어 본다 — 절대 경로이거나 대상 폴더 밖이면 지운다
                 link = os.readlink(p)
                 final = os.path.normpath(os.path.join(dest, rel_dir, link))
+                # (글자로 정리한 자리만 보면 "다른 링크/.." 로 빠져나가는 것을 놓친다 — 임시 폴더 안에서 실제로 따라가
+                #   본다. 다 옮긴 뒤에도 한 번 더 본다: _Sink.verify_links)
                 if os.path.isabs(link) or not (final == dest or final.startswith(dest.rstrip("/") + "/")) or \
-                        not _within(os.path.realpath(final), real_dest):
+                        not _within(os.path.realpath(final), real_dest) or \
+                        not _within(os.path.realpath(os.path.join(dirpath, link)), real_staging):
                     _unlink(p)
                     sink.unsafe.append((display_text(rel), "대상 폴더 밖을 가리키는 링크"))
             elif not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)):
@@ -833,6 +878,7 @@ def _merge(job, sink, staging, rel):
             continue
         try:
             os.replace(e.path, target)
+            sink.moved.append(target)
         except OSError as err:
             if job.error(err, disp, "extract") == "skip":
                 continue
@@ -864,6 +910,8 @@ def _extract_one(job, arc, dest):
         sink = _x_single(job, arc, dest, kind)
     else:
         sink = _x_bsdtar(job, arc, dest, arc_name)
+    if sink:
+        sink.verify_links()
     if sink and sink.unsafe:
         names = [f"· {n} — {why}" for n, why in sink.unsafe[:8]]
         more = len(sink.unsafe) - len(names)
@@ -879,9 +927,18 @@ def _extract_job(job, pairs):
         try:
             if _extract_one(job, arc, dest):
                 job.results.append(Gio.File.new_for_path(dest))
-        except (_Broken, _Unsupported) as e:
-            why = str(e) if isinstance(e, _Unsupported) else \
-                "압축 파일이 손상되었거나 지원하지 않는 형식입니다."
+        except (_Broken, _Unsupported, Exception) as e:
+            if isinstance(e, Cancelled):
+                raise
+            if isinstance(e, _Unsupported):
+                why = str(e)
+            elif isinstance(e, _Broken):
+                why = "압축 파일이 손상되었거나 지원하지 않는 형식입니다."
+            else:
+                # 예상하지 못한 문제 — 예전엔 진행 창만 사라지고 아무 말이 없었다
+                import traceback
+                traceback.print_exc()
+                why = f"압축을 푸는 중 문제가 생겼습니다: {display_text(str(e)) or type(e).__name__}"
             job.ask(lambda reply, why=why, n=arc_name: F.ask_choice(
                 job.dialog_parent(), "압축을 풀 수 없습니다", f"'{n}'의 압축을 풀 수 없습니다.",
                 why, [(True, "확인", True)], reply, default=True, icon="dialog-error-symbolic", modal=False))
@@ -958,12 +1015,15 @@ def _walk(job, top, skip_real):
             continue
         yield p, arc, st
         if stat.S_ISDIR(st.st_mode):
-            try:
-                names = sorted(os.listdir(p), reverse=True)
-            except OSError as e:
-                if job.error(e, display_text(arc), "read") == "skip":
-                    continue
-                names = []
+            names = None
+            while names is None:                   # "다시 시도"는 정말 다시 읽는다 (예전엔 빈 폴더로 넘어갔다)
+                try:
+                    names = sorted(os.listdir(p), reverse=True)
+                except OSError as e:
+                    if job.error(e, display_text(arc), "read") == "skip":
+                        break
+            if names is None:
+                continue
             for nm in names:
                 stack.append((os.path.join(p, nm), arc + "/" + nm))
 

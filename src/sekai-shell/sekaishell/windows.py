@@ -36,7 +36,7 @@ SKIP_CLASSES = {"", "lxpolkit", "polkit-gnome-authentication-agent-1", "polkit-a
 # 제목 표시줄(hyprbars)을 빼는 창 — hyprland.conf 의 nobar 규칙과 같게
 NOBAR = re.compile(r"^(chromium|google-chrome.*|org\.gnome\..*)$")
 #   클래스 → 처음 제목. 파일 탐색기는 본 창만 제목 표시줄을 스스로 그린다 (대화상자는 hyprbars)
-NOBAR_TITLED = {"org.sekaios.Files": re.compile(r"^(org\.sekaios\.Files|파일 탐색기)$")}
+NOBAR_TITLED = {"org.sekaios.Files": re.compile(r"^org\.sekaios\.Files$")}
 
 
 class WindowManager:
@@ -112,6 +112,10 @@ class WindowManager:
         if NOBAR.match(cls) or (titled and titled.match(c.get("initialTitle") or "")):
             return 0
         try:
+            # 설정 › 개인 설정에서 제목 표시줄을 껐으면 막대가 없다 (높이 값은 그대로 남아 있다)
+            on = self.hypr.query("getoption plugin:hyprbars:enabled") or {}
+            if isinstance(on, dict) and on.get("int") == 0:
+                return 0
             opt = self.hypr.query("getoption plugin:hyprbars:bar_height") or {}
             return int(opt.get("int") or 0)
         except Exception:
