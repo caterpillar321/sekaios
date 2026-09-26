@@ -1,0 +1,20 @@
+#!/bin/sh
+# SekaiOS — 커널 글자 콘솔(fbcon)을 화면에서 떼고 붙인다.
+#   sekai-fbcon off       로그인 화면이 뜨기 전 (greetd.service 의 ExecStartPre)
+#   sekai-fbcon on ttyN   비상용 글자 콘솔(Ctrl+Alt+F2~F6)을 열 때 (getty@.service.d/sekai-fbcon.conf)
+#
+# 로그인 관리자(greetd)는 세션을 열 때, logind 는 세션이 화면을 놓을 때 가상 터미널을 글자 모드(KD_TEXT)로
+# 바꾼다. 글자 콘솔이 붙어 있으면 커널이 그때 화면 제어권과 상관없이 콘솔 화면을 모니터에 다시 건다 —
+# 부팅 화면 → 로그인 화면, 로그인 화면 → 바탕화면 사이에 까만 콘솔(글자가 남아 있으면 그 글자)이 잠깐 보였다.
+# 떼어 두면 글자 모드로 바뀌어도 모니터엔 마지막 그림이 남고 다음 화면이 그대로 넘겨받는다.
+# 부팅 때 커널이 모니터를 바탕화면 모드로 켜는 것(video=)은 콘솔이 붙어 있어야 하므로, 뗄 때는 그 뒤다.
+case "${1:-}" in
+    off) v=0 ;;
+    on)  v=1; [ "${2:-}" = tty1 ] && exit 0 ;;   # 1번은 그래픽 화면 자리
+    *)   echo "사용법: sekai-fbcon off | on ttyN" >&2; exit 2 ;;
+esac
+for c in /sys/class/vtconsole/vtcon*; do
+    grep -qi "frame buffer" "$c/name" 2>/dev/null || continue
+    [ "$(cat "$c/bind" 2>/dev/null)" = "$v" ] || echo "$v" > "$c/bind" 2>/dev/null || true
+done
+exit 0

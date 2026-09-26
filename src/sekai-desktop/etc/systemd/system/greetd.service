@@ -7,6 +7,7 @@
 #        그 사이 모니터가 연결을 다시 알리면 콘솔이 화면을 다시 잡았다 (부팅 화면이 사라지고 깜박였다)
 #     ③ 로그인 화면이 뜬 뒤에 Plymouth 를 끝낸다 (plymouth-handoff)
 #     ④ 그래픽 장치를 열어 두는 도우미를 띄운다 (sekai-drm-hold — 로그인 ↔ 바탕화면 사이 콘솔 화면 방지)
+#     ⑤ 커널 글자 콘솔을 화면에서 뗀다 (sekai-fbcon — greetd·logind 가 글자 모드로 바꿀 때 콘솔이 끼어들지 않게)
 #   실행 명령은 greetd.service.d/sekai.conf 가 greetd-launch 로 바꾼다.
 [Unit]
 Description=Greeter daemon
@@ -19,6 +20,9 @@ OnFailure=plymouth-quit.service
 
 [Service]
 Type=simple
+# 커널 글자 콘솔을 화면에서 뗀다 — greetd·logind 가 가상 터미널을 글자 모드로 바꿀 때 콘솔이 끼어들지 않게
+#   (sekai-fbcon 머리말. 글자 콘솔은 Ctrl+Alt+F2~F6 을 열면 다시 붙는다)
+ExecStartPre=-/usr/libexec/sekai/sekai-fbcon off
 # 요청 길(sekai-plymouth-release)이 없으면 예전처럼 여기서 비활성화한다 — 부팅 화면이 화면을 쥔 채로는
 #   로그인 화면이 화면을 잡지 못한다
 ExecStartPre=-/bin/sh -c 'systemctl -q is-active sekai-plymouth-release.path && [ -d /run/sekai-greeter ] || exec /usr/bin/plymouth deactivate'
