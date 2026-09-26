@@ -374,3 +374,11 @@ box.net-head { margin: 4px 0 18px 0; }
 button.net-back { background: transparent; border-color: transparent; border-radius: 6px; padding: 8px; }
 button.net-back:hover { background: @hover; }
 label.net-name { font-size: 20px; font-weight: 700; color: @fg; }
+
+/* 설정 찾기 — 결과의 페이지 이름, 찾아간 줄 잠깐 강조 */
+label.side-hit-sub { color: @text3; font-size: 12px; }
+.section row.item-found, .section row.item-found:hover, label.section-title.item-found {
+    background: alpha(@accent, 0.22);
+    transition: background 400ms ease-out;
+}
+label.section-title.item-found { border-radius: 6px; }

@@ -1091,7 +1091,9 @@ class StartMenu(Gtk.Window):
             launch(row.app)
             self.close()
         elif kind == "setting":
-            self._run(["sekai-settings", "--page=" + row.item["page"]])
+            # 항목(볼륨·고정 IP …)이면 설정 앱이 그 줄을 찾아 보여 준다
+            self._run(["sekai-settings", "--page=" + row.item["page"]] +
+                      (["--item=" + row.item["title"]] if row.item.get("sub") else []))
         elif kind == "file":
             self._open_file(row.item)
         elif kind == "calc":

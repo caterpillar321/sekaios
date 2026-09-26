@@ -31,6 +31,7 @@ INITIALS = 600       # 초성 (+30 맨 앞, +15 단어 앞)
 CONVERT = 500        # 한/영 변환해서 맞다 (+10~40)
 DESC = 300           # 설명에만 있다
 COMPOSE_PEN = 20     # 조합 중인 글자로 맞은 것은 같은 단계에서 조금 뒤로
+NOSPACE_PEN = 30     # 띄어쓰기를 빼고 맞은 것도 (한자변환 → 한자 변환 키)
 KEYWORD = 650        # 일반 이름·키워드·실행 파일·별칭에 그대로 맞음 (650~680) — 이름에 든 것보다 뒤,
 SECONDARY_PEN = 40   #   초성·변환으로 맞으면 같은 방법의 이름보다 이만큼 뒤
 RECENT_BONUS = 60    # 최근에 연 파일
@@ -236,6 +237,15 @@ def _direct(q, t):
     return CONTAIN
 
 
+def _nospace(q, f):
+    """띄어 쓰지 않은 검색어를 띄어 쓴 이름과 (한자변환 → 한자 변환 키, 고정ip → 고정 IP, 볼륨믹서 → 볼륨 믹서).
+    같은 단계에서 조금 뒤로 — 띄어 쓴 그대로 맞은 것이 먼저"""
+    if not q or " " in q or " " not in f.t:
+        return 0
+    s = _direct(q, f.t.replace(" ", ""))
+    return s - NOSPACE_PEN if s else 0
+
+
 def _compose(qo, f):
     """마지막 글자가 조합 중이어도 (크로ㅁ → 크로미움, 설저 → 설정, 크롬 → 크로미움).
     앞 글자들은 그대로 맞고, 마지막 글자의 낱자가 그 자리부터의 낱자로 시작하면 맞다
@@ -286,7 +296,7 @@ def _convert(qo, f):
     alt = qo.alt
     if alt is None:
         return 0
-    tier = max(_direct(alt.q, f.t), _compose(alt, f))
+    tier = max(_direct(alt.q, f.t), _compose(alt, f), _nospace(alt.q, f))
     if not tier or (qo.alt_strict and tier < WORD - COMPOSE_PEN):
         return 0
     return CONVERT + (tier - 600) // 10
@@ -294,7 +304,7 @@ def _convert(qo, f):
 
 def field_score(qo, f):
     """글 하나에 대한 점수 (0 = 안 맞음). 단계가 높은 방법부터 — 맞으면 아래 단계는 보지 않는다"""
-    s = max(_direct(qo.q, f.t), _compose(qo, f))
+    s = max(_direct(qo.q, f.t), _compose(qo, f), _nospace(qo.q, f))
     if qo.single:
         return s if s >= WORD - COMPOSE_PEN else _convert(qo, f)
     return s or _initials(qo, f) or _convert(qo, f)

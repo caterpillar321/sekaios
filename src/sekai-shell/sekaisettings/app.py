@@ -102,14 +102,24 @@ class SettingsWindow(Gtk.Window):
         self.search.get_style_context().add_class("side-search")
         self.search.connect("search-changed", self._on_search)
         self.search.connect("stop-search", lambda *_: self.search.set_text(""))
+        self.search.connect("activate", self._on_search_enter)
         side.pack_start(self.search, False, False, 0)
 
         sc = Gtk.ScrolledWindow()
         sc.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        both = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.list = Gtk.ListBox()
         self.list.get_style_context().add_class("side-list")
         self.list.connect("row-selected", self._on_row)
-        sc.add(self.list)
+        both.pack_start(self.list, False, False, 0)
+        # 찾기 결과 — 검색어가 있는 동안 페이지 목록 대신 (윈도우 설정처럼 "항목 · 페이지")
+        self.results = Gtk.ListBox()
+        self.results.get_style_context().add_class("side-list")
+        self.results.set_activate_on_single_click(True)
+        self.results.connect("row-activated", lambda _lb, r: self._open_hit(r))
+        self.results.set_no_show_all(True)
+        both.pack_start(self.results, False, False, 0)
+        sc.add(both)
         side.pack_start(sc, True, True, 0)
 
         self._rows = {}
@@ -131,9 +141,89 @@ class SettingsWindow(Gtk.Window):
         return side
 
     def _on_search(self, w):
-        q = w.get_text().strip().lower()
-        for r in self.list.get_children():
-            r.set_visible(not q or q in r.search_key)
+        """페이지 이름뿐 아니라 설정 항목(볼륨·고정 IP·자판 배열 …)까지 — 시작 메뉴와 같은 목록·같은 순위
+        (sekaishell/search.py 의 SETTINGS_PAGES · SETTINGS_ITEMS). 한글 초성·영타도 된다"""
+        q = w.get_text().strip()
+        for r in self.results.get_children():
+            r.destroy()
+        if not q:
+            self.results.hide()
+            self.list.show()
+            return
+        from sekaishell import search as S
+        hits = [e for _s, e in S.rank_settings(S.Query(q))][:40]
+        for e in hits:
+            r = Gtk.ListBoxRow()
+            r.entry = e
+            r.get_style_context().add_class("side-row")
+            h = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            h.pack_start(icon_image(e["icons"], 20), False, False, 0)
+            v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+            v.set_valign(Gtk.Align.CENTER)
+            t = Gtk.Label(label=e["title"], xalign=0)
+            t.set_ellipsize(3)                    # Pango.EllipsizeMode.END
+            v.pack_start(t, False, False, 0)
+            if e["sub"]:
+                s = Gtk.Label(label=e["sub"], xalign=0)
+                s.get_style_context().add_class("side-hit-sub")
+                v.pack_start(s, False, False, 0)
+            h.pack_start(v, True, True, 0)
+            r.add(h)
+            r.show_all()                          # 목록이 no_show_all 이라 show_all 이 줄까지 내려가지 않는다
+            self.results.add(r)
+        if not hits:
+            r = Gtk.ListBoxRow()
+            r.set_activatable(False)
+            r.set_selectable(False)
+            r.entry = None
+            l = Gtk.Label(label="결과가 없습니다", xalign=0)
+            l.get_style_context().add_class("side-hit-sub")
+            r.add(l)
+            r.show_all()
+            self.results.add(r)
+        self.list.hide()
+        self.results.show()
+
+    def _on_search_enter(self, _w):
+        first = self.results.get_row_at_index(0) if self.results.get_visible() else None
+        if first is not None and getattr(first, "entry", None):
+            self._open_hit(first)
+
+    def _open_hit(self, r):
+        e = getattr(r, "entry", None)
+        if not e:
+            return
+        self.search.set_text("")                  # 페이지 목록으로 돌아가고 그 페이지가 골라진다
+        self._select(e["page"])
+        if e["sub"]:
+            self.focus_item(e["page"], e["title"])
+
+    # ── 항목 찾아 보여 주기 ──────────────────────────────
+    def focus_item(self, page_id, title, tries=8):
+        """그 페이지에서 제목이 맞는 줄(또는 섹션 제목)로 스크롤하고 잠깐 강조한다.
+        페이지가 막 만들어져 크기가 아직 없으면 조금 뒤에 다시 (몇 번까지). 못 찾으면 페이지만 연다"""
+        def go(left=tries):
+            page = self.stack.get_child_by_name(page_id)
+            if page is None or self.stack.get_visible_child() is not page:
+                return False
+            target = _find_titled(page, title)
+            if target is None:
+                return False
+            box = page.get_child()
+            box = box.get_child() if isinstance(box, Gtk.Viewport) else box
+            pos = target.translate_coordinates(box, 0, 0) if box is not None else None
+            if pos is None or target.get_allocated_height() <= 1:
+                if left > 0:
+                    GLib.timeout_add(80, go, left - 1)
+                return False
+            if isinstance(page, Gtk.ScrolledWindow):
+                adj = page.get_vadjustment()
+                adj.set_value(max(adj.get_lower(), min(pos[1] - 96, adj.get_upper() - adj.get_page_size())))
+            ctx = target.get_style_context()
+            ctx.add_class("item-found")
+            GLib.timeout_add(1800, lambda: (ctx.remove_class("item-found"), False)[1])
+            return False
+        GLib.timeout_add(60, go)
 
     def _on_row(self, _lb, r):
         if r is not None:
@@ -235,6 +325,31 @@ class SettingsWindow(Gtk.Window):
         return False
 
 
+def _find_titled(root, title):
+    """root 아래에서 제목이 title 인 설정 줄(widgets.row — title_label)이나 섹션 제목을 찾는다.
+    똑같은 것 → 한쪽이 다른 쪽을 품는 것 순. 없으면 None"""
+    want = " ".join(title.split()).casefold()
+    exact, part = None, None
+    stack = [root]
+    while stack:
+        w = stack.pop()
+        text = None
+        tl = getattr(w, "title_label", None)
+        if isinstance(tl, Gtk.Label):
+            text = tl.get_text()
+        elif isinstance(w, Gtk.Label) and w.get_style_context().has_class("section-title"):
+            text = w.get_text()
+        if text and w.get_mapped():
+            t = " ".join(text.split()).casefold()
+            if t == want:
+                exact = exact or w
+            elif part is None and t and (want in t or t in want):
+                part = w
+        if isinstance(w, Gtk.Container):
+            stack.extend(reversed(w.get_children()))
+    return exact or part
+
+
 def _error_page(title, err):
     from .widgets import Page
     p = Page(title, "이 페이지를 만드는 중 오류가 났습니다.")
@@ -244,6 +359,14 @@ def _error_page(title, err):
     l.set_selectable(True)
     p.add_widget(l)
     return p
+
+
+def _start_item(args):
+    """--item=<항목 제목> — 그 페이지에서 찾아 보여 줄 줄 (시작 메뉴 검색에서 항목을 고르면)"""
+    for a in args:
+        if a.startswith("--item="):
+            return a.split("=", 1)[1] or None
+    return None
 
 
 def _start_page(args):
@@ -263,10 +386,13 @@ class SettingsApp(Gtk.Application):
         self.win = None
 
     def do_command_line(self, cl):
-        start = _start_page(cl.get_arguments()[1:])
+        args = cl.get_arguments()[1:]
+        start, item = _start_page(args), _start_item(args)
         if self.win is not None:                 # 이미 떠 있다 — 앞으로
             if start:
                 self.win._select(start)
+                if item:
+                    self.win.focus_item(start, item)
             self.win.present()
             return 0
 
@@ -280,6 +406,8 @@ class SettingsApp(Gtk.Application):
         self.win = win = SettingsWindow(store, start)
         self.add_window(win)                      # 창을 닫으면 프로그램도 끝난다
         win.show_all()
+        if start and item:
+            win.focus_item(start, item)
 
         # 개발용: SEKAI_SHOT=/경로.png 이면 창을 찍고 종료한다.
         #   (원격에서 화면을 직접 볼 수 없을 때 쓰려고 넣어 둔 것)
@@ -303,7 +431,7 @@ class SettingsApp(Gtk.Application):
 def main(argv=None):
     argv = argv if argv is not None else sys.argv[1:]
     if any(a in ("-h", "--help") for a in argv):
-        print("사용법: sekai-settings [--page=<아이디>]")
+        print("사용법: sekai-settings [--page=<아이디> [--item=<항목 제목>]]")
         print("  페이지:", ", ".join(p["id"] for p in all_pages()))
         return 0
     return SettingsApp().run([sys.argv[0]] + list(argv))
