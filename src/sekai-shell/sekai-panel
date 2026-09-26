@@ -1586,6 +1586,7 @@ class Panel(Gtk.Window, TaskbarMixin):
 
         self.gdk_monitor = primary_monitor()
         self.others = []                        # 다른 모니터들의 작업 표시줄 (SecondaryPanel)
+        self.sekai_keep_shown = True            # 모니터가 빠져 레이어가 닫혀도 다시 띄운다 (sekaishell.layer)
         GtkLayerShell.init_for_window(self)
         GtkLayerShell.set_namespace(self, "sekai-panel")     # 뒤를 흐리게 (hyprland layerrule)
         if self.gdk_monitor is not None:
@@ -1936,6 +1937,8 @@ class Panel(Gtk.Window, TaskbarMixin):
         if prim is not None and prim != self.gdk_monitor:
             self.gdk_monitor = prim
             GtkLayerShell.set_monitor(self, prim)
+        if not self.get_visible():              # 그 모니터가 빠져 레이어가 닫혔다 — 주 모니터에 다시
+            self.show()
         for i in range(disp.get_n_monitors()):
             m = disp.get_monitor(i)
             if m != self.gdk_monitor:

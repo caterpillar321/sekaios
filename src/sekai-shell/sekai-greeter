@@ -242,6 +242,7 @@ class Greeter(Gtk.Window):
         self.busy = False
 
         GtkLayerShell.init_for_window(self)
+        self.sekai_keep_shown = True        # 모니터를 끄거나 빼도 남은 모니터에 다시 (sekaishell.layer)
         GtkLayerShell.set_namespace(self, "sekai-greeter")
         GtkLayerShell.set_layer(self, GtkLayerShell.Layer.OVERLAY)
         for e in (GtkLayerShell.Edge.TOP, GtkLayerShell.Edge.BOTTOM,

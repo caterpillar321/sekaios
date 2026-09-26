@@ -22,7 +22,38 @@ WAYLAND = bool(os.environ.get("WAYLAND_DISPLAY")) and os.environ.get("XDG_SESSIO
 
 if WAYLAND:
     gi.require_version("GtkLayerShell", "0.1")
-    from gi.repository import GtkLayerShell  # noqa: E402,F401
+    from gi.repository import GtkLayerShell as _GLS  # noqa: E402
+
+    def _layer_closed(win, *_):
+        """컴포지터가 이 레이어를 닫았다 (그 모니터를 빼거나 껐다). gtk-layer-shell 은 여기서 창을 닫아(파괴)
+        작업 표시줄이 세션 끝까지 사라졌고, 로그인 화면은 프로그램이 끝나 greetd 가 다시 뜨기를 되풀이했다.
+        파괴하지 않고 숨긴다 — 다시 보일 때 새 레이어로 붙는다. sekai_keep_shown 인 창(작업 표시줄·로그인
+        화면)은 남은 모니터에 곧 다시 띄운다. 레이어 창은 사용자가 닫는 창이 아니라 막아도 잃는 게 없다"""
+        win.hide()
+        if getattr(win, "sekai_keep_shown", False):
+            def revive():
+                if not win.get_visible():
+                    try:
+                        _GLS.set_monitor(win, None)      # 빠진 모니터 대신 컴포지터가 고르게
+                    except Exception:
+                        pass
+                    win.show()
+                return False
+            GLib.timeout_add(300, revive)
+        return True
+
+    class _LayerShell:
+        """진짜 GtkLayerShell 그대로 — init_for_window 만 창 닫힘 막기를 더한다 (_layer_closed)"""
+
+        def __getattr__(self, name):
+            return getattr(_GLS, name)
+
+        @staticmethod
+        def init_for_window(win):
+            _GLS.init_for_window(win)
+            win.connect("delete-event", _layer_closed)
+
+    GtkLayerShell = _LayerShell()
 else:
     gi.require_version("GdkX11", "3.0")
     from gi.repository import GdkX11  # noqa: E402,F401  (창의 get_xid)

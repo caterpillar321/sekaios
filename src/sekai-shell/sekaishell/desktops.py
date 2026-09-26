@@ -199,11 +199,27 @@ def _name_live(names, i, live=None):
     _ctl("dispatch", "renameworkspace", f"{i} {display(names, i)}")
 
 
-def _evict(ids, live):
-    """ids 중 다른 모니터가 보여 주고 있는 번호가 있으면 그 모니터를 데스크톱 번호 밖(MAX 넘어)의 빈
-    워크스페이스로 옮긴다 — 새 데스크톱이 남의 화면(둘째 모니터의 워크스페이스)을 가져오지 않게.
-    Hyprland 에는 초점 없는 모니터의 워크스페이스를 바꾸는 명령이 없어 잠깐 그 모니터로 초점을 옮긴다"""
-    hit = [k for k in ids if k in live.others]
+def _desk(live, names):
+    """(지금 데스크톱 워크스페이스, 그것을 보여 주는 모니터) — 데스크톱 수를 늘리기 전의 이름 목록으로 정한다
+    (늘린 뒤에 정하면 둘째 모니터가 보여 주던 N+1 번이 데스크톱처럼 보여 그 모니터를 골랐다)"""
+    d = live.desk(names)
+    return d, live.mon_of.get(d)
+
+
+def _focus_mon(live, mon):
+    """초점을 데스크톱 모니터로 — workspace 명령은 초점 모니터에 걸려, 둘째 모니터에서 데스크톱을
+    바꾸거나 만들면 데스크톱이 그 모니터로 넘어갔다. 데스크톱을 여는 곳은 모두 focusworkspaceoncurrentmonitor
+    (그 워크스페이스가 다른 모니터에 딸려 있어도 이 모니터로 가져온다 — workspace 는 원래 모니터로 초점을 옮겼다)"""
+    if mon and mon != live.focused_mon:
+        _ctl("dispatch", "focusmonitor", mon)
+        live.focused_mon = mon
+
+
+def _evict(ids, live, desk_ws=None):
+    """ids 중 데스크톱이 아닌 모니터(둘째 모니터)가 보여 주고 있는 번호가 있으면 그 모니터를 데스크톱 번호
+    밖(MAX 넘어)의 빈 워크스페이스로 옮긴다 — 새 데스크톱이 남의 화면을 가져오지 않게. 초점이 그 모니터에
+    있어도 옮긴다. Hyprland 에는 초점 없는 모니터의 워크스페이스를 바꾸는 명령이 없어 잠깐 초점을 옮긴다"""
+    hit = [k for k in ids if k in ({live.active} | live.others) - {desk_ws}]
     if not hit:
         return
     mons = [m for m in _ctl("monitors", js=True) or [] if isinstance(m, dict)]
@@ -215,7 +231,7 @@ def _evict(ids, live):
     cmds = []
     for m in mons:
         k = (m.get("activeWorkspace") or {}).get("id")
-        if k in hit and not m.get("focused"):
+        if k in hit:
             cmds += [f"dispatch focusmonitor {m.get('name')}", f"dispatch workspace {free}"]
             for c in _ctl("clients", js=True) or []:
                 if isinstance(c, dict) and (c.get("workspace") or {}).get("id") == k and c.get("address"):
@@ -228,14 +244,16 @@ def _evict(ids, live):
     for k in hit:
         live.others.discard(k)
         live.ws.pop(k, None)
+        if live.active == k:
+            live.active = None              # 초점 모니터가 비켰다 — 데스크톱이 아니다
 
 
-def _ensure(i, live, names):
+def _ensure(i, live, names, desk_ws=None):
     """i 번까지 데스크톱이 있게 — 없으면 만들어 저장한다. 돌려주는 값: 이름 목록"""
     n = live.count(names)
     if i <= len(names):
         return names
-    _evict(range(n + 1, i + 1), live)
+    _evict(range(n + 1, i + 1), live, desk_ws)
     names = save(_pad(names, max(i, n)))
     for j in range(n + 1, i + 1):
         _ctl("keyword", "workspace", rule(names, j))
@@ -243,21 +261,14 @@ def _ensure(i, live, names):
 
 
 # ── 동작 (단축키 · 설정 앱) — 화면에 보일 글을 돌려준다 ──────────
-def _to_desk_monitor(live, names):
-    """초점을 데스크톱을 보여 주는 모니터로 — workspace 명령은 초점 모니터에 걸려, 둘째 모니터에서
-    데스크톱을 바꾸면 데스크톱이 그 모니터로 넘어갔다"""
-    mon = live.mon_of.get(live.desk(names))
-    if mon and mon != live.focused_mon:
-        _ctl("dispatch", "focusmonitor", mon)
-
-
 def go(i, live=None, names=None):
     live, names = live or Live(), names if names is not None else load()
     if not 1 <= i <= MAX:
         return None
-    names = _ensure(i, live, names)
-    _to_desk_monitor(live, names)
-    _ctl("dispatch", "workspace", i)
+    desk_ws, desk_mon = _desk(live, names)
+    names = _ensure(i, live, names, desk_ws)
+    _focus_mon(live, desk_mon)
+    _ctl("dispatch", "focusworkspaceoncurrentmonitor", i)
     _name_live(names, i, live)
     return display(names, i)
 
@@ -281,11 +292,13 @@ def new(switch=True):
     if n >= MAX:
         return Note(f"데스크톱은 {MAX}개까지 만들 수 있습니다")
     k = n + 1
-    _evict([k], live)
+    desk_ws, desk_mon = _desk(live, names)
+    _evict([k], live, desk_ws)
     names = save(_pad(names, n) + [""])
     _ctl("keyword", "workspace", rule(names, k))       # 규칙이 먼저 — 새로 생길 때 이 이름으로
     if switch:
-        _ctl("dispatch", "workspace", k)
+        _focus_mon(live, desk_mon)
+        _ctl("dispatch", "focusworkspaceoncurrentmonitor", k)
     # 번호가 같은 빈 워크스페이스가 남아 있을 수 있다 (앞서 지운 데스크톱) — 이름을 새로 붙이면
     #   Hyprland 가 규칙(persistent)도 다시 읽는다
     _ctl("dispatch", "renameworkspace", f"{k} {display(names, k)}")
@@ -296,7 +309,7 @@ def remove(k=None):
     """데스크톱 k(없으면 지금 것)를 닫는다 — 창은 왼쪽 데스크톱으로 (첫 데스크톱이면 오른쪽 것과 합친다)"""
     live, names = Live(), load()
     n = live.count(names)
-    cur = live.desk(names)
+    cur, desk_mon = _desk(live, names)
     k = k or cur
     if not k or n <= 1 or not 1 <= k <= n:
         return None
@@ -321,8 +334,8 @@ def remove(k=None):
     for i in range(k, n):
         _name_live(names, i, live)
     if cur is not None and k <= cur <= n:
-        _to_desk_monitor(live, names)
-        _ctl("dispatch", "workspace", final(cur))
+        _focus_mon(live, desk_mon)
+        _ctl("dispatch", "focusworkspaceoncurrentmonitor", final(cur))
         return display(names, final(cur))
     return None
 
@@ -341,8 +354,18 @@ def move(i):
     live, names = Live(), load()
     if not 1 <= i <= MAX:
         return None
-    names = _ensure(i, live, names)
-    _ctl("dispatch", "movetoworkspace", i)
+    a = _ctl("activewindow", js=True)
+    addr = a.get("address") if isinstance(a, dict) else None
+    desk_ws, desk_mon = _desk(live, names)
+    names = _ensure(i, live, names, desk_ws)
+    if addr and desk_mon and desk_mon != live.focused_mon:
+        # 둘째 모니터의 창 — 데스크톱은 첫 모니터에 있다: 그리로 가서 창을 불러온다
+        #   (그냥 movetoworkspace 하면 새 데스크톱이 둘째 모니터에 생겼다)
+        _focus_mon(live, desk_mon)
+        _ctl("dispatch", "focusworkspaceoncurrentmonitor", i)
+        _ctl("dispatch", "movetoworkspace", f"{i},address:{addr}")
+    else:
+        _ctl("dispatch", "movetoworkspace", i)
     _name_live(names, i, live)
     return display(names, i)
 
