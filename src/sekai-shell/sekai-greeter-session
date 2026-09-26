@@ -25,7 +25,25 @@ X=/usr/lib/sekai/x11
 #   예전엔 비밀번호를 10초 안에 넣으면 정상 로그인을 고장으로 알고 로그인 뒤에 X11 로그인 화면을
 #   띄웠다 (콘솔 화면 버퍼에 그려져 좌상단·보조 모니터에 로그인 화면이 남고, 로그인도 몇 초 늦었다).
 DONE="${XDG_RUNTIME_DIR:-/tmp}/sekai-greeter.done"
+
+# 부팅 화면(Plymouth)을 이제 비켜세운다 — 화면을 잡기 바로 전에. Plymouth 는 root 의 요청만 받으므로
+#   요청 파일을 두면 sekai-plymouth-release(.path) 가 대신 전하고 지운다 (최대 3초 기다림).
+#   greetd 가 시작할 때 비켜세우면 로그인 화면이 뜨기까지 2초쯤 아무도 화면을 잡지 않아, 그 사이 모니터가
+#   연결을 다시 알리면 콘솔이 화면을 다시 잡았다 (부팅 화면이 사라지고 모니터가 깜박였다).
+#   요청 길이 없으면 greetd.service 가 예전처럼 시작할 때 비켜세운다.
+release_splash() {
+    req=/run/sekai-greeter/plymouth-deactivate
+    [ -d /run/sekai-greeter ] && [ -w /run/sekai-greeter ] || return 0
+    : > "$req" 2>/dev/null || return 0
+    n=0
+    while [ -e "$req" ] && [ $n -lt 30 ]; do
+        sleep 0.1
+        n=$((n + 1))
+    done
+}
+
 run_greeter() {
+    release_splash
     if [ -n "${SEKAI_BASIC:-}" ]; then
         exec "$X/start" "$X/greeter" "$APP"
     fi

@@ -2,20 +2,26 @@
 #   데비안 유닛은 Plymouth 가 완전히 끝날 때까지 기다렸다가(plymouth-quit-wait) 로그인 화면을 띄운다.
 #   Plymouth 는 끝나며 화면을 지우므로 그 사이 모니터 신호가 끊겼다. GDM 처럼:
 #     ① 가상 터미널 1 (부팅 화면과 같은 곳 — 가상 터미널을 바꾸면 콘솔이 한 번 끼어든다)
-#     ② 시작 전엔 Plymouth 를 비활성화만 (로고가 남는다)
+#     ② 로그인 화면이 화면을 잡기 직전에 Plymouth 를 비활성화만 (로고가 남는다) — sekai-plymouth-release.
+#        greetd 가 시작할 때 비활성화하면 로그인 화면 Hyprland 가 뜨기까지 2초쯤 아무도 화면을 잡지 않아,
+#        그 사이 모니터가 연결을 다시 알리면 콘솔이 화면을 다시 잡았다 (부팅 화면이 사라지고 깜박였다)
 #     ③ 로그인 화면이 뜬 뒤에 Plymouth 를 끝낸다 (plymouth-handoff)
 #     ④ 그래픽 장치를 열어 두는 도우미를 띄운다 (sekai-drm-hold — 로그인 ↔ 바탕화면 사이 콘솔 화면 방지)
 #   실행 명령은 greetd.service.d/sekai.conf 가 greetd-launch 로 바꾼다.
 [Unit]
 Description=Greeter daemon
 After=systemd-user-sessions.service plymouth-start.service
+Wants=sekai-plymouth-release.path
+After=sekai-plymouth-release.path
 After=getty@tty1.service
 Conflicts=getty@tty1.service plymouth-quit.service
 OnFailure=plymouth-quit.service
 
 [Service]
 Type=simple
-ExecStartPre=-/usr/bin/plymouth deactivate
+# 요청 길(sekai-plymouth-release)이 없으면 예전처럼 여기서 비활성화한다 — 부팅 화면이 화면을 쥔 채로는
+#   로그인 화면이 화면을 잡지 못한다
+ExecStartPre=-/bin/sh -c 'systemctl -q is-active sekai-plymouth-release.path && [ -d /run/sekai-greeter ] || exec /usr/bin/plymouth deactivate'
 ExecStart=greetd
 ExecStartPost=-/usr/libexec/sekai/plymouth-handoff
 # 로그인 화면이 화면을 잡은 뒤 — 그래픽 장치를 열어 두는 도우미 (넘어갈 때 콘솔 화면이 끼어들지 않게)

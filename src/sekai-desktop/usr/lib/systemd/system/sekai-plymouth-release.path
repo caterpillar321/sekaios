@@ -1,0 +1,8 @@
+[Unit]
+Description=SekaiOS: wait for the login screen to take over the screen from the boot splash
+# 로그인 화면(sekai-greeter-session)이 화면을 잡기 직전에 요청 파일을 만든다 — 그때 부팅 화면(Plymouth)을
+#   비켜세운다 (sekai-plymouth-release.service). greetd.service 가 이것을 먼저 띄운다.
+
+[Path]
+PathExists=/run/sekai-greeter/plymouth-deactivate
+Unit=sekai-plymouth-release.service

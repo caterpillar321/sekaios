@@ -1,0 +1,9 @@
+[Unit]
+Description=SekaiOS: boot splash steps aside for the login screen
+# 부팅 화면(Plymouth)은 root 의 요청만 받는다 — 로그인 화면(_greetd)이 요청 파일을 만들면 대신 전한다.
+#   비활성화만 한다(로고는 남는다). 끝내는 것은 로그인 화면이 뜬 뒤 plymouth-handoff.
+
+[Service]
+Type=oneshot
+ExecStart=-/usr/bin/plymouth deactivate
+ExecStart=/bin/rm -f /run/sekai-greeter/plymouth-deactivate

@@ -1,17 +1,19 @@
 #!/bin/bash
-# SekaiOS — Plymouth 를 데비안 소스로 다시 빌드 (패치 하나: 커널이 잡아 둔 화면 모드를 그대로 쓴다)
+# SekaiOS — Plymouth 를 데비안 소스로 다시 빌드 (패치 둘: 커널이 잡아 둔 화면 모드를 그대로 쓴다, 켜 둔 모니터가 잠깐 끊겨도 그대로)
 #   sudo ~/MyOS/scripts/build-plymouth.sh      (buildroot 가 있어야 한다 — scripts/build-hypr.sh)
 #
 # 왜: Plymouth 24 의 DRM 렌더러는 커널(fbdev, 커널 옵션 video=)이 이미 켜 둔 모드가 있어도
 #   모니터의 "권장 모드"(EDID preferred)를 먼저 골라 다시 잡는다. 권장 모드가 바탕화면 모드(165Hz 등)와
 #   다르면 부팅 화면이 뜰 때 한 번, 로그인 화면이 뜰 때 또 한 번 모니터 신호가 끊겼다.
 #   패치: 켜져 있는 모드가 있으면 그것을 먼저 (없을 때만 권장 모드). 데비안 패키징은 그대로.
+#   +sekai2: 깨어나는 모니터가 연결을 잠깐 끊었다 다시 알려도 떼어 내지 않는다 (patch-plymouth-keeplit.py —
+#   떼어 내면 그 출력이 꺼지고, 돌아올 때 콘솔이 화면을 다시 잡아 부팅 화면이 사라지고 모니터가 깜박였다)
 set -euo pipefail
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 P="$(dirname "$SELF")"
 BR="$P/buildroot"
 PKGDIR="$P/packages"
-SUFFIX="+sekai1"
+SUFFIX="+sekai2"
 
 say(){ printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 [ "$(id -u)" -eq 0 ] || { echo "E: sudo 로 실행하세요"; exit 1; }
@@ -31,6 +33,7 @@ mountpoint -q "$BR/dev/pts" || mount --bind /dev/pts "$BR/dev/pts"
 mountpoint -q "$BR/run"     || mount -t tmpfs tmpfs "$BR/run"
 cp -L /etc/resolv.conf "$BR/etc/resolv.conf"
 install -m644 "$SELF/hypr/patch-plymouth-activemode.py" "$BR/build/patch-plymouth-activemode.py"
+install -m644 "$SELF/hypr/patch-plymouth-keeplit.py" "$BR/build/patch-plymouth-keeplit.py"
 
 chroot "$BR" /usr/bin/env -i HOME=/root PATH=/usr/sbin:/usr/bin:/sbin:/bin \
     DEBIAN_FRONTEND=noninteractive LC_ALL=C.UTF-8 SUFFIX="$SUFFIX" /bin/bash -euo pipefail -c '
@@ -42,9 +45,10 @@ chroot "$BR" /usr/bin/env -i HOME=/root PATH=/usr/sbin:/usr/bin:/sbin:/bin \
     apt-get source -qq plymouth >/dev/null 2>&1
     cd plymouth-*/
     python3 /build/patch-plymouth-activemode.py src/plugins/renderers/drm/plugin.c
+    python3 /build/patch-plymouth-keeplit.py src/plugins/renderers/drm/plugin.c
     ver=$(dpkg-parsechangelog -S Version)
     DEBFULLNAME="SekaiOS" DEBEMAIL="sekai@localhost" dch -b -v "${ver}${SUFFIX}" -D trixie \
-        "SekaiOS: DRM 렌더러가 커널이 켜 둔 화면 모드를 먼저 쓴다 (부팅 때 모니터 신호가 끊기지 않게)"
+        "SekaiOS: DRM 렌더러가 커널이 켜 둔 화면 모드를 먼저 쓰고, 켜 둔 모니터가 잠깐 끊겨도 떼어 내지 않는다"
     dpkg-buildpackage -b -uc -us -j"$(nproc)" >/build/plymouth/build.log 2>&1 || { tail -30 /build/plymouth/build.log; exit 1; }
     ls /build/plymouth/*.deb
 '
