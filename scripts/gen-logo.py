@@ -45,4 +45,62 @@ c.arc(6, 6, 4.5, 0, 6.2832)
 c.set_source_rgb(*logo.TEAL)
 c.fill()
 dot.write_to_png(os.path.join(pdir, "dot.png"))
+
+
+# fastfetch 로고 — 글자 한 칸을 2×2 로 나눈 사분면 블록으로. $1 = 강조색(틸), $2 = 분홍 (색은
+#   etc/xdg/fastfetch/config.jsonc 가 정한다). 터미널 글자 칸은 폭이 높이의 절반쯤이라 세로를 반으로 줄인다
+QUAD = " ▘▝▀▖▌▞▛▗▚▐▜▄▙▟█"          # 번호 = 왼위 1 | 오른위 2 | 왼아래 4 | 오른아래 8
+
+
+def fastfetch_logo(cols=38, aspect=0.5, scale=10):
+    sw = cols * 2                              # 가로 작은 칸 수
+    sh = round(sw * aspect)                    # 세로 작은 칸 수
+    R = sw * scale
+    surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, R, R)
+    logo.draw(cairo.Context(surf), R)
+    surf.flush()
+    data, stride = surf.get_data(), surf.get_stride()
+    cw, ch = R / sw, R / sh
+
+    def sample(i, j):
+        """작은 칸 (i, j) → None · 1(틸) · 2(분홍)"""
+        a = r = g = n = 0
+        for y in range(int(j * ch), int((j + 1) * ch)):
+            row = y * stride
+            for x in range(int(i * cw), int((i + 1) * cw)):
+                b0, g0, r0, a0 = data[row + x * 4:row + x * 4 + 4]
+                a, r, g, n = a + a0, r + r0, g + g0, n + 1
+        if not n or a / n < 0.45 * 255:
+            return None
+        return 2 if r > g else 1
+
+    grid = [[sample(i, j) for i in range(sw)] for j in range(sh)]
+    lines = []
+    for cy in range(sh // 2):
+        out, cur = [], None
+        for cx in range(cols):
+            cells = [grid[cy * 2][cx * 2], grid[cy * 2][cx * 2 + 1],
+                     grid[cy * 2 + 1][cx * 2], grid[cy * 2 + 1][cx * 2 + 1]]
+            filled = [c for c in cells if c]
+            if not filled:
+                out.append(" ")
+                continue
+            color = max((1, 2), key=filled.count)      # 한 칸에 두 색이면 많은 쪽만
+            bits = sum(1 << k for k, c in enumerate(cells) if c == color)
+            if color != cur:
+                out.append(f"${color}")
+                cur = color
+            out.append(QUAD[bits])
+        lines.append("".join(out).rstrip())
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines) + "\n"
+
+
+fdir = os.path.join(OUT, "sekai", "fastfetch")
+os.makedirs(fdir, exist_ok=True)
+with open(os.path.join(fdir, "logo.txt"), "w", encoding="utf-8") as f:
+    f.write(fastfetch_logo())
 print("로고 파일 생성 완료")

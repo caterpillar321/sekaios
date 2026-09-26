@@ -33,8 +33,8 @@ from sekaishell.greetd import Greetd, GreetdError   # noqa: E402
 DEMO = os.environ.get("SEKAI_GREETER_DEMO") == "1"
 WALLPAPER = "/usr/share/backgrounds/sekai/hatsune.jpg"
 SESSION_CMD = ["/usr/bin/sekai-session"]
-SESSION_ENV = ["XDG_SESSION_TYPE=wayland", "XDG_CURRENT_DESKTOP=Hyprland",
-               "XDG_SESSION_DESKTOP=Hyprland"]
+SESSION_ENV = ["XDG_SESSION_TYPE=wayland", "XDG_CURRENT_DESKTOP=SekaiOS:Hyprland",
+               "XDG_SESSION_DESKTOP=SekaiOS"]           # (sekai-session 과 같게 — loginctl 의 Desktop 도 이것)
 STATE = os.path.expanduser("~/.cache/sekai-greeter")
 WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"]
 

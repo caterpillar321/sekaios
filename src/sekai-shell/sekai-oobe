@@ -32,7 +32,8 @@ DEMO = os.environ.get("SEKAI_OOBE_DEMO") == "1"
 SOCK = "/run/sekai-oobe.sock"
 WALLDIR = "/usr/share/backgrounds/sekai"
 SESSION_CMD = ["/usr/bin/sekai-session"]
-SESSION_ENV = ["XDG_SESSION_TYPE=wayland", "XDG_CURRENT_DESKTOP=Hyprland", "XDG_SESSION_DESKTOP=Hyprland"]
+SESSION_ENV = ["XDG_SESSION_TYPE=wayland", "XDG_CURRENT_DESKTOP=SekaiOS:Hyprland",
+               "XDG_SESSION_DESKTOP=SekaiOS"]           # (sekai-session 과 같게)
 
 LANGS = [("ko_KR.UTF-8", "한국어", "Korean"), ("en_US.UTF-8", "English", "영어 (미국)"),
          ("ja_JP.UTF-8", "日本語", "Japanese")]

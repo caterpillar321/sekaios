@@ -27,7 +27,8 @@ REV="sekai2"
 #   hyprland sekai9: 끌기 아이콘의 기준점(누른 점)을 지킨다 (patch-hyprland-dndhotspot.py)
 #   hyprbars sekai11: 대화상자(부모 창이 있는 창)에는 닫기 단추만, 두 번 눌러 최대화 안 함 (patch-hyprbars-dialog.py)
 #   hyprland sekai10: 창의 메뉴(팝업)는 작업 표시줄 같은 예약 영역을 피해 맞춘다 (patch-hyprland-popupreserved.py)
-rev_for() { case "$1" in hyprbars) echo sekai11 ;; hyprland) echo sekai10 ;; *) echo "$REV" ;; esac; }
+#   hyprland sekai11: 나타나기 전에 청한 최대화를 지킨다 — 최대화한 채 닫은 크롬 (patch-hyprland-initialmax.py)
+rev_for() { case "$1" in hyprbars) echo sekai11 ;; hyprland) echo sekai11 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
@@ -153,6 +154,7 @@ PYEOF
     python3 /build/patch-hyprland-layerfocus.py "$dir" || die "패치 실패 (layerfocus)"
     python3 /build/patch-hyprland-dndhotspot.py "$dir" || die "패치 실패 (dndhotspot)"
     python3 /build/patch-hyprland-popupreserved.py "$dir" || die "패치 실패 (popupreserved)"
+    python3 /build/patch-hyprland-initialmax.py "$dir" || die "패치 실패 (initialmax)"
     ok "패치 완료"
 }
 

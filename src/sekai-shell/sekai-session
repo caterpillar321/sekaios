@@ -8,9 +8,12 @@
 #  복사되고 끝이라 거기 넣으면 갱신이 안 된다.)
 # ═══════════════════════════════════════════════════════════
 
-export XDG_CURRENT_DESKTOP=Hyprland
+# 데스크톱 이름은 SekaiOS — 창을 그리는 합성기가 Hyprland 라는 것은 뒤에 붙여 둔다 (우분투의 "ubuntu:GNOME" 처럼).
+#   앱이 목록을 앞에서부터 본다: 포털은 sekaios-portals.conf 를 먼저 찾고, OnlyShowIn=Hyprland 인 것도 그대로 뜬다.
+#   Hyprland 는 이 값이 "Hyprland" 가 아니면 경고를 띄우므로 hyprland.conf 에서 끈다 (misc:disable_xdg_env_checks)
+export XDG_CURRENT_DESKTOP=SekaiOS:Hyprland
 export XDG_SESSION_TYPE=wayland
-export XDG_SESSION_DESKTOP=Hyprland
+export XDG_SESSION_DESKTOP=SekaiOS
 
 # 관리 명령(sbin)도 이름만으로 찾게 — 데비안은 일반 사용자 PATH 에 /usr/sbin 을 넣지 않아, 설정 앱이
 #   lpadmin·lpinfo(프린터) 같은 명령을 못 찾고 "인쇄 기능이 설치되어 있지 않습니다"라고 했다.

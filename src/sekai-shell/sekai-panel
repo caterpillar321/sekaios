@@ -270,7 +270,7 @@ def app_dirs():
     return out
 
 
-# 지금 데스크톱 — Hyprland 세션은 "Hyprland", 기본 화면 모드(X11, xfwm4)는 "SekaiOS"
+# 지금 데스크톱 — Hyprland 세션은 "SekaiOS:Hyprland", 기본 화면 모드(X11, xfwm4)는 "SekaiOS"
 CURRENT_DESKTOPS = [d for d in os.environ.get("XDG_CURRENT_DESKTOP", "").split(":") if d]
 
 

@@ -230,6 +230,12 @@ if [ "$1" = "configure" ]; then
     # "폴더에 표시"(org.freedesktop.FileManager1)는 파일 탐색기(sekai-files)가 맡는다. 예전 설치본에
     #   Thunar 가 남아 있으면 같은 이름을 서비스 파일 둘이 주장해 어느 쪽이 뜰지 모른다 → Thunar 것을
     #   옆 이름으로 옮겨 둔다 (dpkg-divert — Thunar 가 업데이트돼도 그 파일은 옮긴 이름으로 깔린다)
+    # /etc/os-release 는 데비안처럼 /usr/lib/os-release(이 패키지의 SekaiOS 것 — preinst 가 base-files 것을
+    #   옮겨 둔다)를 가리키는 링크로. 예전 이미지는 /etc/os-release 를 파일로 고쳐 두어, base-files 가
+    #   업데이트되면 링크로 바뀌며 데비안으로 돌아갔다 (fastfetch·설정 › 시스템 정보·lsb_release 가 "Debian")
+    if [ ! -L /etc/os-release ] && [ -f /usr/lib/os-release ] && grep -q '^ID=sekai' /usr/lib/os-release; then
+        ln -sfn ../usr/lib/os-release /etc/os-release
+    fi
     t=/usr/share/dbus-1/services/org.xfce.Thunar.FileManager1.service
     if ! dpkg-divert --listpackage "$t" 2>/dev/null | grep -qx sekai-desktop; then
         dpkg-divert --package sekai-desktop --rename --quiet --divert "$t.sekai-off" --add "$t" || true
@@ -264,6 +270,17 @@ if [ "$1" = "configure" ]; then
     fi
 fi
 PI
+cat > "$STAGE_D/DEBIAN/preinst" <<'PRI'
+#!/bin/sh
+set -e
+# /usr/lib/os-release 는 이 패키지가 싣는 SekaiOS 것 — base-files 의 것은 옆 이름으로 옮긴다
+#   (풀기 전에 해야 두 패키지가 같은 파일을 다투지 않는다. base-files 가 업데이트돼도 옆 이름으로 깔린다)
+if [ "$1" = "install" ] || [ "$1" = "upgrade" ]; then
+    if ! dpkg-divert --listpackage /usr/lib/os-release 2>/dev/null | grep -qx sekai-desktop; then
+        dpkg-divert --package sekai-desktop --rename --quiet --divert /usr/lib/os-release.debian --add /usr/lib/os-release
+    fi
+fi
+PRI
 cat > "$STAGE_D/DEBIAN/prerm" <<'PR'
 #!/bin/sh
 set -e
@@ -295,13 +312,17 @@ if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
         update-grub >/dev/null 2>&1 || true
     fi
 fi
+# 데비안의 os-release 를 되돌린다 (이 패키지의 것은 이미 지워졌다)
+if [ "$1" = "remove" ] || [ "$1" = "purge" ] || [ "$1" = "abort-install" ]; then
+    dpkg-divert --package sekai-desktop --rename --quiet --remove /usr/lib/os-release 2>/dev/null || true
+fi
 PO
 # shim·GRUB 이 업데이트되면 ESP 의 복사본도 새것으로 (postinst "triggered")
 cat > "$STAGE_D/DEBIAN/triggers" <<'TR'
 interest-noawait /usr/lib/shim
 interest-noawait /usr/lib/grub/x86_64-efi-signed
 TR
-chmod 755 "$STAGE_D/DEBIAN/postinst" "$STAGE_D/DEBIAN/prerm" "$STAGE_D/DEBIAN/postrm"
+chmod 755 "$STAGE_D/DEBIAN/preinst" "$STAGE_D/DEBIAN/postinst" "$STAGE_D/DEBIAN/prerm" "$STAGE_D/DEBIAN/postrm"
 
 copyright "$STAGE_D" sekai-desktop
 # GTK 테마(Sekai-Light · Sekai-Dark)는 Apache 2.0 이 아니라 GPL-3.0 — 원본 저작권·출처·소스 위치를 함께 적는다
@@ -339,7 +360,7 @@ Maintainer: SekaiOS <sekai@localhost>
 Section: metapackages
 Priority: optional
 Depends: sekai-shell (= ${FULL}),
- hyprland (>= 0.50.1-sekai10), hyprbars (>= 0.50.0-sekai11), hyprexpo, xwayland, binutils,
+ hyprland (>= 0.50.1-sekai11), hyprbars (>= 0.50.0-sekai11), hyprexpo, xwayland, binutils,
  xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr,
  foot, fuzzel, swaybg, swayidle, swaylock, grim, slurp,
  brightnessctl, playerctl, wtype, pkexec, efibootmgr, open-vm-tools, mokutil, pciutils, openssl,

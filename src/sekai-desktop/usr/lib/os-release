@@ -1,0 +1,13 @@
+PRETTY_NAME="SekaiOS 1.0 (Hatsune)"
+NAME="SekaiOS"
+VERSION_ID="1.0"
+VERSION="1.0 (Hatsune)"
+VERSION_CODENAME=hatsune
+ID=sekai
+ID_LIKE=debian
+LOGO=distributor-logo-sekaios
+HOME_URL="https://github.com/caterpillar321/sekaios"
+SUPPORT_URL="https://github.com/caterpillar321/sekaios/issues"
+BUG_REPORT_URL="https://github.com/caterpillar321/sekaios/issues"
+DEBIAN_VERSION_ID="13"
+DEBIAN_VERSION_CODENAME=trixie

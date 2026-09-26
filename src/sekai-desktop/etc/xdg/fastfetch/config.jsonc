@@ -1,0 +1,30 @@
+// SekaiOS — fastfetch 기본 설정: SekaiOS 로고(두 별)와 색.
+//   fastfetch 에는 SekaiOS 로고가 없어 ID_LIKE=debian 을 보고 데비안 로고를 그렸다.
+//   모듈(보일 항목)은 fastfetch 의 기본 목록 그대로 (설정 파일이 있으면 목록을 적어야 한다 — 없으면 로고만 나온다).
+//   바꾸려면 ~/.config/fastfetch/config.jsonc 를 만든다 (그쪽이 먼저 쓰인다).
+{
+  "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
+  "logo": {
+    "type": "file",
+    "source": "/usr/share/sekai/fastfetch/logo.txt",
+    "color": {
+      "1": "38;2;57;197;187",
+      "2": "38;2;255;107;157"
+    },
+    "padding": {
+      "top": 1,
+      "right": 3
+    }
+  },
+  "display": {
+    "color": {
+      "keys": "38;2;57;197;187",
+      "title": "38;2;255;107;157"
+    }
+  },
+  "modules": [
+    "title", "separator", "os", "host", "kernel", "uptime", "packages", "shell", "display", "de", "wm",
+    "wmtheme", "theme", "icons", "font", "cursor", "terminal", "terminalfont", "cpu", "gpu", "memory",
+    "swap", "disk", "localip", "battery", "poweradapter", "locale", "break", "colors"
+  ]
+}
