@@ -58,6 +58,7 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 
 from sekaishell import dbg, theme  # noqa: E402
+from sekaishell.sidecollapse import SideCollapse  # noqa: E402
 
 from .common import appearance, confirm, icon_image, notice  # noqa: E402
 from .pages import GROUPS, all_pages  # noqa: E402
@@ -76,7 +77,7 @@ ADMIN_CSS = """
 .adm-window { background: @winbg; color: @fg; }
 .adm-top { padding: 12px 24px 4px 24px; }
 .adm-search {
-    min-width: 380px;
+    min-width: 160px;
     background: @card;
     border: 1px solid @line;
     border-bottom: 2px solid @line;
@@ -85,6 +86,12 @@ ADMIN_CSS = """
 }
 .adm-search:focus { border-bottom-color: @accent; }
 .adm-bar { padding: 10px 24px 10px 24px; }
+/* 좁은 창 (왼쪽 목록을 접었을 때) — 단추 줄을 제목 아래로, 여백을 줄인다 */
+.adm-narrow .adm-top { padding: 10px 12px 4px 12px; }
+.adm-narrow .adm-bar { padding: 8px 12px 4px 12px; }
+.adm-actions-row { padding: 0 12px 8px 12px; }
+.adm-narrow .adm-actions-row button { padding-left: 10px; padding-right: 10px; }
+.adm-narrow .adm-body { padding: 0 8px 8px 8px; }
 .adm-title { font-size: 20px; font-weight: 700; color: @fg; }
 .adm-body { padding: 0 16px 16px 16px; }
 label.adm-group { padding: 14px 22px 4px 22px; font-size: 12px; font-weight: 600; color: @text3; }
@@ -230,7 +237,8 @@ class AdminWindow(Gtk.Window):
         self.set_default_size(max(760, int(w)), max(500, int(h)))
         if self.state.get("maximized"):
             self.maximize()
-        self.set_size_request(760, 480)
+        # 좁게도 줄어든다 — 좁으면 왼쪽 목록을 접는다 (SideCollapse)
+        self.set_size_request(380, 420)
         for c in ("settings-window", "adm-window"):
             self.get_style_context().add_class(c)
 
@@ -242,17 +250,18 @@ class AdminWindow(Gtk.Window):
         self._queries = {}                          # 페이지마다 검색어
         self._toast_src = 0
 
-        root = Gtk.Box(spacing=0)
-        self.add(root)
-        root.pack_start(self._build_sidebar(), False, False, 0)
+        side = self._build_sidebar()
         main = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         main.get_style_context().add_class("content")
-        root.pack_start(main, True, True, 0)
+        self.fold = SideCollapse(self, side, main, threshold=900, on_change=self._on_fold)
+        self.fold.close_on(self.rail)
+        self.add(self.fold.widget)
 
         self.top = Gtk.Box()
         self.top.get_style_context().add_class("adm-top")
         self.search = Gtk.SearchEntry()
         self.search.get_style_context().add_class("adm-search")
+        self.search.set_max_width_chars(40)           # 넓으면 이만큼, 좁으면 줄어든다
         self._search_sig = self.search.connect("search-changed", self._on_search)
         self.search.connect("stop-search", lambda *_: self.search.set_text(""))
         self.top.set_center_widget(self.search)
@@ -262,6 +271,7 @@ class AdminWindow(Gtk.Window):
 
         bar = Gtk.Box(spacing=10)
         bar.get_style_context().add_class("adm-bar")
+        bar.pack_start(self.fold.button, False, False, 0)
         self.page_title = Gtk.Label(xalign=0)
         self.page_title.get_style_context().add_class("adm-title")
         bar.pack_start(self.page_title, False, False, 0)
@@ -272,8 +282,15 @@ class AdminWindow(Gtk.Window):
         self.action_stack.set_homogeneous(False)
         bar.pack_end(self.action_stack, False, False, 0)
         main.pack_start(bar, False, False, 0)
+        self._bar = bar
+        # 좁을 때 단추 줄이 옮겨 가는 둘째 줄 (_on_fold)
+        self.actions_row = Gtk.Box()
+        self.actions_row.get_style_context().add_class("adm-actions-row")
+        self.actions_row.set_no_show_all(True)
+        main.pack_start(self.actions_row, False, False, 0)
 
         self.stack = Gtk.Stack()
+        self.stack.set_hhomogeneous(False)            # 안 보이는 페이지의 폭까지 창 최소 폭에 넣지 않는다
         self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self.stack.set_transition_duration(100)
         self.stack.get_style_context().add_class("adm-body")
@@ -300,6 +317,20 @@ class AdminWindow(Gtk.Window):
             first = next(iter(self.specs), None)
         if first:
             self.show_page(first, **((start_kw or {}) if first == start else {}))
+
+    def _on_fold(self, narrow):
+        """좁은 창 — 페이지마다의 단추들을 제목 아래 둘째 줄로 (한 줄에 두면 창의 최소 폭을 잡았다)"""
+        ctx = self.get_style_context()
+        (ctx.add_class if narrow else ctx.remove_class)("adm-narrow")
+        st = self.action_stack
+        st.get_parent().remove(st)
+        if narrow:
+            self.actions_row.pack_start(st, False, False, 0)
+            self.actions_row.show()
+        else:
+            self._bar.pack_end(st, False, False, 0)
+            self.actions_row.hide()
+        st.show()
 
     # ── 왼쪽 메뉴 ──
     def _build_sidebar(self):

@@ -21,6 +21,7 @@ from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 from . import dbg, theme  # noqa: E402
 from . import taskmgr_data as D  # noqa: E402
 from .taskmgr_common import AppResolver, appearance, icon_image  # noqa: E402
+from .sidecollapse import SideCollapse  # noqa: E402
 from .taskmgr_perf import PerfPage  # noqa: E402
 from .taskmgr_procs import DetailsPage, ProcessesPage  # noqa: E402
 from .taskmgr_startup import StartupPage  # noqa: E402
@@ -43,7 +44,7 @@ TM_CSS = """
 .tm-window { background: @winbg; color: @fg; }
 .tm-top { padding: 12px 24px 4px 24px; }
 .tm-search {
-    min-width: 380px;
+    min-width: 160px;
     background: @card;
     border: 1px solid @line;
     border-bottom: 2px solid @line;
@@ -105,6 +106,8 @@ button.tm-end:disabled { opacity: 0.55; }
 .perf-title { font-size: 14px; color: @fg; }
 .perf-sub { font-size: 12px; color: @text2; }
 .perf-main { padding: 4px 28px 24px 28px; }
+.perf-narrow .perf-main { padding: 4px 12px 16px 12px; }
+.perf-narrow .perf-picker { margin-left: 12px; }
 .perf-head { font-size: 26px; font-weight: 700; color: @fg; }
 .perf-model { font-size: 15px; color: @text2; }
 .perf-caprow { margin-top: 14px; margin-bottom: 4px; }
@@ -167,7 +170,8 @@ class TaskManagerWindow(Gtk.Window):
         self.set_default_size(max(720, int(w)), max(480, int(h)))
         if self.state.get("maximized"):
             self.maximize()
-        self.set_size_request(720, 460)
+        # 좁게도 줄어든다 — 좁으면 왼쪽 목록을 접는다 (SideCollapse, 윈도우 11 작업 관리자처럼)
+        self.set_size_request(380, 400)
         for c in ("settings-window", "tm-window"):
             self.get_style_context().add_class(c)
 
@@ -187,18 +191,20 @@ class TaskManagerWindow(Gtk.Window):
 
         self.collector = D.Collector(lambda s: GLib.idle_add(self._on_sample, s))
 
-        root = Gtk.Box(spacing=0)
-        self.add(root)
-        root.pack_start(self._build_sidebar(), False, False, 0)
+        side = self._build_sidebar()
         main = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         main.get_style_context().add_class("content")
-        root.pack_start(main, True, True, 0)
+        self.fold = SideCollapse(self, side, main, threshold=900)
+        self.fold.close_on(self.rail)
+        self.add(self.fold.widget)
 
         top = Gtk.Box()
         top.get_style_context().add_class("tm-top")
+        top.pack_start(self.fold.button, False, False, 0)
         self.search = Gtk.SearchEntry()
         self.search.set_placeholder_text("이름, 사용자 또는 PID 로 검색")
         self.search.get_style_context().add_class("tm-search")
+        self.search.set_max_width_chars(40)           # 넓으면 이만큼, 좁으면 줄어든다
         self.search.connect("search-changed", lambda e: self._current().set_query(e.get_text())
                             if self._current().searchable else None)
         self.search.connect("stop-search", lambda *_: self.clear_search())
@@ -215,6 +221,7 @@ class TaskManagerWindow(Gtk.Window):
         main.pack_start(bar, False, False, 0)
 
         self.stack = Gtk.Stack()
+        self.stack.set_hhomogeneous(False)            # 안 보이는 페이지의 폭까지 창 최소 폭에 넣지 않는다
         self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self.stack.set_transition_duration(100)
         self.stack.get_style_context().add_class("tm-body")

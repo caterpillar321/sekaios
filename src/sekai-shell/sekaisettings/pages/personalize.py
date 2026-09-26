@@ -134,6 +134,29 @@ def _bare_row(widget):
     return r
 
 
+class _Preview(Gtk.DrawingArea):
+    """보통은 w×h, 좁으면 min_w×min_h 까지 줄어드는 그림 칸 (가로·세로 비율은 그대로)"""
+
+    def __init__(self, w, h, min_w, min_h):
+        super().__init__()
+        self._size = (w, h, min_w, min_h)
+
+    def do_get_request_mode(self):
+        return Gtk.SizeRequestMode.HEIGHT_FOR_WIDTH
+
+    def do_get_preferred_width(self):
+        w, _h, mw, _mh = self._size
+        return mw, w
+
+    def do_get_preferred_height_for_width(self, width):
+        w, h, mw, mh = self._size
+        hh = max(mh, min(h, round(width * h / w)))
+        return hh, hh
+
+    def do_get_preferred_height(self):
+        return self._size[1], self._size[1]
+
+
 def _draw_mode_preview(area, cr, mode, store):
     """모드 미리보기 — 배경 위에 작은 창과 작업 표시줄"""
     from sekaishell import theme as _t
@@ -194,8 +217,7 @@ def build_appearance(store):
         b = Gtk.Button()
         b.get_style_context().add_class("mode-card")
         v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        prev = Gtk.DrawingArea()
-        prev.set_size_request(168, 100)
+        prev = _Preview(168, 100, 120, 72)       # 창이 좁으면 작아진다 (그림은 받은 크기에 맞춰 그린다)
         prev.connect("draw", _draw_mode_preview, m, store)
         v.pack_start(prev, False, False, 0)
         v.pack_start(Gtk.Label(label=label), False, False, 0)

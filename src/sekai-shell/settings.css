@@ -74,6 +74,9 @@
 /* ── 오른쪽 내용 ───────────────────────────────────────────── */
 .content { background: @winbg; }
 .page    { padding: 28px 36px 48px 36px; }
+/* 좁은 창 (왼쪽 목록을 접었을 때) — 여백을 줄인다 */
+.narrow .page { padding: 16px 16px 40px 16px; }
+.narrow .page-title { font-size: 24px; }
 
 .page-title { font-size: 28px; font-weight: 700; color: @fg; margin-bottom: 4px; }
 .page-sub   { font-size: 14px; color: @text2; margin-bottom: 20px; }

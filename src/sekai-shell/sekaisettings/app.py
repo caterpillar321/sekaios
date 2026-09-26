@@ -12,6 +12,7 @@ from gi.repository import Gtk, Gdk, Gio, GLib  # noqa: E402
 from .store import Store
 from .util import dbg
 from .widgets import icon_image
+from sekaishell.sidecollapse import SideCollapse
 from .pages import all_pages
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -57,7 +58,8 @@ class SettingsWindow(Gtk.Window):
         super().__init__(title="설정")
         self.store = store
         self.set_default_size(1100, 760)
-        self.set_size_request(760, 480)
+        # 좁게도 줄어든다 — 좁으면 왼쪽 목록을 접는다 (SideCollapse, 윈도우 11 설정처럼)
+        self.set_size_request(380, 420)
         self.get_style_context().add_class("settings-window")
 
         self._css = _load_css(store)
@@ -66,19 +68,37 @@ class SettingsWindow(Gtk.Window):
         self._rebuild_src = {}              # 페이지 아이디 → 예약된 다시 그리기
         self._stale = set()                 # 작업 중이라 다시 그리기를 미뤄 둔 페이지 (다음에 열 때)
 
-        root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        self.add(root)
-
-        root.pack_start(self._build_sidebar(), False, False, 0)
+        side = self._build_sidebar()
+        main = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        main.get_style_context().add_class("content")
+        # 좁을 때만 보이는 윗줄 — ≡ 단추와 앱 이름
+        self.narrow_bar = Gtk.Box(spacing=4)
+        self.narrow_bar.set_no_show_all(True)
+        nt = Gtk.Label(label="설정", xalign=0)
+        nt.get_style_context().add_class("side-title")
+        nt.show()
+        main.pack_start(self.narrow_bar, False, False, 0)
 
         self.stack = Gtk.Stack()
         self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self.stack.set_transition_duration(120)
         self.stack.get_style_context().add_class("content")
-        root.pack_start(self.stack, True, True, 0)
+        main.pack_start(self.stack, True, True, 0)
+
+        self.fold = SideCollapse(self, side, main, threshold=820, on_change=self._on_fold)
+        self.narrow_bar.pack_start(self.fold.button, False, False, 0)
+        self.narrow_bar.pack_start(nt, False, False, 0)
+        self.fold.close_on(self.list)
+        self.fold.close_on(self.results)
+        self.add(self.fold.widget)
 
         self._built = set()
         self._select(start_page or self.pages[0]["id"])
+
+    def _on_fold(self, narrow):
+        """좁은 창 — ≡ 줄을 보이고 페이지 여백을 줄인다 (settings.css 의 .narrow)"""
+        self.narrow_bar.set_visible(narrow)
+        (self.get_style_context().add_class if narrow else self.get_style_context().remove_class)("narrow")
 
     # ── 사이드바 ────────────────────────────────────────
     def _build_sidebar(self):
@@ -199,22 +219,30 @@ class SettingsWindow(Gtk.Window):
             self.focus_item(e["page"], e["title"])
 
     # ── 항목 찾아 보여 주기 ──────────────────────────────
-    def focus_item(self, page_id, title, tries=8):
+    def focus_item(self, page_id, title, tries=25):
         """그 페이지에서 제목이 맞는 줄(또는 섹션 제목)로 스크롤하고 잠깐 강조한다.
-        페이지가 막 만들어져 크기가 아직 없으면 조금 뒤에 다시 (몇 번까지). 못 찾으면 페이지만 연다"""
-        def go(left=tries):
+        페이지가 막 만들어져 줄이 아직 없거나(소리·네트워크·프린터는 작업 스레드에서 읽은 뒤에 줄을 그린다)
+        크기가 없으면 조금 뒤에 다시 (2초쯤까지). 그래도 없으면 대신 보일 줄(FOCUS_ANCHORS — 접힌 곳·다른 화면
+        안의 항목)로, 그것도 없으면 페이지만 연다"""
+        anchor = FOCUS_ANCHORS.get((page_id, title))
+
+        def go(left=tries, want=title):
             page = self.stack.get_child_by_name(page_id)
             if page is None or self.stack.get_visible_child() is not page:
                 return False
-            target = _find_titled(page, title)
+            target = _find_titled(page, want)
             if target is None:
+                if left > 0:
+                    GLib.timeout_add(80, go, left - 1, want)
+                elif anchor and want != anchor:
+                    GLib.idle_add(go, 5, anchor)
                 return False
             box = page.get_child()
             box = box.get_child() if isinstance(box, Gtk.Viewport) else box
             pos = target.translate_coordinates(box, 0, 0) if box is not None else None
             if pos is None or target.get_allocated_height() <= 1:
                 if left > 0:
-                    GLib.timeout_add(80, go, left - 1)
+                    GLib.timeout_add(80, go, left - 1, want)
                 return False
             if isinstance(page, Gtk.ScrolledWindow):
                 adj = page.get_vadjustment()
@@ -242,6 +270,10 @@ class SettingsWindow(Gtk.Window):
                 import traceback
                 traceback.print_exc()
                 w = _error_page(pg["title"], e)
+            if isinstance(w, Gtk.ScrolledWindow):
+                # 가로로도 밀릴 수 있게 — 페이지의 가장 넓은 줄이 창의 최소 폭을 잡지 않는다 (좁은 스냅 칸에 들어가게).
+                #   창이 그보다 넓으면 줄은 창 폭에 맞춰 그대로 늘어난다
+                w.set_policy(Gtk.PolicyType.AUTOMATIC, w.get_policy()[1])
             w.show_all()
             old = self.stack.get_child_by_name(page_id)
             if old is not None:               # 다시 그리는 중 — 옛 것의 이름을 비워 준다 (rebuild_page 가 곧 없앤다)
@@ -325,6 +357,23 @@ class SettingsWindow(Gtk.Window):
         return False
 
 
+# 검색 항목이 가리키는 줄이 페이지에 바로 보이지 않을 때 대신 보일 줄 — (페이지, 항목 제목) → 줄 제목
+#   (펼쳐야 보이는 줄, 프린터·연결을 골라야 나오는 화면 안의 줄, 따로 줄이 없는 항목)
+FOCUS_ANCHORS = {
+    ("sound", "음소거"): "볼륨",
+    ("sound", "좌우 밸런스"): "장치 속성",
+    ("sound", "프로필"): "장치 속성",
+    ("network", "IP 할당 · DNS 서버"): "이더넷",
+    ("network", "유선 연결"): "이더넷",
+    ("printers", "프린터 속성"): "내 프린터",
+    ("printers", "프린터 제거"): "내 프린터",
+    ("printers", "기본 프린터"): "내 프린터",
+    ("printers", "인쇄 기본 설정"): "내 프린터",
+    ("printers", "인쇄 대기열"): "내 프린터",
+    ("printers", "테스트 페이지 인쇄"): "내 프린터",
+}
+
+
 def _find_titled(root, title):
     """root 아래에서 제목이 title 인 설정 줄(widgets.row — title_label)이나 섹션 제목을 찾는다.
     똑같은 것 → 한쪽이 다른 쪽을 품는 것 순. 없으면 None"""
@@ -343,7 +392,8 @@ def _find_titled(root, title):
             t = " ".join(text.split()).casefold()
             if t == want:
                 exact = exact or w
-            elif part is None and t and (want in t or t in want):
+            elif part is None and t and (want in t or (len(t) >= 3 and t in want)):
+                # (짧은 제목 — 한두 글자 SSID 따위 — 가 긴 검색어 안에 우연히 들어 있다고 고르지 않게)
                 part = w
         if isinstance(w, Gtk.Container):
             stack.extend(reversed(w.get_children()))

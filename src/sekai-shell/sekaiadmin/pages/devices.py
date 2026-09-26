@@ -151,6 +151,10 @@ class DevicesPage:
         box.pack_start(self.notice, False, False, 0)
         box.pack_start(self.paned, True, True, 0)
         self.widget = box
+        # 좁으면 위(장치 트리)·아래(자세히)로 — 둘을 옆에 두면 창의 최소 폭이 650px 넘게 잡혔다
+        self._narrow = False
+        self._narrow_src = 0
+        box.connect("size-allocate", self._on_box_alloc)
 
         # ── 제목줄 단추 ──
         self.actions = Gtk.Box(spacing=8)
@@ -746,11 +750,32 @@ class DevicesPage:
         self.detail.show_all()
 
     def _on_paned(self, p, _spec):
-        if self._placed:
+        if self._placed and not self._narrow:         # (위아래일 때의 위치는 높이 — 옆 배치 기억에 쓰지 않는다)
             self.st["paned"] = p.get_position()
 
+    def _on_box_alloc(self, _w, a):
+        want = None
+        if not self._narrow and a.width < 700:
+            want = True
+        elif self._narrow and a.width >= 760:
+            want = False
+        if want is not None and not self._narrow_src:
+            self._narrow_src = GLib.idle_add(self._set_narrow, want)
+
+    def _set_narrow(self, narrow):
+        self._narrow_src = 0
+        self._narrow = narrow
+        p = self.paned
+        p.set_orientation(Gtk.Orientation.VERTICAL if narrow else Gtk.Orientation.HORIZONTAL)
+        if narrow:
+            p.set_position(max(160, p.get_allocated_height() // 2))
+        else:
+            pos, width = self.st.get("paned"), p.get_allocated_width()
+            p.set_position(pos if isinstance(pos, int) and 300 < pos < width - 280 else width // 2)
+        return False
+
     def _first_alloc(self, p, alloc):
-        if self._placed or alloc.width < 400:
+        if self._placed or alloc.width < 400 or self._narrow:
             return
         self._placed = True
         pos = self.st.get("paned")

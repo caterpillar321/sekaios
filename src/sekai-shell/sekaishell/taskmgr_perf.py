@@ -11,7 +11,7 @@ import math
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, Gtk, Pango  # noqa: E402
+from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402
 
 from . import taskmgr_data as D  # noqa: E402
 from .taskmgr_common import lookup_color  # noqa: E402
@@ -260,6 +260,7 @@ class Detail:
             self.kv[key] = val
         area.pack_start(t, False, False, 0)
         self.box.pack_start(area, False, False, 0)
+        self.stats_area = area                    # 좁으면 세부 표를 큰 숫자 아래로 (PerfPage._set_narrow)
 
     def set(self, key, text):
         lbl = self.big.get(key) or self.kv.get(key)
@@ -516,12 +517,28 @@ class PerfPage:
         self.list.connect("row-selected", self._on_row)
         left.add(self.list)
         root.pack_start(left, False, False, 0)
+        self.left = left
+        rbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        # 좁을 때 — 왼쪽 목록 대신 고르는 칸 (윈도우 작업 관리자를 좁혔을 때처럼 상세가 넓게)
+        self.picker = Gtk.ComboBoxText()
+        self.picker.get_style_context().add_class("perf-picker")
+        self.picker.set_halign(Gtk.Align.START)
+        self.picker.set_margin_start(12)
+        self.picker.set_margin_top(4)
+        self.picker.set_no_show_all(True)
+        self._picking = False
+        self.picker.connect("changed", self._on_pick)
+        rbox.pack_start(self.picker, False, False, 0)
         right = Gtk.ScrolledWindow()
-        right.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        # 가로로도 밀릴 수 있게 — 상세 화면이 창의 최소 폭을 잡지 않는다
+        right.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         self.stack = Gtk.Stack()
         self.stack.get_style_context().add_class("perf-main")
         right.add(self.stack)
-        root.pack_start(right, True, True, 0)
+        rbox.pack_start(right, True, True, 0)
+        root.pack_start(rbox, True, True, 0)
+        root.connect("size-allocate", self._on_alloc)
+        self._narrow_src = 0
         self.widget = root
 
         self.actions = Gtk.Box(spacing=8)
@@ -639,12 +656,61 @@ class PerfPage:
         if keep not in self.rows:
             keep = "cpu"
         self.current = keep
+        self._picking = True
+        self.picker.remove_all()
+        for r in self.list.get_children():
+            t = r.title.get_text()
+            s = r.sub.get_text() if r.sub.get_parent() is not None else ""
+            self.picker.append(r.key, f"{t} ({s})" if s and s != t else t)
+        self.picker.set_active_id(keep)
+        self._picking = False
         self.list.select_row(self.rows[keep])
+
+    def _on_alloc(self, _w, a):
+        """좁으면 왼쪽 목록을 숨기고 위에 고르는 칸 (넓어지면 되돌린다 — 경계에서 깜박이지 않게 틈을 둔다)"""
+        want = None
+        if self.left.get_visible() and a.width < 620:
+            want = True
+        elif not self.left.get_visible() and a.width >= 680:
+            want = False
+        if want is not None and not self._narrow_src:
+            def go():
+                self._narrow_src = 0
+                self._set_narrow(want)
+                return False
+            self._narrow_src = GLib.idle_add(go)
+
+    def _set_narrow(self, narrow):
+        self.narrow = narrow
+        self.left.set_visible(not narrow)
+        self.picker.set_visible(narrow)
+        ctx = self.widget.get_style_context()
+        (ctx.add_class if narrow else ctx.remove_class)("perf-narrow")
+        for v in self.views.values():
+            self._orient(v)
+
+    def _orient(self, view):
+        area = getattr(getattr(view, "d", None), "stats_area", None)
+        if area is not None:
+            narrow = getattr(self, "narrow", False)
+            area.set_orientation(Gtk.Orientation.VERTICAL if narrow else Gtk.Orientation.HORIZONTAL)
+            area.set_spacing(16 if narrow else 48)
+
+    def _on_pick(self, cb):
+        key = cb.get_active_id()
+        if self._picking or not key or key not in self.rows:
+            return
+        if self.list.get_selected_row() is not self.rows[key]:
+            self.list.select_row(self.rows[key])
 
     def _on_row(self, _lb, r):
         if r is None:
             return
         self.current = r.key
+        if self.picker.get_active_id() != r.key:
+            self._picking = True
+            self.picker.set_active_id(r.key)
+            self._picking = False
         if self.win.snap is not None and self.devs:
             self._show(r.key, self.win.snap)
 
@@ -659,6 +725,7 @@ class PerfPage:
                     "disk": lambda: DiskView(self, dv), "net": lambda: NetView(self, dv),
                     "gpu": lambda: GpuView(self, dv)}[kind]()
             self.views[key] = view
+            self._orient(view)
             self.stack.add_named(view.widget, key)
         view.update(snap if kind in ("cpu", "mem") else dv)
         if self.stack.get_visible_child_name() != key:
