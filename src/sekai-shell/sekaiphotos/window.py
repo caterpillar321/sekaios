@@ -174,7 +174,10 @@ class PhotosWindow(Gtk.ApplicationWindow):
         # 화면보다 크면 줄인다 — 1280x800 화면에서 1100x760 창은 작업 표시줄·제목 표시줄을 빼면 넘쳐 위가 잘렸다
         mw, mh = _screen_room()
         self.set_default_size(max(480, min(w, mw)), max(360, min(h, mh)))
-        if self.state.get("maximized"):
+        # 최대화 여부는 "max" 로 — 옛 "maximized" 는 버린다: Hyprland sekai11 전에는 모든 창에 "최대화됨"이
+        #   붙어 늘 true 로 저장됐고, 이제는 그 값대로 최대화해 열리므로 한 번도 최대화하지 않은 창이 최대화로 열렸다
+        self.state.pop("maximized", None)
+        if self.state.get("max"):
             self.maximize()
         self.set_size_request(420, 320)
         for c in ("settings-window", "ph-window"):
@@ -1588,7 +1591,7 @@ class PhotosWindow(Gtk.ApplicationWindow):
         new = ev.new_window_state
         fs = bool(new & Gdk.WindowState.FULLSCREEN)
         if not fs:
-            self.state["maximized"] = bool(new & Gdk.WindowState.MAXIMIZED)
+            self.state["max"] = bool(new & Gdk.WindowState.MAXIMIZED)
         if fs != self._fullscreen:
             self._fullscreen = fs
             self._apply_fullscreen()
@@ -1598,7 +1601,7 @@ class PhotosWindow(Gtk.ApplicationWindow):
         self._end_slideshow()
         self._close_rename()
         self._leave_current()
-        if not self.state.get("maximized") and not self._fullscreen:
+        if not self.state.get("max") and not self._fullscreen:
             w, h = self.get_size()
             self.state["size"] = [w, h]
         save_state(self.state)

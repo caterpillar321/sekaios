@@ -168,7 +168,10 @@ class TaskManagerWindow(Gtk.Window):
         self.state = _load_state()
         w, h = self.state.get("size") or (1060, 700)
         self.set_default_size(max(720, int(w)), max(480, int(h)))
-        if self.state.get("maximized"):
+        # 최대화 여부는 "max" 로 — 옛 "maximized" 는 버린다: Hyprland sekai11 전에는 모든 창에 "최대화됨"이
+        #   붙어 늘 true 로 저장됐고, 이제는 그 값대로 최대화해 열리므로 한 번도 최대화하지 않은 창이 최대화로 열렸다
+        self.state.pop("maximized", None)
+        if self.state.get("max"):
             self.maximize()
         # 좁게도 줄어든다 — 좁으면 왼쪽 목록을 접는다 (SideCollapse, 윈도우 11 작업 관리자처럼)
         self.set_size_request(380, 400)
@@ -528,11 +531,11 @@ class TaskManagerWindow(Gtk.Window):
         return False
 
     def _on_wstate(self, _w, ev):
-        self.state["maximized"] = bool(ev.new_window_state & Gdk.WindowState.MAXIMIZED)
+        self.state["max"] = bool(ev.new_window_state & Gdk.WindowState.MAXIMIZED)
         return False
 
     def _on_close(self, *_):
-        if not self.state.get("maximized"):
+        if not self.state.get("max"):
             w, h = self.get_size()
             self.state["size"] = [w, h]
         _save_state(self.state)

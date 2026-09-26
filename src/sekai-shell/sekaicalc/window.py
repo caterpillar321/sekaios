@@ -147,7 +147,10 @@ class CalcWindow(Gtk.ApplicationWindow):
         self.set_size_request(320, 460)
         w, h = self._saved_size(self.mode)
         self.set_default_size(w, h)
-        if st.get("maximized"):
+        # 최대화 여부는 "max" 로 — 옛 "maximized" 는 버린다: Hyprland sekai11 전에는 모든 창에 "최대화됨"이
+        #   붙어 늘 true 로 저장됐고, 이제는 그 값대로 최대화해 열리므로 한 번도 최대화하지 않은 창이 최대화로 열렸다
+        st.pop("maximized", None)
+        if st.get("max"):
             self.maximize()
 
         self.overlay = Gtk.Overlay()
@@ -755,7 +758,7 @@ class CalcWindow(Gtk.ApplicationWindow):
 
     def _on_delete(self, *_):
         self._remember_size()
-        self.app.state["maximized"] = self._maximized
+        self.app.state["max"] = self._maximized
         self.app.state["mode"] = self.mode
         self.app.state["angle"] = self.engine.angle
         self.app.save_state()

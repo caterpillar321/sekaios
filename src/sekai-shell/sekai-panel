@@ -78,6 +78,24 @@ def draw_logo(cr, size, kind=None):
 # ── SekaiOS 설정 (sekai-settings 가 쓴다) ──────────────────────
 SEKAI_CFG = os.path.expanduser("~/.config/sekai/settings.json")
 
+# 창 주소 → 처음 본 순서. 작업 표시줄 단추는 연 순서로 둔다 — hyprctl clients 는 쌓임 순서라
+#   창을 고를 때마다(맨 앞으로 올라오니) 바뀌어, 누르는 순간 단추가 자리를 바꿨다
+_SEEN = {}
+_SEEN_N = [0]
+
+
+def _open_order(clients):
+    live = {c.get("address") for c in clients}
+    for a in [a for a in _SEEN if a not in live]:   # 닫힌 창 — 주소는 다시 쓰일 수 있다
+        del _SEEN[a]
+    for c in clients:
+        a = c.get("address")
+        if a and a not in _SEEN:
+            _SEEN_N[0] += 1
+            _SEEN[a] = _SEEN_N[0]
+    return sorted(clients, key=lambda c: _SEEN.get(c.get("address"), 0))
+
+
 _SEKAI_DEFAULTS = {
     "appearance": {"accent": "#39c5bb", "bg": "#151517",
                    "surface": "#1e1e22", "fg": "#f1f1f3"},
@@ -1282,7 +1300,7 @@ class TaskbarMixin:
     def task_snapshot(self):
         """작업 표시줄을 그리는 데 필요한 Hyprland 상태 — 모든 작업 표시줄이 한 번 조회한 것을 같이 쓴다"""
         active = self.hypr.query("activewindow") or {}
-        clients = self.hypr.query("clients") or []
+        clients = _open_order(self.hypr.query("clients") or [])
         desktops.remember(clients)                  # 최소화하기 전의 데스크톱을 알아 두려고
         mons = self.hypr.query("monitors") or []
         return {"clients": clients,

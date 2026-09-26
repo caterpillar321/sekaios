@@ -235,7 +235,8 @@ class NotepadApp(Gtk.Application):
 
     def remember_window(self, win):
         """창을 닫을 때 크기 — 다음 창이 같은 크기로"""
-        self.prefs["maximized"] = bool(win._maximized)
+        self.prefs["max"] = bool(win._maximized)      # 옛 "maximized" 는 window.py 에서 버린다
+        self.prefs.pop("maximized", None)
         if not win._maximized:
             w, h = win.get_size()
             self.prefs["size"] = [w, h]

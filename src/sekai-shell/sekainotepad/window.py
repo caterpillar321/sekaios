@@ -44,7 +44,10 @@ class NotepadWindow(Gtk.ApplicationWindow):
             self.set_default_size(max(420, int(size[0])), max(300, int(size[1])))
         except (TypeError, ValueError, IndexError):
             self.set_default_size(900, 640)
-        if p.get("maximized"):
+        # 최대화 여부는 "max" 로 — 옛 "maximized" 는 버린다: Hyprland sekai11 전에는 모든 창에 "최대화됨"이
+        #   붙어 늘 true 로 저장됐고, 이제는 그 값대로 최대화해 열리므로 한 번도 최대화하지 않은 창이 최대화로 열렸다
+        p.pop("maximized", None)
+        if p.get("max"):
             self.maximize()
         self.set_size_request(360, 260)
         self.get_style_context().add_class("np-window")
