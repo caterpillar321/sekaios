@@ -30,7 +30,8 @@ REV="sekai2"
 #   hyprland sekai11: 나타나기 전에 청한 최대화를 지킨다 — 최대화한 채 닫은 크롬 (patch-hyprland-initialmax.py)
 #   hyprland sekai12: 창을 고르면 맨 앞으로, 최대화한 창도 보통 창과 같은 쌓임 순서 (patch-hyprland-raise.py)
 #   hyprland sekai13: 최대화한 창을 끌어 내리면 커서가 제목줄 같은 자리에 (patch-hyprland-dragrestore.py)
-rev_for() { case "$1" in hyprbars) echo sekai11 ;; hyprland) echo sekai13 ;; *) echo "$REV" ;; esac; }
+#   hyprland sekai14: 창이 제목줄 높이만큼 밀려 그려진 채 굳던 것 — 남은 그리기 오프셋 버리기 (patch-hyprland-floatoffset.py)
+rev_for() { case "$1" in hyprbars) echo sekai11 ;; hyprland) echo sekai14 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
@@ -159,6 +160,7 @@ PYEOF
     python3 /build/patch-hyprland-initialmax.py "$dir" || die "패치 실패 (initialmax)"
     python3 /build/patch-hyprland-raise.py "$dir" || die "패치 실패 (raise)"
     python3 /build/patch-hyprland-dragrestore.py "$dir" || die "패치 실패 (dragrestore)"
+    python3 /build/patch-hyprland-floatoffset.py "$dir" || die "패치 실패 (floatoffset)"
     ok "패치 완료"
 }
 

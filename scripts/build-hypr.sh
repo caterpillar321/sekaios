@@ -101,6 +101,7 @@ install -m644 "$SELF/hypr/patch-hyprland-popupreserved.py" "$BR/build/patch-hypr
 install -m644 "$SELF/hypr/patch-hyprland-initialmax.py" "$BR/build/patch-hyprland-initialmax.py"
 install -m644 "$SELF/hypr/patch-hyprland-raise.py" "$BR/build/patch-hyprland-raise.py"
 install -m644 "$SELF/hypr/patch-hyprland-dragrestore.py" "$BR/build/patch-hyprland-dragrestore.py"
+install -m644 "$SELF/hypr/patch-hyprland-floatoffset.py" "$BR/build/patch-hyprland-floatoffset.py"
 install -m644 "$SELF/hypr/patch-hyprbars-bordergrab.py" "$BR/build/patch-hyprbars-bordergrab.py"
 install -m644 "$SELF/hypr/patch-hyprbars-focus.py" "$BR/build/patch-hyprbars-focus.py"
 install -m644 "$SELF/hypr/patch-hyprbars-dialog.py" "$BR/build/patch-hyprbars-dialog.py"
