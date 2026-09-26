@@ -99,6 +99,7 @@ install -m644 "$SELF/hypr/patch-hyprland-layerfocus.py" "$BR/build/patch-hyprlan
 install -m644 "$SELF/hypr/patch-hyprland-dndhotspot.py" "$BR/build/patch-hyprland-dndhotspot.py"
 install -m644 "$SELF/hypr/patch-hyprbars-bordergrab.py" "$BR/build/patch-hyprbars-bordergrab.py"
 install -m644 "$SELF/hypr/patch-hyprbars-focus.py" "$BR/build/patch-hyprbars-focus.py"
+install -m644 "$SELF/hypr/patch-hyprbars-dialog.py" "$BR/build/patch-hyprbars-dialog.py"
 
 # ── 빌드 ─────────────────────────────────────────────
 say "빌드 시작"; echo

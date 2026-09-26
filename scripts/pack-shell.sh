@@ -292,7 +292,7 @@ Maintainer: SekaiOS <sekai@localhost>
 Section: metapackages
 Priority: optional
 Depends: sekai-shell (= ${FULL}),
- hyprland (>= 0.50.1-sekai9), hyprbars (>= 0.50.0-sekai10), hyprexpo, xwayland, binutils,
+ hyprland (>= 0.50.1-sekai9), hyprbars (>= 0.50.0-sekai11), hyprexpo, xwayland, binutils,
  xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr,
  foot, fuzzel, swaybg, swayidle, swaylock, grim, slurp,
  brightnessctl, playerctl, wtype, pkexec, efibootmgr, open-vm-tools, mokutil, pciutils, openssl,

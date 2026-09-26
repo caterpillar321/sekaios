@@ -25,7 +25,8 @@ REV="sekai2"
 #   hyprbars sekai10: 제목줄을 누르면 키보드가 레이어에 있어도 초점, 최대화 창 제목줄 가장자리는 넘기지 않음,
 #                     끄던 창이 닫히면 끌기를 끝내고 알림
 #   hyprland sekai9: 끌기 아이콘의 기준점(누른 점)을 지킨다 (patch-hyprland-dndhotspot.py)
-rev_for() { case "$1" in hyprbars) echo sekai10 ;; hyprland) echo sekai9 ;; *) echo "$REV" ;; esac; }
+#   hyprbars sekai11: 대화상자(부모 창이 있는 창)에는 닫기 단추만, 두 번 눌러 최대화 안 함 (patch-hyprbars-dialog.py)
+rev_for() { case "$1" in hyprbars) echo sekai11 ;; hyprland) echo sekai9 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
@@ -374,6 +375,7 @@ build_plugin() {
         python3 /build/patch-hyprbars-theme.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (theme)"
         python3 /build/patch-hyprbars-bordergrab.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (bordergrab)"
         python3 /build/patch-hyprbars-focus.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (focus)"
+        python3 /build/patch-hyprbars-dialog.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (dialog)"
     fi
 
     say "빌드(plugin): $pkg $ver"
