@@ -31,7 +31,9 @@ REV="sekai2"
 #   hyprland sekai12: 창을 고르면 맨 앞으로, 최대화한 창도 보통 창과 같은 쌓임 순서 (patch-hyprland-raise.py)
 #   hyprland sekai13: 최대화한 창을 끌어 내리면 커서가 제목줄 같은 자리에 (patch-hyprland-dragrestore.py)
 #   hyprland sekai14: 창이 제목줄 높이만큼 밀려 그려진 채 굳던 것 — 남은 그리기 오프셋 버리기 (patch-hyprland-floatoffset.py)
-rev_for() { case "$1" in hyprbars) echo sekai11 ;; hyprland) echo sekai14 ;; *) echo "$REV" ;; esac; }
+#   hyprland sekai15: 바탕화면 누르면 활성 창 없음, 최대화해도 대화상자 위, X11 부모, 창 제목줄 끌기 보강 (patch-hyprland-misclick.py)
+#   hyprbars sekai12: 누름 표시가 남아 다음 뗌을 삼키던 것, 창 조작 단추는 그 창에 곧바로 (patch-hyprbars-inputfix.py)
+rev_for() { case "$1" in hyprbars) echo sekai12 ;; hyprland) echo sekai15 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
@@ -161,6 +163,7 @@ PYEOF
     python3 /build/patch-hyprland-raise.py "$dir" || die "패치 실패 (raise)"
     python3 /build/patch-hyprland-dragrestore.py "$dir" || die "패치 실패 (dragrestore)"
     python3 /build/patch-hyprland-floatoffset.py "$dir" || die "패치 실패 (floatoffset)"
+    python3 /build/patch-hyprland-misclick.py "$dir" || die "패치 실패 (misclick)"
     ok "패치 완료"
 }
 
@@ -386,6 +389,7 @@ build_plugin() {
         python3 /build/patch-hyprbars-bordergrab.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (bordergrab)"
         python3 /build/patch-hyprbars-focus.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (focus)"
         python3 /build/patch-hyprbars-dialog.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (dialog)"
+        python3 /build/patch-hyprbars-inputfix.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (inputfix)"
     fi
 
     say "빌드(plugin): $pkg $ver"
