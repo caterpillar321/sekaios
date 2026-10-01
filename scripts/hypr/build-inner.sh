@@ -4,6 +4,11 @@ set -euo pipefail
 
 SRC=/build/src
 OUT=/build/deb
+# SekaiCompose — Hyprland v0.50.1 에서 갈라진 SekaiOS 의 합성기 (hyprbars 포함).
+#   예전엔 여기서 원본에 patch-*.py 를 적용했다. 이제 그 고친 것들은 포크의 커밋이다 (git log v0.50.1..sekai).
+#   재현할 수 있게 커밋을 고정한다 — 합성기를 고치면 포크에 커밋·푸시하고 여기 REF 와 rev_for 를 올린다.
+SEKAICOMP_URL="https://github.com/caterpillar321/sekaicompose.git"
+SEKAICOMP_REF="0d093f0e4c3d1adc70769f0da5e6fff45007b961"
 MAINT="SekaiOS <sekai@localhost>"
 REV="sekai2"
 # 패키지별 리비전 (고친 패키지만 올린다 → apt 가 그 패키지만 업그레이드)
@@ -41,6 +46,8 @@ REV="sekai2"
 #                     맨 위 창에 초점 (patch-hyprland-minimize.py). 안쪽 테두리 띠는 위쪽만 (bordergrab SEKAI_BORDER_TOPONLY)
 #   hyprbars sekai14: 막대를 숨긴 창(크롬·탐색기)의 누름은 받지 않는다 — sekai13 이 최대화한 크롬의 탭 줄·단추를 가로챘다.
 #                     창 단추의 판정 칸 = 그려지는 칸 (patch-hyprbars-slots.py)
+#   ── 2026-10-01: 위의 patch-*.py 는 전부 SekaiCompose 포크의 커밋으로 옮겼다 (SekaiOS 에선 지움).
+#      hyprland sekai17 · hyprbars sekai14 는 포크 0d093f0e 와 소스가 같다 — 다음 변경부터 포크에 커밋하고 여기 리비전을 올린다.
 rev_for() { case "$1" in hyprbars) echo sekai14 ;; hyprland) echo sekai17 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
@@ -100,87 +107,23 @@ TESTEOF
     ok "shim 정상 (모호성 없음)"
 }
 
-# ── Hyprland 소스 패치 (GCC 14 호환) ─────────────────
-# 업스트림은 GCC 15 / 롤링 배포판을 전제로 개발한다.
-# trixie(GCC 14)에 없는 기능 3가지를 동등한 코드로 치환한다. 모두 멱등.
-patch_hyprland() {
-    local dir="$SRC/Hyprland"
-    [ -d "$dir" ] || die "Hyprland 소스 없음"
-    say "GCC 14 호환 패치"
-
-    python3 - "$dir" <<'PYEOF'
-import sys, pathlib
-root = pathlib.Path(sys.argv[1])
-changed = []
-
-# ① #embed (C++26 전처리기, GCC 15+) → 바이트 목록을 직접 생성해서 #include
-hdr  = root / "src/config/defaultConfig.hpp"
-conf = root / "example/hyprland.conf"
-inc  = root / "src/config/example_config_bytes.inc"
-t = hdr.read_text()
-if "#embed" in t:
-    data = conf.read_bytes()
-    vals = [str(b if b < 128 else b - 256) for b in data]           # char 는 signed
-    rows = [",".join(vals[i:i+20]) for i in range(0, len(vals), 20)]
-    inc.write_text("// SekaiOS: #embed 대체 (자동 생성)\n" + ",\n".join(rows) + "\n")
-    t = t.replace('#embed "../../example/hyprland.conf"',
-                  '#include "example_config_bytes.inc"')
-    hdr.write_text(t)
-    changed.append(f"#embed -> #include ({len(data)} bytes)")
-
-# ② 삼항 연산자에서 사용자 정의 변환을 GCC14 가 못 찾음 → 명시적 캐스트
-xwm = root / "src/xwayland/XWM.hpp"
-t = xwm.read_text()
-old = "return m_connection ? *m_connection : nullptr;"
-new = "return m_connection ? static_cast<xcb_connection_t*>(*m_connection) : nullptr;"
-if old in t:
-    xwm.write_text(t.replace(old, new))
-    changed.append("XWM.hpp ?: 명시적 캐스트")
-
-# ③ std::vector::insert_range (C++23, libstdc++ GCC 15+) → 동등한 insert
-mon = root / "src/helpers/Monitor.cpp"
-t = mon.read_text()
-old = "requestedModes.insert_range(requestedModes.end(), sortedModes | std::views::reverse);"
-new = "requestedModes.insert(requestedModes.end(), sortedModes.rbegin(), sortedModes.rend());"
-if old in t:
-    mon.write_text(t.replace(old, new))
-    changed.append("Monitor.cpp insert_range -> insert")
-
-if changed:
-    for c in changed: print(f"    적용: {c}")
-else:
-    print("    (이미 전부 적용됨)")
-
-# 잔존 확인
-import subprocess
-leftover = []
-if "#embed" in hdr.read_text(): leftover.append("#embed")
-if "insert_range" in mon.read_text(): leftover.append("insert_range")
-if leftover:
-    print("    !! 잔존:", ", ".join(leftover)); sys.exit(1)
-PYEOF
-    [ $? -eq 0 ] || die "패치 실패"
-    say "SekaiOS 패치: 창이 그린 제목줄 끌기"
-    python3 /build/patch-hyprland-clientmove.py "$dir" || die "패치 실패 (clientmove)"
-    python3 /build/patch-hyprland-keepoutputs.py "$dir" || die "패치 실패 (keepoutputs)"
-    python3 /build/patch-hyprland-bordergrab.py "$dir" || die "패치 실패 (bordergrab)"
-    python3 /build/patch-hyprland-layerfocus.py "$dir" || die "패치 실패 (layerfocus)"
-    python3 /build/patch-hyprland-dndhotspot.py "$dir" || die "패치 실패 (dndhotspot)"
-    python3 /build/patch-hyprland-popupreserved.py "$dir" || die "패치 실패 (popupreserved)"
-    python3 /build/patch-hyprland-initialmax.py "$dir" || die "패치 실패 (initialmax)"
-    python3 /build/patch-hyprland-raise.py "$dir" || die "패치 실패 (raise)"
-    python3 /build/patch-hyprland-dragrestore.py "$dir" || die "패치 실패 (dragrestore)"
-    python3 /build/patch-hyprland-floatoffset.py "$dir" || die "패치 실패 (floatoffset)"
-    python3 /build/patch-hyprland-misclick.py "$dir" || die "패치 실패 (misclick)"
-    python3 /build/patch-hyprland-fitnew.py "$dir" || die "패치 실패 (fitnew)"
-    python3 /build/patch-hyprland-multimax.py "$dir" || die "패치 실패 (multimax)"
-    python3 /build/patch-hyprland-minimize.py "$dir" || die "패치 실패 (minimize)"
-    ok "패치 완료"
-}
-
 # ── git clone (태그 고정) ────────────────────────────
 fetch() {
     local repo="$1" tag="$2" dir="$SRC/$1"
+    if [ "$repo" = sekaicompose ]; then
+        # 고정 커밋으로 맞춘다 (REF 를 올리면 이미 받은 소스도 그 커밋으로 옮겨 간다)
+        if [ "$(git -C "$dir" rev-parse HEAD 2>/dev/null)" = "$SEKAICOMP_REF" ]; then
+            say "이미 있음: sekaicompose ${SEKAICOMP_REF:0:12}"
+            return 0
+        fi
+        say "SekaiCompose 받기: ${SEKAICOMP_REF:0:12}"
+        [ -d "$dir/.git" ] || git clone -q --filter=blob:none "$SEKAICOMP_URL" "$dir" || die "clone 실패: sekaicompose"
+        git -C "$dir" fetch -q origin || die "fetch 실패: sekaicompose"
+        git -C "$dir" checkout -q --force "$SEKAICOMP_REF" || die "커밋 없음: $SEKAICOMP_REF (포크에 푸시했나?)"
+        git -C "$dir" submodule update -q --init --recursive || die "submodule 실패: sekaicompose"
+        rm -rf "$dir/build" "$dir/plugins"/*/build      # 다른 커밋의 증분 빌드가 섞이지 않게
+        return 0
+    fi
     if [ -d "$dir/.git" ]; then
         say "이미 있음: $repo $tag"
     else
@@ -246,17 +189,24 @@ register_shlibs() {
 add_copyright() {
     local pkg="$1" stage="$2" src="$3" tag="$4" repo lic
     repo=$(basename "$src")
+    [ "$pkg" = hyprbars ] && src="$src/plugins/hyprbars"     # hyprbars 는 hyprland-plugins 의 라이선스
     lic="$src/LICENSE"; [ -f "$lic" ] || lic="$src/COPYING"
     [ -f "$lic" ] || die "라이선스 파일 없음: $src"
     local doc="$stage/usr/share/doc/$pkg"
     mkdir -p "$doc"
     {
         echo "패키지:  $pkg (SekaiOS 빌드)"
-        echo "원본:    https://github.com/hyprwm/$repo  (태그 $tag)"
         case "$pkg" in
-            hyprland) echo "수정:    GCC 14 빌드 호환 패치, 창이 그린 제목줄 끌기 (scripts/hypr/build-inner.sh 의 patch_hyprland, patch-hyprland-*.py)" ;;
-            hyprbars) echo "수정:    창 조작 버튼 벡터 아이콘·마우스 올림 배경·끌어서 스냅 알림 (scripts/hypr/patch-hyprbars-*.py)" ;;
-            *)        echo "수정:    없음 (원본 그대로 빌드)" ;;
+            hyprland|hyprbars)
+                echo "소스:    SekaiCompose — https://github.com/caterpillar321/sekaicompose  (커밋 $SEKAICOMP_REF)"
+                if [ "$pkg" = hyprland ]; then
+                    echo "원본:    Hyprland — https://github.com/hyprwm/Hyprland  (태그 v0.50.1 에서 갈라진 포크)"
+                else
+                    echo "원본:    hyprbars — https://github.com/hyprwm/hyprland-plugins  (태그 v0.50.0, plugins/hyprbars 로 가져옴)"
+                fi
+                echo "수정:    SekaiOS 의 창 동작(최대화·최소화·스냅·끌기·테두리·제목줄 단추 등) — 포크의 git log v0.50.1..sekai" ;;
+            *)  echo "원본:    https://github.com/hyprwm/$repo  (태그 $tag)"
+                echo "수정:    없음 (원본 그대로 빌드)" ;;
         esac
         echo
         echo "── 원본 라이선스 ($(basename "$lic")) ──"
@@ -392,18 +342,6 @@ build_plugin() {
     already_built "$pkg" "$ver" && return 0
     fetch "$repo" "$tag"
     [ -d "$dir" ] || die "플러그인 소스 없음: $dir"
-    if [ "$pkg" = hyprbars ]; then
-        python3 /build/patch-hyprbars-icons.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패"
-        python3 /build/patch-hyprbars-hover.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (hover)"
-        python3 /build/patch-hyprbars-snap.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (snap)"
-        python3 /build/patch-hyprbars-theme.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (theme)"
-        python3 /build/patch-hyprbars-bordergrab.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (bordergrab)"
-        python3 /build/patch-hyprbars-focus.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (focus)"
-        python3 /build/patch-hyprbars-dialog.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (dialog)"
-        python3 /build/patch-hyprbars-inputfix.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (inputfix)"
-        python3 /build/patch-hyprbars-slots.py "$dir/barDeco.cpp" || die "hyprbars 패치 실패 (slots)"
-    fi
-
     say "빌드(plugin): $pkg $ver"
     rm -rf "$stage"
     cmake -S "$dir" -B "$dir/build" -G Ninja \
@@ -436,18 +374,17 @@ build_cmake hyprcursor           v0.1.12 hyprcursor           "Hyprland cursor t
 build_cmake hyprgraphics         v0.1.5  hyprgraphics         "Hyprland graphics resource library"
 build_meson hyprland-protocols   v0.6.4  hyprland-protocols   "Hyprland-specific Wayland protocols"
 build_cmake aquamarine           v0.9.2  aquamarine           "Hyprland rendering and backend library"
+# C++26 shim 은 포크에 있다 (sekai/cxx26-compat.hpp) — 플러그인 빌드도 같은 것을 쓴다
+fetch sekaicompose v0.50.1
+install -m644 "$SRC/sekaicompose/sekai/cxx26-compat.hpp" /build/cxx26-compat.hpp
 verify_shim
-if [ ! -f "$OUT/hyprland_0.50.1-$(rev_for hyprland)_amd64.deb" ] || [ "${SKIP_BUILT:-1}" != "1" ]; then
-    fetch Hyprland v0.50.1
-    patch_hyprland
-fi
-build_cmake Hyprland             v0.50.1 hyprland             "Dynamic tiling Wayland compositor" \
+build_cmake sekaicompose         v0.50.1 hyprland             "Dynamic tiling Wayland compositor (SekaiCompose)" \
             -DNO_XWAYLAND=false -DNO_SYSTEMD=false \
             -DCMAKE_CXX_FLAGS="-include /build/cxx26-compat.hpp"
 
 # Hyprland 플러그인
-build_plugin hyprland-plugins v0.50.0 hyprbars  hyprbars  0.50.0 \
-             "Hyprland plugin: window title bars"
+build_plugin sekaicompose     v0.50.1 plugins/hyprbars hyprbars 0.50.0 \
+             "Window title bars for SekaiCompose (from hyprland-plugins)"
 build_plugin hyprland-plugins v0.50.0 hyprexpo  hyprexpo  0.50.0 \
              "Hyprland plugin: workspace overview (task view)"
 

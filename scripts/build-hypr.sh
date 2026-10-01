@@ -87,30 +87,7 @@ NEW=$(grep -c '^Setting up' /tmp/.deps.log 2>/dev/null || echo 0)
 say "의존성 준비 완료 (이번에 새로 설치: ${NEW}개)"
 
 install -m755 "$SELF/hypr/build-inner.sh"   "$BR/build/build-inner.sh"
-install -m644 "$SELF/hypr/cxx26-compat.hpp" "$BR/build/cxx26-compat.hpp"
-install -m644 "$SELF/hypr/patch-hyprbars-icons.py" "$BR/build/patch-hyprbars-icons.py"
-install -m644 "$SELF/hypr/patch-hyprbars-hover.py" "$BR/build/patch-hyprbars-hover.py"
-install -m644 "$SELF/hypr/patch-hyprbars-snap.py"  "$BR/build/patch-hyprbars-snap.py"
-install -m644 "$SELF/hypr/patch-hyprbars-theme.py" "$BR/build/patch-hyprbars-theme.py"
-install -m644 "$SELF/hypr/patch-hyprland-clientmove.py" "$BR/build/patch-hyprland-clientmove.py"
-install -m644 "$SELF/hypr/patch-hyprland-keepoutputs.py" "$BR/build/patch-hyprland-keepoutputs.py"
-install -m644 "$SELF/hypr/patch-hyprland-bordergrab.py" "$BR/build/patch-hyprland-bordergrab.py"
-install -m644 "$SELF/hypr/patch-hyprland-layerfocus.py" "$BR/build/patch-hyprland-layerfocus.py"
-install -m644 "$SELF/hypr/patch-hyprland-dndhotspot.py" "$BR/build/patch-hyprland-dndhotspot.py"
-install -m644 "$SELF/hypr/patch-hyprland-popupreserved.py" "$BR/build/patch-hyprland-popupreserved.py"
-install -m644 "$SELF/hypr/patch-hyprland-initialmax.py" "$BR/build/patch-hyprland-initialmax.py"
-install -m644 "$SELF/hypr/patch-hyprland-raise.py" "$BR/build/patch-hyprland-raise.py"
-install -m644 "$SELF/hypr/patch-hyprland-dragrestore.py" "$BR/build/patch-hyprland-dragrestore.py"
-install -m644 "$SELF/hypr/patch-hyprland-floatoffset.py" "$BR/build/patch-hyprland-floatoffset.py"
-install -m644 "$SELF/hypr/patch-hyprland-misclick.py" "$BR/build/patch-hyprland-misclick.py"
-install -m644 "$SELF/hypr/patch-hyprland-fitnew.py" "$BR/build/patch-hyprland-fitnew.py"
-install -m644 "$SELF/hypr/patch-hyprland-multimax.py" "$BR/build/patch-hyprland-multimax.py"
-install -m644 "$SELF/hypr/patch-hyprland-minimize.py" "$BR/build/patch-hyprland-minimize.py"
-install -m644 "$SELF/hypr/patch-hyprbars-bordergrab.py" "$BR/build/patch-hyprbars-bordergrab.py"
-install -m644 "$SELF/hypr/patch-hyprbars-slots.py" "$BR/build/patch-hyprbars-slots.py"
-install -m644 "$SELF/hypr/patch-hyprbars-focus.py" "$BR/build/patch-hyprbars-focus.py"
-install -m644 "$SELF/hypr/patch-hyprbars-dialog.py" "$BR/build/patch-hyprbars-dialog.py"
-install -m644 "$SELF/hypr/patch-hyprbars-inputfix.py" "$BR/build/patch-hyprbars-inputfix.py"
+#   Hyprland·hyprbars 의 고친 것과 C++26 shim 은 SekaiCompose 포크에 있다 (build-inner.sh 가 받는다)
 
 # ── 빌드 ─────────────────────────────────────────────
 say "빌드 시작"; echo

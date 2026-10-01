@@ -10,7 +10,7 @@
 </p>
 
 <p align="center"><i>A Windows-like Linux desktop built on Debian 13. Korean-first. The desktop shell and its apps are written
-from scratch in Python + GTK 3, running on the Hyprland compositor.</i></p>
+from scratch in Python + GTK 3, running on SekaiCompose (our fork of the Hyprland compositor).</i></p>
 
 ![시작 메뉴를 연 SekaiOS 바탕화면](docs/screenshots/start-menu.png)
 
@@ -73,7 +73,8 @@ SekaiOS 의 화면은 직접 만들었다. 그 밑의 운영체제 부품(드라
 
 | 부품 | 쓰임 | 라이선스 · 고친 곳 |
 |---|---|---|
-| Hyprland 0.50.1, hyprbars, hyprexpo | 창을 그리는 합성기, 창 제목 표시줄 | BSD-3 · `scripts/hypr/patch-*.py` |
+| [SekaiCompose](https://github.com/caterpillar321/sekaicompose) — Hyprland 0.50.1 + hyprbars 의 포크 | 창을 그리는 합성기, 창 제목 표시줄 | BSD-3 · 포크의 커밋 (`git log v0.50.1..sekai`) |
+| hyprexpo | 작업 보기 플러그인 | BSD-3 · 원본 그대로 |
 | Fluent-gtk-theme (vinceliuice) | GTK 테마 Sekai-Light · Sekai-Dark 의 바탕 | GPL-3.0 · `third_party/fluent-gtk-theme` |
 | Plymouth | 부팅 화면 | GPL-2.0 · `scripts/hypr/patch-plymouth-*.py` |
 
@@ -106,7 +107,7 @@ SekaiOS 의 화면은 직접 만들었다. 그 밑의 운영체제 부품(드라
 | `src/sekai-desktop/` | 배포판 설정 메타패키지 — Hyprland 설정, 테마, 부팅 화면, 기본 앱 목록 (패키지 `sekai-desktop`) |
 | `src/sekai-installer/` | 설치 프로그램 (패키지 `sekai-installer`) |
 | `overlay/`, `config/` | 설치 이미지에 직접 넣는 파일, 라이브 이미지 부트로더 설정 |
-| `scripts/` | 빌드 스크립트, Hyprland · 플러그인 패치 (`scripts/hypr/`) |
+| `scripts/` | 빌드 스크립트 (`scripts/hypr/` — SekaiCompose·Hyprland 라이브러리 빌드, Plymouth 패치) |
 | `third_party/` | 고쳐 쓰는 외부 원본과 그 라이선스 |
 | `docs/` | 문서 · 스크린샷 |
 
@@ -115,14 +116,15 @@ SekaiOS 의 화면은 직접 만들었다. 그 밑의 운영체제 부품(드라
 데비안 · 우분투 계열 호스트(WSL2 도 된다)에서, 관리자 권한(sudo)과 넉넉한 디스크(30GB 이상)가 필요하다.
 
 ```sh
-sudo scripts/build-hypr.sh        # Hyprland 와 플러그인을 .deb 으로 (packages/)
+sudo scripts/mkrootfs.sh && sudo scripts/mkrootfs.sh --replace   # 데비안 rootfs 를 처음부터 (config/rootfs-packages.list)
+sudo scripts/build-hypr.sh        # SekaiCompose(합성기)·라이브러리·플러그인을 .deb 으로 (packages/)
 scripts/pack-shell.sh             # sekai-shell · sekai-desktop · sekai-installer .deb
 sudo scripts/finalize.sh          # rootfs 에 설치 → squashfs → ISO
 scripts/build-repo.sh             # 서명된 apt 저장소 (repo/)
 scripts/publish-repo.sh           # 저장소 게시
 ```
 
-- 처음 `rootfs/` 를 만드는 과정(debootstrap)은 아직 스크립트로 정리되지 않았다.
+- 호스트에 `mmdebstrap` 과 trixie 키가 든 `debian-archive-keyring`(2025.1 이상)이 필요하다.
 - 저장소 서명 키는 이 저장소에 없다 — 직접 저장소를 만들려면 자신의 키를 쓴다.
 - 개발용 이미지(`sudo env SEKAI_DEV=1 scripts/finalize.sh`)에는 `local/overlay-dev/` 의 개발자 SSH 키가 들어간다
   (`local/` 은 git 에 없다). 이름에 `-dev` 가 붙으며, 남에게 주면 안 된다.
@@ -131,6 +133,6 @@ scripts/publish-repo.sh           # 저장소 게시
 
 SekaiOS 의 코드는 [Apache License 2.0](LICENSE) 이다.
 고쳐 쓰는 외부 부품은 각자의 라이선스를 따른다 — GTK 테마는 GPL-3.0(`third_party/fluent-gtk-theme/COPYING`),
-Hyprland 와 플러그인은 BSD-3 이다. 패키지마다 `/usr/share/doc/<패키지>/copyright` 에 출처와 라이선스를 적었다.
+SekaiCompose(Hyprland 포크)와 플러그인은 BSD-3 이다. 패키지마다 `/usr/share/doc/<패키지>/copyright` 에 출처와 라이선스를 적었다.
 
 SekaiOS 는 개인이 만드는 비공식 프로젝트로, SEGA · Colorful Palette · Crypton Future Media 와 관계가 없다.
