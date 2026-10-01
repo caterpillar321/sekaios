@@ -1,6 +1,8 @@
 # ── 빌드 결과물 (다시 만들 수 있다, 수 GB) ──
 /buildroot/
 /rootfs/
+/rootfs.new/
+/rootfs.old/
 /build/
 /iso/
 /cache/

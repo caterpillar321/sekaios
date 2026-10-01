@@ -1,0 +1,41 @@
+# SekaiOS rootfs — 데비안 저장소에서 처음부터 까는 패키지 (scripts/mkrootfs.sh 가 읽는다)
+#   한 줄에 하나 또는 공백으로 여럿. # 뒤는 주석.
+#   이름 뒤 ! : 권장 패키지 없이 깐다.   이름 뒤 - : 권장 패키지로 딸려 와도 깔지 않는다.
+#   데비안 기본(required 우선순위)은 mmdebstrap --variant=minbase 가 넣는다 — important(cron·ifupdown 등)는 일부러 안 넣는다.
+#   우리가 만든 패키지(sekai-*, hypr*, aquamarine, plymouth +sekai)는 여기 없다 —
+#   finalize.sh 가 packages/*.deb 로 설치하고, 데스크톱 앱 목록은 sekai-desktop 의 Depends 가 정한다.
+#   2026-10-01 WSL 시절 rootfs 의 apt-mark showmanual 에서 옮겼다 (refind 는 GRUB 으로 바꿔 뺐다).
+
+# ── 부팅 · 라이브 · 설치 ──
+linux-image-amd64 initramfs-tools systemd-sysv
+live-boot live-config live-config-systemd
+grub-common grub2-common grub-efi-amd64-bin grub-pc-bin efibootmgr os-prober
+dosfstools e2fsprogs gdisk parted squashfs-tools
+
+# ── 언어 · 지역 ──
+locales localepurge tzdata keyboard-configuration console-setup
+
+# ── 네트워크 · 원격 ──
+network-manager systemd-resolved openssh-server ca-certificates curl wget iproute2 iputils-ping
+
+# ── 그래픽 · 데스크톱 기반 ──
+libegl-mesa0 libgl1-mesa-dri mesa-utils xwayland qt6-wayland wayland-utils
+xdg-desktop-portal xdg-desktop-portal-gtk xdg-desktop-portal-wlr xdg-user-dirs
+swayidle swaylock swaybg grim slurp wl-clipboard cliphist fuzzel foot libnotify-bin
+pipewire pipewire-audio pipewire-pulse wireplumber polkitd gvfs gvfs-backends
+upower   # 앱(Chromium 등)이 배터리 상태를 묻는 곳 — 패널은 /sys/class/power_supply 를 직접 읽는다
+
+# ── 앱 · 글꼴 ──
+#   chromium 은 권장 패키지 없이 — chromium-common 이 권장하는 notification-daemon 자리를 apt 가
+#   아무 알림 데몬(xfce4-notifyd, 심지어 Sugar 데스크톱)으로 채운다. 알림은 sekai-panel 이 띄운다.
+#   설치된 PC 에선 sekai-shell 의 Provides: notification-daemon 이 그 자리를 채운다
+chromium!
+fonts-dejavu fonts-jetbrains-mono fonts-nanum fonts-noto-color-emoji
+
+# ── 터미널 도구 ──
+bash-completion binutils busybox file git htop less lsof man-db manpages nano ncdu ncurses-term
+openssl-provider-legacy pciutils psmisc tmux tree usbutils vim whiptail apt-utils
+
+# ── 빼는 것 ──
+#   modemmanager: 휴대폰망 모뎀 — WSL 시절 rootfs 에도 없었다 (network-manager 의 권장)
+modemmanager-
