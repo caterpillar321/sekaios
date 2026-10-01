@@ -1,5 +1,5 @@
 #!/bin/bash
-# SekaiOS — sekai-shell 을 .deb 으로 포장
+# SekaiOS — sekai-shell · sekai-de · sekaios-base · sekai-desktop · sekai-installer 를 .deb 으로 포장
 #   순수 파이썬이라 buildroot 없이 호스트에서 바로 만들 수 있다.
 set -euo pipefail
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -14,11 +14,11 @@ VER="${BASE_VER}+$(date +%Y%m%d.%H%M)"
 REV="sekai1"
 FULL="${VER}-${REV}"
 STAGE="$(mktemp -d)"
-STAGE_D="$(mktemp -d)"
-trap 'rm -rf "$STAGE" "$STAGE_D"' EXIT
+STAGE_DE="$(mktemp -d)"; STAGE_B="$(mktemp -d)"; STAGE_M="$(mktemp -d)"
+trap 'rm -rf "$STAGE" "$STAGE_DE" "$STAGE_B" "$STAGE_M"' EXIT
 
 # 옛 빌드 정리 — 남겨 두면 finalize 의 *.deb 가 두 버전을 동시에 설치하려 한다
-rm -f "$OUT"/sekai-shell_*.deb "$OUT"/sekai-desktop_*.deb "$OUT"/sekai-installer_*.deb
+rm -f "$OUT"/sekai-shell_*.deb "$OUT"/sekai-de_*.deb "$OUT"/sekaios-base_*.deb "$OUT"/sekai-desktop_*.deb "$OUT"/sekai-installer_*.deb
 
 echo "==> 스테이징"
 install -Dm755 "$SRC/sekai-panel"     "$STAGE/usr/bin/sekai-panel"
@@ -114,7 +114,7 @@ Maintainer: SekaiOS <sekai@localhost>
 Section: x11
 Priority: optional
 Depends: python3, python3-gi, python3-gi-cairo, gir1.2-gtk-3.0,
- gir1.2-gtklayershell-0.1, hyprland, kitty, foot, fuzzel,
+ gir1.2-gtklayershell-0.1, sekaicomp, kitty, foot, fuzzel,
  adwaita-icon-theme, papirus-icon-theme, swaybg, swayidle,
  gir1.2-gtksessionlock-0.1, libgtk-session-lock0, python3-pampy,
  libglib2.0-bin, sekai-winshot, gir1.2-gudev-1.0, pulseaudio-utils,
@@ -123,7 +123,7 @@ Recommends: wireplumber, swaylock
 Provides: polkit-1-auth-agent, notification-daemon
 Description: SekaiOS desktop shell
  Panel, taskbar, start menu and the system settings app for
- SekaiOS, built on gtk-layer-shell and the Hyprland IPC.
+ SekaiOS, built on gtk-layer-shell and the SekaiCompose (Hyprland) IPC.
 EOF
 
 echo "==> sekai-shell .deb 생성"
@@ -133,47 +133,62 @@ dpkg-deb --root-owner-group --build "$STAGE" \
 ls -lh "$OUT/sekai-shell_${FULL}_all.deb" | awk '{print "    "$5"  "$9}'
 
 # ═══════════════════════════════════════════════════════════
-#  sekai-desktop — 메타패키지 + 데스크탑 시스템 설정
-#
-#  "SekaiOS 데스크탑이 되려면 무엇이 깔려 있어야 하는가" 의 정의.
-#  옛 설치본도  apt install ./sekai-desktop_*.deb  한 번이면
-#  빠진 패키지가 전부 따라 들어온다. (이미지를 만들 때도 같은 목록을 쓴다)
+#  SekaiDE 와 SekaiOS 를 나눈다 (2026-10-01)
+#    sekai-de      데스크톱 환경 — 세션·로그인 화면·잠금·첫 설정·합성기 설정·테마·앱 메뉴 (src/sekai-de)
+#    sekaios-base  배포판 — os-release·부팅(GRUB·Plymouth·initramfs)·업데이트 저장소·그래픽 드라이버 도구 (src/sekaios-base)
+#    sekai-desktop 메타패키지 — sekai-de + sekaios-base + 기본 앱. 예전엔 위 둘의 파일을 직접 실었다
+#  두 패키지는 옛 sekai-desktop 의 파일을 넘겨받는다 (Replaces/Breaks: sekai-desktop (<< 이번 판)).
+#  옛 sekai-desktop 이름으로 걸어 둔 dpkg-divert 는 새 주인으로 옮긴다 (파일은 그 자리에 둔 채 --no-rename).
 # ═══════════════════════════════════════════════════════════
-echo "==> sekai-desktop 스테이징"
-DSRC="$P/src/sekai-desktop"
-( cd "$DSRC" && find . -type f ) | while read -r f; do
-    f="${f#./}"
-    mode=644
-    case "$f" in usr/bin/*|usr/sbin/*|usr/libexec/*|etc/kernel/postinst.d/*|etc/initramfs/post-update.d/*|etc/grub.d/*|usr/share/initramfs-tools/hooks/*) mode=755 ;; esac
-    install -Dm$mode "$DSRC/$f" "$STAGE_D/$f"
-done
 
-mkdir -p "$STAGE_D/DEBIAN"
-# /etc 아래 파일은 conffile — 사용자가 고친 건 업그레이드 때 보존된다
-( cd "$STAGE_D" && find etc -type f 2>/dev/null | sed 's|^|/|' ) > "$STAGE_D/DEBIAN/conffiles"
+# 소스 폴더를 그대로 스테이징 — 실행 파일 권한, /etc 는 conffile (사용자가 고친 건 업그레이드 때 보존된다)
+stage_tree() {
+    local src="$1" stage="$2"
+    ( cd "$src" && find . -type f ) | while read -r f; do
+        f="${f#./}"
+        mode=644
+        case "$f" in usr/bin/*|usr/sbin/*|usr/libexec/*|etc/kernel/postinst.d/*|etc/initramfs/post-update.d/*|etc/grub.d/*|usr/share/initramfs-tools/hooks/*) mode=755 ;; esac
+        install -Dm$mode "$src/$f" "$stage/$f"
+    done
+    mkdir -p "$stage/DEBIAN"
+    ( cd "$stage" && find etc -type f 2>/dev/null | sed 's|^|/|' ) > "$stage/DEBIAN/conffiles"
+    [ -s "$stage/DEBIAN/conffiles" ] || rm -f "$stage/DEBIAN/conffiles"
+}
 
-# 설치/제거 스크립트
-#   · pam-auth-update: 로그인 때 GNOME 키링을 풀도록 PAM 에 반영
-#     (안 풀리면 크로미움이 켤 때마다 '키링 암호' 창을 띄운다)
-#   · gschema override 는 libglib2.0 의 dpkg 트리거가 알아서 컴파일한다
-cat > "$STAGE_D/DEBIAN/postinst" <<'PI'
+# 옛 sekai-desktop 이 걸어 둔 divert 를 새 주인에게 (파일은 이미 옮겨진 자리에 그대로) — 메인테이너 스크립트에 넣는 조각
+DIVERT_TAKEOVER='
+# divert_takeover <새 주인> <원래 경로> <옮긴 경로>
+divert_takeover() {
+    owner=$(dpkg-divert --listpackage "$2" 2>/dev/null || true)
+    [ "$owner" = "$1" ] && return 0
+    if [ "$owner" = sekai-desktop ]; then
+        dpkg-divert --package sekai-desktop --no-rename --quiet --remove "$2"
+        dpkg-divert --package "$1" --no-rename --quiet --divert "$3" --add "$2"
+    elif [ -z "$owner" ]; then
+        dpkg-divert --package "$1" --rename --quiet --divert "$3" --add "$2"
+    fi
+}'
+
+# ─────────────────────────────────────────────────────────
+#  sekai-de — SekaiDE (데스크톱 환경)
+# ─────────────────────────────────────────────────────────
+echo "==> sekai-de 스테이징"
+stage_tree "$P/src/sekai-de" "$STAGE_DE"
+cat > "$STAGE_DE/DEBIAN/postinst" <<PI
 #!/bin/sh
 set -e
+$DIVERT_TAKEOVER
+PI
+cat >> "$STAGE_DE/DEBIAN/postinst" <<'PI'
 if [ "$1" = "configure" ] && command -v pam-auth-update >/dev/null; then
+    # 로그인 때 GNOME 키링을 풀도록 PAM 에 반영 (안 풀리면 크로미움이 켤 때마다 '키링 암호' 창을 띄운다)
     pam-auth-update --package
 fi
 if [ "$1" = "configure" ]; then
     # 그래픽 로그인 화면으로 부팅한다 (greetd = display-manager)
     [ -d /run/systemd/system ] && systemctl daemon-reload >/dev/null 2>&1 || true
     systemctl enable greetd.service >/dev/null 2>&1 || true
-    # 부팅 화면·콘솔을 바탕화면과 같은 모니터 모드로 (sekai-bootmode — 모드가 바뀔 때마다 신호가 끊긴다)
-    systemctl enable sekai-bootmode.path >/dev/null 2>&1 || true
-    [ -d /run/systemd/system ] && systemctl start sekai-bootmode.path >/dev/null 2>&1 || true
     systemctl set-default graphical.target >/dev/null 2>&1 || true
-    # cups-browsed 는 cups 의 권장 패키지라 업데이트 때 같이 깔린다 — 실행 조건 조각(etc/systemd/system/
-    #   cups-browsed.service.d)으로 막아 두고, 이미 떠 있으면 멈춘다. (Conflicts 로 막았더니 apt 가
-    #   cups-browsed 대신 sekai-desktop 을 지우려 했다)
-    systemctl stop cups-browsed.service >/dev/null 2>&1 || true
     # 관리자(sudo)는 시스템 기록(이벤트 뷰어)·프린터 관리(CUPS)도 — 새 계정은 sekai-users 가 넣는다,
     #   이미 있는 관리자는 여기서 (다음 로그인부터)
     for g in systemd-journal lpadmin; do
@@ -185,25 +200,10 @@ if [ "$1" = "configure" ]; then
     # 로그인 화면 해상도 공유 폴더 (usr/lib/tmpfiles.d/sekai.conf)
     systemd-tmpfiles --create /usr/lib/tmpfiles.d/sekai.conf >/dev/null 2>&1 \
         || install -d -m 1777 /var/lib/sekai/displays
-    # SSH 호스트 키가 없는 설치본(이미지에서 지운 키를 첫 부팅이 못 만든 경우) — 여기서 만든다.
-    #   라이브·이미지 만드는 중(chroot)엔 하지 않는다: 키가 이미지에 박히면 모든 설치본이 같은 키를 쓴다
-    if [ -x /usr/sbin/sshd ] && [ ! -d /run/live/medium ] && [ -d /run/systemd/system ] \
-       && ! ls /etc/ssh/ssh_host_*_key >/dev/null 2>&1; then
-        ssh-keygen -A >/dev/null 2>&1 || true
-        systemctl restart ssh.socket >/dev/null 2>&1 || true
-    fi
     # 펌웨어 화면 장치 권한 규칙(70-sekai-fb.rules)을 지금 바로 적용
     if [ -d /run/systemd/system ] && command -v udevadm >/dev/null; then
         udevadm control --reload >/dev/null 2>&1 || true
         udevadm trigger --subsystem-match=graphics >/dev/null 2>&1 || true
-    fi
-    # 옛 설치본이 이미지에 직접 넣었던 커널 훅 → 이제 패키지의 zz-sekai-boot 가 한다
-    for f in /etc/kernel/postinst.d/zz-sekai-esp /etc/initramfs/post-update.d/zz-sekai-esp; do
-        [ -e "$f" ] && ! dpkg -S "$f" >/dev/null 2>&1 && rm -f "$f"
-    done
-    # 예전 설치본에 남은 refind 패키지가 업데이트 때 스스로 ESP 에 설치하지 않게
-    if command -v debconf-set-selections >/dev/null; then
-        echo "refind refind/install_to_esp boolean false" | debconf-set-selections || true
     fi
     # 글꼴 — 데비안 fontconfig 의 "서브픽셀 끔"을 "자동"으로 (한 번만 — 사용자가 dpkg-reconfigure 로 다시 끄면 그대로 둔다).
     #   끔이면 fontconfig 가 먼저 rgba=none 을 정해, GSettings 의 ClearType(font-antialiasing=rgba)을 GTK·크로미움이 못 쓴다.
@@ -215,20 +215,6 @@ if [ "$1" = "configure" ]; then
         [ -L /etc/fonts/conf.d/10-sub-pixel-none.conf ] && rm -f /etc/fonts/conf.d/10-sub-pixel-none.conf
         mkdir -p /var/lib/sekai && : > /var/lib/sekai/.fontconfig-subpixel-auto
     fi
-    # 데비안의 10_linux 대신 09_sekaios 가 부팅 항목을 만든다 (항목이 두 벌이 되지 않게).
-    #   파일을 옮기지(dpkg-divert) 않고 실행 권한만 뺀다 — update-grub 은 실행 권한 없는 것을
-    #   건너뛴다. 이 파일들은 grub-common 의 conffile 이라 옮기면 grub 업데이트 때 꼬인다.
-    #   dpkg-statoverride 는 grub-common 이 업데이트돼도 유지된다.
-    for f in 10_linux 30_uefi-firmware; do
-        # 예전 판이 옮겨 둔 것 되돌리기
-        if dpkg-divert --listpackage "/etc/grub.d/$f" 2>/dev/null | grep -qx sekai-desktop; then
-            dpkg-divert --package sekai-desktop --rename --quiet --remove "/etc/grub.d/$f" || true
-        fi
-        if ! dpkg-statoverride --list "/etc/grub.d/$f" >/dev/null 2>&1; then
-            dpkg-statoverride --update --add root root 0644 "/etc/grub.d/$f" 2>/dev/null || true
-        fi
-    done
-    rmdir /usr/share/sekai/grub 2>/dev/null || true
     # 마우스 커서 기본값 — DMZ-White (앱이 따로 고르지 않을 때 쓰는 /usr/share/icons/default).
     #   한 번만 한다 — 관리자가 직접 고른 것(수동)이나 auto 로 되돌린 것을 업데이트마다 덮어쓰지 않게
     if [ ! -e /var/lib/sekai/cursor-default-set ] && [ -e /usr/share/icons/DMZ-White/cursor.theme ]; then
@@ -240,104 +226,41 @@ if [ "$1" = "configure" ]; then
     # "폴더에 표시"(org.freedesktop.FileManager1)는 파일 탐색기(sekai-files)가 맡는다. 예전 설치본에
     #   Thunar 가 남아 있으면 같은 이름을 서비스 파일 둘이 주장해 어느 쪽이 뜰지 모른다 → Thunar 것을
     #   옆 이름으로 옮겨 둔다 (dpkg-divert — Thunar 가 업데이트돼도 그 파일은 옮긴 이름으로 깔린다)
-    # /etc/os-release 는 데비안처럼 /usr/lib/os-release(이 패키지의 SekaiOS 것 — preinst 가 base-files 것을
-    #   옮겨 둔다)를 가리키는 링크로. 예전 이미지는 /etc/os-release 를 파일로 고쳐 두어, base-files 가
-    #   업데이트되면 링크로 바뀌며 데비안으로 돌아갔다 (fastfetch·설정 › 시스템 정보·lsb_release 가 "Debian")
-    if [ ! -L /etc/os-release ] && [ -f /usr/lib/os-release ] && grep -q '^ID=sekai' /usr/lib/os-release; then
-        ln -sfn ../usr/lib/os-release /etc/os-release
-    fi
     t=/usr/share/dbus-1/services/org.xfce.Thunar.FileManager1.service
-    if ! dpkg-divert --listpackage "$t" 2>/dev/null | grep -qx sekai-desktop; then
-        dpkg-divert --package sekai-desktop --rename --quiet --divert "$t.sekai-off" --add "$t" || true
-    fi
+    divert_takeover sekai-de "$t" "$t.sekai-off"
     # 암호 저장소(gnome-keyring)·GPG 의 암호 창은 우리 것(/usr/lib/sekai/keyring-prompter)이 맡는다 —
     #   gcr 의 gcr-prompter 서비스 파일을 같은 방법으로 옆 이름으로 옮긴다 (같은 이름을 둘이 주장하지 않게)
     for n in SystemPrompter PrivatePrompter; do
         t=/usr/share/dbus-1/services/org.gnome.keyring.$n.service
-        if ! dpkg-divert --listpackage "$t" 2>/dev/null | grep -qx sekai-desktop; then
-            dpkg-divert --package sekai-desktop --rename --quiet --divert "$t.sekai-off" --add "$t" || true
-        fi
+        divert_takeover sekai-de "$t" "$t.sekai-off"
     done
 fi
-if [ "$1" = "configure" ] || [ "$1" = "triggered" ]; then
-    # 부팅 메뉴(shim + GRUB)를 이 패키지 기준으로 다시 쓴다 — 설치된 디스크일 때만.
-    #   shim·GRUB 패키지가 업데이트돼도 트리거로 여기가 불려 ESP 의 파일이 새것이 된다.
-    #   예전 rEFInd 설치본은 이때 GRUB 으로 옮겨진다. (이미지 만드는 중·라이브면 건너뜀)
-    /usr/sbin/sekai-bootloader update || true
-fi
-if [ "$1" = "configure" ]; then
-    # 부팅 화면(Plymouth) — 테마나 그 그림이 바뀔 때만 initramfs 를 다시 만든다 (느리므로).
-    #   테마는 initramfs 안에 복사되므로 파일만 바뀌어도 다시 만들어야 새 그림이 뜬다
-    if command -v plymouth-set-default-theme >/dev/null; then
-        # NVIDIA 를 부팅 초기에 올리는 훅(sekai-nvidia)도 해시에 넣는다 — 처음 받으면 initramfs 를 다시 만든다
-        sum=$(cat /usr/share/plymouth/themes/sekai/* /usr/share/initramfs-tools/hooks/sekai-nvidia 2>/dev/null | md5sum | cut -d" " -f1)
-        stamp=/var/lib/sekai/plymouth-theme.md5
-        if [ "$(plymouth-set-default-theme 2>/dev/null)" != sekai ] || [ "$(cat $stamp 2>/dev/null)" != "$sum" ]; then
-            plymouth-set-default-theme sekai
-            update-initramfs -u >/dev/null 2>&1 || true
-            mkdir -p /var/lib/sekai && echo "$sum" > $stamp
-        fi
-    fi
-fi
 PI
-cat > "$STAGE_D/DEBIAN/preinst" <<'PRI'
-#!/bin/sh
-set -e
-# /usr/lib/os-release 는 이 패키지가 싣는 SekaiOS 것 — base-files 의 것은 옆 이름으로 옮긴다
-#   (풀기 전에 해야 두 패키지가 같은 파일을 다투지 않는다. base-files 가 업데이트돼도 옆 이름으로 깔린다)
-if [ "$1" = "install" ] || [ "$1" = "upgrade" ]; then
-    if ! dpkg-divert --listpackage /usr/lib/os-release 2>/dev/null | grep -qx sekai-desktop; then
-        dpkg-divert --package sekai-desktop --rename --quiet --divert /usr/lib/os-release.debian --add /usr/lib/os-release
-    fi
-fi
-PRI
-cat > "$STAGE_D/DEBIAN/prerm" <<'PR'
+cat > "$STAGE_DE/DEBIAN/prerm" <<'PR'
 #!/bin/sh
 set -e
 if [ "$1" = "remove" ] && command -v pam-auth-update >/dev/null; then
     pam-auth-update --package --remove sekai-gnome-keyring
 fi
 PR
-cat > "$STAGE_D/DEBIAN/postrm" <<'PO'
+cat > "$STAGE_DE/DEBIAN/postrm" <<'PO'
 #!/bin/sh
 set -e
 if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
-    # 데비안 부팅 항목을 되살리고, 우리 항목은 끈다 (conffile 이라 purge 전까진 남는다)
-    for f in 10_linux 30_uefi-firmware; do
-        dpkg-divert --package sekai-desktop --rename --quiet --remove "/etc/grub.d/$f" 2>/dev/null || true
-        if dpkg-statoverride --list "/etc/grub.d/$f" >/dev/null 2>&1; then
-            dpkg-statoverride --remove "/etc/grub.d/$f" || true
-            [ -e "/etc/grub.d/$f" ] && chmod 755 "/etc/grub.d/$f"
-        fi
-    done
-    [ -e /etc/grub.d/09_sekaios ] && chmod 644 /etc/grub.d/09_sekaios
-    dpkg-divert --package sekai-desktop --rename --quiet \
+    dpkg-divert --package sekai-de --rename --quiet \
         --remove /usr/share/dbus-1/services/org.xfce.Thunar.FileManager1.service 2>/dev/null || true
     for n in SystemPrompter PrivatePrompter; do
-        dpkg-divert --package sekai-desktop --rename --quiet \
+        dpkg-divert --package sekai-de --rename --quiet \
             --remove /usr/share/dbus-1/services/org.gnome.keyring.$n.service 2>/dev/null || true
     done
-    # 설치된 디스크면 부팅 메뉴를 다시 쓴다 (없어진 테마·항목을 가리키지 않게)
-    if [ -f /boot/grub/grub.cfg ] && command -v update-grub >/dev/null; then
-        update-grub >/dev/null 2>&1 || true
-    fi
-fi
-# 데비안의 os-release 를 되돌린다 (이 패키지의 것은 이미 지워졌다)
-if [ "$1" = "remove" ] || [ "$1" = "purge" ] || [ "$1" = "abort-install" ]; then
-    dpkg-divert --package sekai-desktop --rename --quiet --remove /usr/lib/os-release 2>/dev/null || true
 fi
 PO
-# shim·GRUB 이 업데이트되면 ESP 의 복사본도 새것으로 (postinst "triggered")
-cat > "$STAGE_D/DEBIAN/triggers" <<'TR'
-interest-noawait /usr/lib/shim
-interest-noawait /usr/lib/grub/x86_64-efi-signed
-TR
-chmod 755 "$STAGE_D/DEBIAN/preinst" "$STAGE_D/DEBIAN/postinst" "$STAGE_D/DEBIAN/prerm" "$STAGE_D/DEBIAN/postrm"
+chmod 755 "$STAGE_DE/DEBIAN/postinst" "$STAGE_DE/DEBIAN/prerm" "$STAGE_DE/DEBIAN/postrm"
 
-copyright "$STAGE_D" sekai-desktop
+copyright "$STAGE_DE" sekai-de
 # GTK 테마(Sekai-Light · Sekai-Dark)는 Apache 2.0 이 아니라 GPL-3.0 — 원본 저작권·출처·소스 위치를 함께 적는다
 #   (third_party/fluent-gtk-theme/UPSTREAM.md 와 같은 내용)
-cat >> "$STAGE_D/usr/share/doc/sekai-desktop/copyright" <<'THEME'
+cat >> "$STAGE_DE/usr/share/doc/sekai-de/copyright" <<'THEME'
 
 ════════════════════════════════════════════════════════════════
 다음 파일은 Apache 2.0 이 아니라 GPL-3.0 입니다 — 다른 사람의 저작물을 SekaiOS 가 고친 것.
@@ -360,41 +283,199 @@ cat >> "$STAGE_D/usr/share/doc/sekai-desktop/copyright" <<'THEME'
 THEME
 # 이 패키지를 만든 소스의 커밋 — 옛 패키지에 맞는 소스(GPL-3 6조)를 찾을 수 있게
 printf '          이 패키지를 만든 소스: 커밋 %s\n          GPL-3.0 전문은 테마 폴더의 COPYING 에도 있다 (usr/share/themes/Sekai-*/COPYING)\n' \
-    "$(git -C "$P" rev-parse HEAD 2>/dev/null || echo 알수없음)" >> "$STAGE_D/usr/share/doc/sekai-desktop/copyright"
+    "$(git -C "$P" rev-parse HEAD 2>/dev/null || echo 알수없음)" >> "$STAGE_DE/usr/share/doc/sekai-de/copyright"
 
-cat > "$STAGE_D/DEBIAN/control" <<CTRL
+cat > "$STAGE_DE/DEBIAN/control" <<CTRL
+Package: sekai-de
+Version: ${FULL}
+Architecture: all
+Maintainer: SekaiOS <sekai@localhost>
+Section: x11
+Priority: optional
+Depends: sekai-shell (= ${FULL}),
+ sekaicomp (>= 0.50.1-sekai18), hyprbars (>= 0.50.0-sekai15), hyprexpo, xwayland,
+ xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr,
+ swaybg, swayidle, swaylock, grim, slurp, wl-clipboard, cliphist, libnotify-bin,
+ brightnessctl, playerctl, wtype, pkexec,
+ xserver-xorg-core, xserver-xorg-video-fbdev, xserver-xorg-input-libinput, xserver-xorg-legacy,
+ xinit, x11-xserver-utils, xfwm4, xfconf, sxhkd, xcape, xsecurelock, xss-lock, maim, slop, xclip,
+ xdotool, gir1.2-wnck-3.0,
+ greetd, gnome-keyring, libpam-gnome-keyring, libpam-runtime, dbus-user-session,
+ ibus, ibus-wayland, ibus-hangul, gir1.2-ibus-1.0, ibus-gtk3, ibus-gtk4,
+ fonts-pretendard, fonts-nanum, fonts-jetbrains-mono, fonts-noto-color-emoji,
+ papirus-icon-theme, adwaita-icon-theme, dmz-cursor-theme,
+ gvfs, gvfs-backends, udisks2, libarchive-tools, xdg-user-dirs
+Replaces: sekai-desktop (<< ${FULL})
+Breaks: sekai-desktop (<< ${FULL})
+Description: SekaiDE - the SekaiOS desktop environment
+ The desktop session of SekaiOS: login screen, lock screen, first-boot
+ setup, compositor configuration for SekaiCompose, GTK themes, icons,
+ wallpapers, menus and the helpers behind them. Pulls in sekai-shell
+ (taskbar, start menu, settings and apps) and the SekaiCompose compositor.
+ Works on its own on Debian 13; SekaiOS adds sekaios-base on top.
+CTRL
+
+# ─────────────────────────────────────────────────────────
+#  sekaios-base — SekaiOS 배포판 부품
+# ─────────────────────────────────────────────────────────
+echo "==> sekaios-base 스테이징"
+stage_tree "$P/src/sekaios-base" "$STAGE_B"
+cat > "$STAGE_B/DEBIAN/preinst" <<PRI
+#!/bin/sh
+set -e
+$DIVERT_TAKEOVER
+PRI
+cat >> "$STAGE_B/DEBIAN/preinst" <<'PRI'
+# /usr/lib/os-release 는 이 패키지가 싣는 SekaiOS 것 — base-files 의 것은 옆 이름으로 옮긴다
+#   (풀기 전에 해야 한다: divert 의 주인 패키지 파일만 제자리에 풀린다. 옛 sekai-desktop 이 주인이면 넘겨받는다)
+if [ "$1" = "install" ] || [ "$1" = "upgrade" ]; then
+    divert_takeover sekaios-base /usr/lib/os-release /usr/lib/os-release.debian
+fi
+PRI
+cat > "$STAGE_B/DEBIAN/postinst" <<'PI'
+#!/bin/sh
+set -e
+if [ "$1" = "configure" ]; then
+    [ -d /run/systemd/system ] && systemctl daemon-reload >/dev/null 2>&1 || true
+    # 부팅 화면·콘솔을 바탕화면과 같은 모니터 모드로 (sekai-bootmode — 모드가 바뀔 때마다 신호가 끊긴다)
+    systemctl enable sekai-bootmode.path >/dev/null 2>&1 || true
+    [ -d /run/systemd/system ] && systemctl start sekai-bootmode.path >/dev/null 2>&1 || true
+    # cups-browsed 는 cups 의 권장 패키지라 업데이트 때 같이 깔린다 — 실행 조건 조각(etc/systemd/system/
+    #   cups-browsed.service.d)으로 막아 두고, 이미 떠 있으면 멈춘다. (Conflicts 로 막았더니 apt 가
+    #   cups-browsed 대신 sekai-desktop 을 지우려 했다)
+    systemctl stop cups-browsed.service >/dev/null 2>&1 || true
+    # SSH 호스트 키가 없는 설치본(이미지에서 지운 키를 첫 부팅이 못 만든 경우) — 여기서 만든다.
+    #   라이브·이미지 만드는 중(chroot)엔 하지 않는다: 키가 이미지에 박히면 모든 설치본이 같은 키를 쓴다
+    if [ -x /usr/sbin/sshd ] && [ ! -d /run/live/medium ] && [ -d /run/systemd/system ] \
+       && ! ls /etc/ssh/ssh_host_*_key >/dev/null 2>&1; then
+        ssh-keygen -A >/dev/null 2>&1 || true
+        systemctl restart ssh.socket >/dev/null 2>&1 || true
+    fi
+    # 옛 설치본이 이미지에 직접 넣었던 커널 훅 → 이제 패키지의 zz-sekai-boot 가 한다
+    for f in /etc/kernel/postinst.d/zz-sekai-esp /etc/initramfs/post-update.d/zz-sekai-esp; do
+        [ -e "$f" ] && ! dpkg -S "$f" >/dev/null 2>&1 && rm -f "$f"
+    done
+    # 예전 설치본에 남은 refind 패키지가 업데이트 때 스스로 ESP 에 설치하지 않게
+    if command -v debconf-set-selections >/dev/null; then
+        echo "refind refind/install_to_esp boolean false" | debconf-set-selections || true
+    fi
+    # 데비안의 10_linux 대신 09_sekaios 가 부팅 항목을 만든다 (항목이 두 벌이 되지 않게).
+    #   파일을 옮기지(dpkg-divert) 않고 실행 권한만 뺀다 — update-grub 은 실행 권한 없는 것을
+    #   건너뛴다. 이 파일들은 grub-common 의 conffile 이라 옮기면 grub 업데이트 때 꼬인다.
+    #   dpkg-statoverride 는 grub-common 이 업데이트돼도 유지된다.
+    for f in 10_linux 30_uefi-firmware; do
+        # 아주 예전 판(sekai-desktop)이 옮겨 둔 것 되돌리기
+        if dpkg-divert --listpackage "/etc/grub.d/$f" 2>/dev/null | grep -qx sekai-desktop; then
+            dpkg-divert --package sekai-desktop --rename --quiet --remove "/etc/grub.d/$f" || true
+        fi
+        if ! dpkg-statoverride --list "/etc/grub.d/$f" >/dev/null 2>&1; then
+            dpkg-statoverride --update --add root root 0644 "/etc/grub.d/$f" 2>/dev/null || true
+        fi
+    done
+    rmdir /usr/share/sekai/grub 2>/dev/null || true
+    # /etc/os-release 는 데비안처럼 /usr/lib/os-release(이 패키지의 SekaiOS 것 — preinst 가 base-files 것을
+    #   옮겨 둔다)를 가리키는 링크로. 예전 이미지는 /etc/os-release 를 파일로 고쳐 두어, base-files 가
+    #   업데이트되면 링크로 바뀌며 데비안으로 돌아갔다 (fastfetch·설정 › 시스템 정보·lsb_release 가 "Debian")
+    if [ ! -L /etc/os-release ] && [ -f /usr/lib/os-release ] && grep -q '^ID=sekai' /usr/lib/os-release; then
+        ln -sfn ../usr/lib/os-release /etc/os-release
+    fi
+fi
+if [ "$1" = "configure" ] || [ "$1" = "triggered" ]; then
+    # 부팅 메뉴(shim + GRUB)를 이 패키지 기준으로 다시 쓴다 — 설치된 디스크일 때만.
+    #   shim·GRUB 패키지가 업데이트돼도 트리거로 여기가 불려 ESP 의 파일이 새것이 된다.
+    #   예전 rEFInd 설치본은 이때 GRUB 으로 옮겨진다. (이미지 만드는 중·라이브면 건너뜀)
+    /usr/sbin/sekai-bootloader update || true
+fi
+if [ "$1" = "configure" ]; then
+    # 부팅 화면(Plymouth) — 테마나 그 그림이 바뀔 때만 initramfs 를 다시 만든다 (느리므로).
+    #   테마는 initramfs 안에 복사되므로 파일만 바뀌어도 다시 만들어야 새 그림이 뜬다
+    if command -v plymouth-set-default-theme >/dev/null; then
+        # NVIDIA 를 부팅 초기에 올리는 훅(sekai-nvidia)도 해시에 넣는다 — 처음 받으면 initramfs 를 다시 만든다
+        sum=$(cat /usr/share/plymouth/themes/sekai/* /usr/share/initramfs-tools/hooks/sekai-nvidia 2>/dev/null | md5sum | cut -d" " -f1)
+        stamp=/var/lib/sekai/plymouth-theme.md5
+        if [ "$(plymouth-set-default-theme 2>/dev/null)" != sekai ] || [ "$(cat $stamp 2>/dev/null)" != "$sum" ]; then
+            plymouth-set-default-theme sekai
+            update-initramfs -u >/dev/null 2>&1 || true
+            mkdir -p /var/lib/sekai && echo "$sum" > $stamp
+        fi
+    fi
+fi
+PI
+cat > "$STAGE_B/DEBIAN/postrm" <<'PO'
+#!/bin/sh
+set -e
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+    # 데비안 부팅 항목을 되살리고, 우리 항목은 끈다 (conffile 이라 purge 전까진 남는다)
+    for f in 10_linux 30_uefi-firmware; do
+        if dpkg-statoverride --list "/etc/grub.d/$f" >/dev/null 2>&1; then
+            dpkg-statoverride --remove "/etc/grub.d/$f" || true
+            [ -e "/etc/grub.d/$f" ] && chmod 755 "/etc/grub.d/$f"
+        fi
+    done
+    [ -e /etc/grub.d/09_sekaios ] && chmod 644 /etc/grub.d/09_sekaios
+    # 설치된 디스크면 부팅 메뉴를 다시 쓴다 (없어진 테마·항목을 가리키지 않게)
+    if [ -f /boot/grub/grub.cfg ] && command -v update-grub >/dev/null; then
+        update-grub >/dev/null 2>&1 || true
+    fi
+fi
+# 데비안의 os-release 를 되돌린다 (이 패키지의 것은 이미 지워졌다)
+if [ "$1" = "remove" ] || [ "$1" = "purge" ] || [ "$1" = "abort-install" ]; then
+    dpkg-divert --package sekaios-base --rename --quiet --remove /usr/lib/os-release 2>/dev/null || true
+fi
+PO
+# shim·GRUB 이 업데이트되면 ESP 의 복사본도 새것으로 (postinst "triggered")
+cat > "$STAGE_B/DEBIAN/triggers" <<'TR'
+interest-noawait /usr/lib/shim
+interest-noawait /usr/lib/grub/x86_64-efi-signed
+TR
+chmod 755 "$STAGE_B/DEBIAN/preinst" "$STAGE_B/DEBIAN/postinst" "$STAGE_B/DEBIAN/postrm"
+copyright "$STAGE_B" sekaios-base
+
+cat > "$STAGE_B/DEBIAN/control" <<CTRL
+Package: sekaios-base
+Version: ${FULL}
+Architecture: all
+Maintainer: SekaiOS <sekai@localhost>
+Section: admin
+Priority: optional
+Depends: shim-signed, grub-efi-amd64-signed, grub-efi-amd64-bin, grub2-common, os-prober,
+ efibootmgr, mokutil, pciutils, openssl,
+ plymouth (>= 24.004.60-5+sekai1), plymouth-themes,
+ network-manager, systemd-resolved
+Replaces: sekai-desktop (<< ${FULL})
+Breaks: sekai-desktop (<< ${FULL})
+Description: SekaiOS base system
+ The distribution side of SekaiOS: os-release and branding, the boot
+ chain (shim + GRUB menu, Plymouth boot splash, initramfs and kernel
+ hooks), the signed SekaiOS update repository with its key, the update
+ helper and the NVIDIA driver installer behind Settings > Graphics.
+CTRL
+
+# ─────────────────────────────────────────────────────────
+#  sekai-desktop — 메타패키지 (파일 없음)
+#  "SekaiOS 데스크탑이 되려면 무엇이 깔려 있어야 하는가" 의 정의.
+#  옛 설치본도  apt install ./sekai-desktop_*.deb  한 번이면 빠진 패키지가 전부 따라 들어온다.
+# ─────────────────────────────────────────────────────────
+echo "==> sekai-desktop (메타패키지)"
+mkdir -p "$STAGE_M/DEBIAN"
+copyright "$STAGE_M" sekai-desktop
+cat > "$STAGE_M/DEBIAN/control" <<CTRL
 Package: sekai-desktop
 Version: ${FULL}
 Architecture: all
 Maintainer: SekaiOS <sekai@localhost>
 Section: metapackages
 Priority: optional
-Depends: sekai-shell (= ${FULL}),
- hyprland (>= 0.50.1-sekai17), hyprbars (>= 0.50.0-sekai14), hyprexpo, xwayland, binutils,
- xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr,
- foot, fuzzel, swaybg, swayidle, swaylock, grim, slurp,
- brightnessctl, playerctl, wtype, pkexec, efibootmgr, open-vm-tools, mokutil, pciutils, openssl,
- shim-signed, grub-efi-amd64-signed, grub-efi-amd64-bin, grub2-common, os-prober,
+Depends: sekai-de (= ${FULL}), sekaios-base (= ${FULL}), sekai-shell (= ${FULL}),
+ binutils, foot, fuzzel, xterm,
  firmware-amd-graphics, firmware-intel-graphics, firmware-nvidia-graphics, firmware-misc-nonfree,
  firmware-iwlwifi, firmware-realtek, firmware-atheros, firmware-mediatek, firmware-sof-signed,
- xserver-xorg-core, xserver-xorg-video-fbdev, xserver-xorg-input-libinput, xserver-xorg-legacy,
- xinit, x11-xserver-utils, xfwm4, xfconf, sxhkd, xcape, xsecurelock, xss-lock, maim, slop, xclip,
- xdotool, xterm, gir1.2-wnck-3.0,
- wl-clipboard, cliphist, libnotify-bin, wayland-utils,
+ open-vm-tools,
  pipewire, pipewire-audio, pipewire-pulse, wireplumber,
- network-manager, network-manager-l10n, systemd-resolved,
- wpasupplicant, wireless-regdb, iw, ntfs-3g, exfatprogs,
+ network-manager-l10n, wpasupplicant, wireless-regdb, iw, ntfs-3g, exfatprogs,
  bluez, wlsunset,
  cups, cups-client, cups-ipp-utils, avahi-daemon, libnss-mdns, ipp-usb,
- gvfs, gvfs-backends, udisks2, libarchive-tools,
- qt6-wayland, xdg-user-dirs,
- fonts-pretendard, fonts-dejavu, fonts-jetbrains-mono, fonts-nanum,
- fonts-noto-color-emoji, fonts-symbola,
- papirus-icon-theme, adwaita-icon-theme, dmz-cursor-theme,
- gnome-keyring, libpam-gnome-keyring, libpam-runtime,
- ibus, ibus-wayland, ibus-hangul, gir1.2-ibus-1.0, ibus-gtk3, ibus-gtk4, locales, greetd,
- plymouth (>= 24.004.60-5+sekai1), plymouth-themes,
- dbus-user-session,
+ qt6-wayland, fonts-dejavu, fonts-symbola, locales,
  libgl1-mesa-dri, libegl-mesa0, mesa-utils
 Recommends: htop, tmux, tree, ncdu, vim, nano, git, curl, wget,
  bash-completion, less, man-db,
@@ -403,19 +484,18 @@ Recommends: htop, tmux, tree, ncdu, vim, nano, git, curl, wget,
  poppler-utils
 Conflicts: fnott
 Description: SekaiOS desktop (metapackage)
- Pulls in everything that makes up the SekaiOS desktop: the Hyprland
- compositor with title-bar and overview plugins, the sekai-shell panel,
- settings app, tray and notification center, and the default set of
- applications. Also ships the distribution Hyprland configuration
- (/usr/share/sekai/hypr/hyprland.conf), NetworkManager defaults,
- Chromium Wayland flags and the default wallpaper.
+ Everything that makes up SekaiOS: the SekaiDE desktop environment
+ (sekai-de, sekai-shell, SekaiCompose), the SekaiOS base system
+ (sekaios-base) and the default set of drivers, firmware, printing,
+ sound, network and applications.
 CTRL
 
-echo "==> sekai-desktop .deb 생성"
-dpkg-deb --root-owner-group --build "$STAGE_D" \
-         "$OUT/sekai-desktop_${FULL}_all.deb" > /dev/null
-ls -lh "$OUT/sekai-desktop_${FULL}_all.deb" | awk '{print "    "$5"  "$9}'
-echo "    conffiles:"; sed 's/^/      /' "$STAGE_D/DEBIAN/conffiles"
+for pkg in sekai-de sekaios-base sekai-desktop; do
+    case "$pkg" in sekai-de) st="$STAGE_DE" ;; sekaios-base) st="$STAGE_B" ;; *) st="$STAGE_M" ;; esac
+    echo "==> $pkg .deb 생성"
+    dpkg-deb --root-owner-group --build "$st" "$OUT/${pkg}_${FULL}_all.deb" > /dev/null
+    ls -lh "$OUT/${pkg}_${FULL}_all.deb" | awk '{print "    "$5"  "$9}'
+done
 # ═══════════════════════════════════════════════════════════
 #  sekai-installer — 설치 화면 (라이브 이미지에만 들어간다)
 #  설치가 끝난 시스템에서는 설치 백엔드가 이 패키지를 지운다.

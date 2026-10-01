@@ -49,6 +49,12 @@ VMware 가상 머신과 실제 PC(AMD · NVIDIA 그래픽)에서 시험하고 �
 | 디스크 | 12GB 이상 — 설치 프로그램은 고른 디스크 하나를 통째로 쓴다 |
 | 그래픽 | Intel · AMD 는 바로. NVIDIA 는 설치 뒤 설정 › 그래픽에서 드라이버를 받는다 |
 
+## SekaiDE 만 쓰기
+
+SekaiOS 의 데스크톱 환경(SekaiDE)은 배포판과 따로 깔 수 있다 — 데비안 13(trixie)에 SekaiOS 저장소를 더한 뒤
+`sudo apt install sekai-de` 하면 셸·로그인 화면·합성기(SekaiCompose)가 들어오고, 부팅·업데이트 같은 배포판 부품
+(`sekaios-base`)은 깔리지 않는다. (설정 앱의 그래픽 드라이버·업데이트 페이지는 그 부품이 있을 때만 보인다)
+
 ## 설치와 업데이트
 
 - **설치 이미지** — 아직 공개하지 않았다. 직접 만들려면 아래 [직접 빌드하기](#직접-빌드하기)를 본다.
@@ -104,7 +110,9 @@ SekaiOS 의 화면은 직접 만들었다. 그 밑의 운영체제 부품(드라
 | 폴더 | 내용 |
 |---|---|
 | `src/sekai-shell/` | 셸과 앱 — 작업 표시줄, 바탕화면, 로그인 · 잠금 화면, 설정, 파일 탐색기 등 (패키지 `sekai-shell`) |
-| `src/sekai-desktop/` | 배포판 설정 메타패키지 — Hyprland 설정, 테마, 부팅 화면, 기본 앱 목록 (패키지 `sekai-desktop`) |
+| `src/sekai-de/` | SekaiDE — 세션·로그인 화면·잠금·첫 설정·합성기 설정·테마·아이콘·배경 (패키지 `sekai-de`) |
+| `src/sekaios-base/` | 배포판 부품 — os-release·부팅(GRUB·Plymouth·initramfs)·업데이트 저장소·그래픽 드라이버 도구 (패키지 `sekaios-base`) |
+| (패키지 `sekai-desktop`) | 메타패키지 — `sekai-de` + `sekaios-base` + 드라이버·펌웨어·인쇄·소리·기본 앱 |
 | `src/sekai-installer/` | 설치 프로그램 (패키지 `sekai-installer`) |
 | `overlay/`, `config/` | 설치 이미지에 직접 넣는 파일, 라이브 이미지 부트로더 설정 |
 | `scripts/` | 빌드 스크립트 (`scripts/hypr/` — SekaiCompose·Hyprland 라이브러리 빌드, Plymouth 패치) |

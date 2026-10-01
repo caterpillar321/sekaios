@@ -21,7 +21,9 @@ MODULES = [about, display, graphics, sound, personalize, multitasking, devices, 
 
 
 def all_pages():
+    from sekaishell.distro import page_available
     out = []
     for m in MODULES:
-        out.extend(m.PAGES)
+        # SekaiOS 의 배포판 도우미가 있어야 하는 페이지(그래픽 드라이버·업데이트)는 없으면 숨긴다
+        out.extend(p for p in m.PAGES if page_available(p["id"]))
     return out

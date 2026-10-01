@@ -20,6 +20,7 @@ from collections import deque
 from decimal import Decimal
 
 from . import dbg
+from .distro import page_available
 
 # ── 점수 (클수록 앞) ─────────────────────────────────────────────
 EXACT = 1000         # 이름이 검색어와 같다
@@ -660,7 +661,7 @@ def installed_pages():
         at = src.find("\nPAGES")
         for chunk in src[at:].split("{")[1:] if at >= 0 else ():
             i, t = _ID_RE.search(chunk), _TITLE_RE.search(chunk)
-            if i and t:
+            if i and t and page_available(i.group(1)):    # 배포판 도우미가 없는 페이지는 뺀다
                 pages.setdefault(i.group(1), t.group(1))
     _pages_cache.update(key=key, pages=pages or None, entries=None)
     return _pages_cache["pages"]

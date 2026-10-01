@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """기본 화면 모드(X11)용 xfwm4 테마 "Sekai" — Hyprland 의 제목 표시줄(hyprbars)과 같은 모양.
 
-  src/sekai-desktop/usr/share/themes/Sekai/xfwm4/        (다크)
-  src/sekai-desktop/usr/share/themes/Sekai-Light/xfwm4/  (라이트)
+  src/sekai-de/usr/share/themes/Sekai/xfwm4/        (다크)
+  src/sekai-de/usr/share/themes/Sekai-Light/xfwm4/  (라이트)
     themerc, top-*/title-*/left/right/bottom-*.png, close/maximize/hide-*.png
   제목줄 34px, 위 모서리 둥글게(8), 버튼 46×34 (윈도우 11 크기), 닫기에 올리면 빨강.
 사용법: scripts/gen-xfwm4-theme.py
@@ -14,7 +14,7 @@ import cairo
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 P = os.path.dirname(HERE)
-THEMES = os.path.join(P, "src", "sekai-desktop", "usr", "share", "themes")
+THEMES = os.path.join(P, "src", "sekai-de", "usr", "share", "themes")
 OUT = None
 
 H = 34          # 제목줄 높이 (hyprbars bar_height 와 같게)

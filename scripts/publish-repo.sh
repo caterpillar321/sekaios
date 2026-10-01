@@ -15,7 +15,7 @@ P="$(cd "$(dirname "$0")/.." && pwd)"
 REMOTE="${SEKAI_APT_REMOTE:-https://github.com/caterpillar321/sekaios-apt.git}"
 URL="${SEKAI_APT_URL:-https://caterpillar321.github.io/sekaios-apt/}"
 SITE="$P/build/apt-site"
-KEY="$P/src/sekai-desktop/usr/share/keyrings/sekaios-archive-keyring.gpg"
+KEY="$P/src/sekaios-base/usr/share/keyrings/sekaios-archive-keyring.gpg"
 
 say(){ printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 

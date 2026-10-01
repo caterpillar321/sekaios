@@ -14,7 +14,8 @@ P = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(P, "src", "sekai-shell"))
 from sekaishell import logo  # noqa: E402
 
-OUT = os.path.join(P, "src", "sekai-desktop", "usr", "share")
+OUT = os.path.join(P, "src", "sekai-de", "usr", "share")            # 아이콘 (SekaiDE)
+BASE = os.path.join(P, "src", "sekaios-base", "usr", "share")     # 부팅 화면·rEFInd·fastfetch (배포판)
 
 
 def png(path, size, pad=0.0):
@@ -35,9 +36,9 @@ for name in ("sekaios", "distributor-logo-sekaios"):
 for n in (16, 22, 24, 32, 48, 64, 128, 256):
     png(os.path.join(OUT, "icons", "hicolor", f"{n}x{n}", "apps", "sekaios.png"), n, pad=0.04)
 # rEFInd 는 128px OS 아이콘을 쓴다. 다른 OS 아이콘들과 비슷한 여백을 준다.
-png(os.path.join(OUT, "sekai", "refind", "os_sekai.png"), 128, pad=0.14)
+png(os.path.join(BASE, "sekai", "refind", "os_sekai.png"), 128, pad=0.14)
 # Plymouth 부팅 화면 — 로고와 진행 점
-pdir = os.path.join(OUT, "plymouth", "themes", "sekai")
+pdir = os.path.join(BASE, "plymouth", "themes", "sekai")
 png(os.path.join(pdir, "logo.png"), 160, pad=0.06)
 dot = cairo.ImageSurface(cairo.FORMAT_ARGB32, 12, 12)
 c = cairo.Context(dot)
@@ -99,7 +100,7 @@ def fastfetch_logo(cols=38, aspect=0.5, scale=10):
     return "\n".join(lines) + "\n"
 
 
-fdir = os.path.join(OUT, "sekai", "fastfetch")
+fdir = os.path.join(BASE, "sekai", "fastfetch")
 os.makedirs(fdir, exist_ok=True)
 with open(os.path.join(fdir, "logo.txt"), "w", encoding="utf-8") as f:
     f.write(fastfetch_logo())

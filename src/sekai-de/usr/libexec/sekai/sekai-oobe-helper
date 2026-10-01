@@ -300,8 +300,10 @@ def finish():
     #   systemd-run 으로 따로 띄운다 (기록: /var/log/sekai-grub-firstboot.log)
     #   곧 로그인하면 sekai-bootmode 도 update-grub 을 돌린다 — 겹치면 grub.cfg 에서 Windows 항목이
     #   빠지거나 잘리므로 차례대로 (update-grub-locked)
-    run(["systemd-run", "--no-block", "--collect", "--unit", "sekai-grub-firstboot",
-         "sh", "-c", "/usr/libexec/sekai/update-grub-locked >/var/log/sekai-grub-firstboot.log 2>&1"])
+    #   (부팅 메뉴는 SekaiOS 배포판 부품(sekaios-base) 몫 — SekaiDE 만 깐 데비안이면 건너뛴다)
+    if os.path.exists("/usr/libexec/sekai/update-grub-locked"):
+        run(["systemd-run", "--no-block", "--collect", "--unit", "sekai-grub-firstboot",
+             "sh", "-c", "/usr/libexec/sekai/update-grub-locked >/var/log/sekai-grub-firstboot.log 2>&1"])
     threading.Timer(1.0, lambda: os._exit(0)).start()
     return {"ok": True}
 

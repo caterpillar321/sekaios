@@ -1,7 +1,7 @@
 # Fluent-gtk-theme (SekaiOS 가 가져와 고친 것)
 
 SekaiOS 의 GTK 테마 **Sekai-Light · Sekai-Dark** 는 이 폴더의 원본으로 만든다
-(`scripts/build-theme.sh` → `src/sekai-desktop/usr/share/themes/Sekai-{Light,Dark}/gtk-{3.0,4.0}`).
+(`scripts/build-theme.sh` → `src/sekai-de/usr/share/themes/Sekai-{Light,Dark}/gtk-{3.0,4.0}`).
 
 ## 출처
 
@@ -45,4 +45,4 @@ Fluent 는 다른 저작물을 바탕으로 한다 (각 저작자의 권리를 �
 ## 라이선스 경계
 
 SekaiOS 자체 코드는 Apache-2.0 이지만, **이 폴더와 여기서 만든 테마 파일(`Sekai-{Light,Dark}/gtk-*`, `index.theme`)은 GPL-3.0** 이다.
-패키지(sekai-desktop)의 `/usr/share/doc/sekai-desktop/copyright` 에도 같은 내용을 적는다.
+패키지(sekai-de)의 `/usr/share/doc/sekai-de/copyright` 에도 같은 내용을 적는다.

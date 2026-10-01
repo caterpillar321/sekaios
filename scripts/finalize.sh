@@ -80,7 +80,7 @@ OLD_APPS=$(echo $OLD_APPS)
 #   (결과를 먼저 받아 둔다 — pipefail 에서 grep -q 가 일찍 끝나면 앞 명령이 SIGPIPE 로 실패로 잡혀 검사가 새어 나간다)
 SIM=$(inroot "apt-get -s purge $OLD_APPS 2>&1" || true)
 #   (이름이 정확히 맞아야 한다 — network-manager-gnome·nm-connection-editor 는 지울 대상이다)
-if grep -qE '^(Purg|Remv) (sekai-[^ ]+|network-manager|hyprland|hyprbars|hyprexpo|greetd|pipewire|wireplumber|cups) ' <<<"$SIM"; then
+if grep -qE '^(Purg|Remv) (sekai-[^ ]+|sekaios-base|sekaicomp|network-manager|hyprland|hyprbars|hyprexpo|greetd|pipewire|wireplumber|cups) ' <<<"$SIM"; then
     echo "E: 옛 앱을 지우면 SekaiOS 구성 요소도 지워집니다 — 멈춥니다 (apt-get -s purge $OLD_APPS)"
     exit 1
 fi

@@ -8,7 +8,7 @@ OUT=/build/deb
 #   예전엔 여기서 원본에 patch-*.py 를 적용했다. 이제 그 고친 것들은 포크의 커밋이다 (git log v0.50.1..sekai).
 #   재현할 수 있게 커밋을 고정한다 — 합성기를 고치면 포크에 커밋·푸시하고 여기 REF 와 rev_for 를 올린다.
 SEKAICOMP_URL="https://github.com/caterpillar321/sekaicompose.git"
-SEKAICOMP_REF="0d093f0e4c3d1adc70769f0da5e6fff45007b961"
+SEKAICOMP_REF="7d633649c665b86174a1e777e47ea72867470178"
 MAINT="SekaiOS <sekai@localhost>"
 REV="sekai2"
 # 패키지별 리비전 (고친 패키지만 올린다 → apt 가 그 패키지만 업그레이드)
@@ -48,7 +48,12 @@ REV="sekai2"
 #                     창 단추의 판정 칸 = 그려지는 칸 (patch-hyprbars-slots.py)
 #   ── 2026-10-01: 위의 patch-*.py 는 전부 SekaiCompose 포크의 커밋으로 옮겼다 (SekaiOS 에선 지움).
 #      hyprland sekai17 · hyprbars sekai14 는 포크 0d093f0e 와 소스가 같다 — 다음 변경부터 포크에 커밋하고 여기 리비전을 올린다.
-rev_for() { case "$1" in hyprbars) echo sekai14 ;; hyprland) echo sekai17 ;; *) echo "$REV" ;; esac; }
+#   ── 2026-10-01: 합성기 패키지 이름을 sekaicomp 로 (sekai18). hyprland 는 sekaicomp 를 요구하는 빈 전환 패키지 —
+#      설치된 PC 의 sekai-update 는 hyprland 를 지우는 업데이트를 막으므로 지우지 않고 넘어오게 한다.
+#      hyprbars sekai15: 포크(plugins/hyprbars)에서 빌드, sekaicomp 를 요구.
+#      hyprexpo sekai3: 포크 헤더로 다시 빌드 — 플러그인은 합성기와 같은 커밋 해시로 빌드돼야 로드된다 ("Version mismatch").
+#      그래서 플러그인은 sekaicomp 의 "정확한" 버전을 요구한다. SEKAICOMP_REF 를 올리면 플러그인 리비전도 함께 올릴 것.
+rev_for() { case "$1" in hyprbars) echo sekai15 ;; hyprexpo) echo sekai3 ;; sekaicomp|hyprland) echo sekai18 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
@@ -135,7 +140,7 @@ fetch() {
 }
 
 # ── 패키지별 후처리 (build_cmake 가 post_<pkg> 를 자동 호출) ──
-post_hyprland() {
+post_sekaicomp() {
     local stage="$1"
     # Hyprland 기본 배경화면 46MB — SekaiOS 는 자체 배경을 쓰므로 제거
     local before=$(du -sm "$stage" | cut -f1)
@@ -154,9 +159,16 @@ extra_deps_for() {
         hyprcursor)   echo "hyprlang" ;;
         hyprgraphics) echo "hyprutils" ;;
         aquamarine)   echo "hyprutils" ;;
-        hyprland)     echo "hyprutils, hyprlang, hyprcursor, hyprgraphics, aquamarine, xwayland, binutils" ;;
-        hyprbars|hyprexpo) echo "hyprland" ;;
+        sekaicomp)    echo "hyprutils, hyprlang, hyprcursor, hyprgraphics, aquamarine, xwayland, binutils" ;;
+        hyprbars|hyprexpo) echo "sekaicomp (= 0.50.1-$(rev_for sekaicomp))" ;;
         *)            echo "" ;;
+    esac
+}
+
+# control 에 더 적을 줄 — 이름을 바꾼 합성기가 옛 hyprland 의 파일(/usr/bin/Hyprland·hyprctl·헤더 등)을 넘겨받는다
+extra_control_for() {
+    case "$1" in
+        sekaicomp) printf 'Replaces: hyprland (<< 0.50.1-sekai18)\nBreaks: hyprland (<< 0.50.1-sekai18)\n' ;;
     esac
 }
 
@@ -197,9 +209,9 @@ add_copyright() {
     {
         echo "패키지:  $pkg (SekaiOS 빌드)"
         case "$pkg" in
-            hyprland|hyprbars)
+            sekaicomp|hyprbars)
                 echo "소스:    SekaiCompose — https://github.com/caterpillar321/sekaicompose  (커밋 $SEKAICOMP_REF)"
-                if [ "$pkg" = hyprland ]; then
+                if [ "$pkg" = sekaicomp ]; then
                     echo "원본:    Hyprland — https://github.com/hyprwm/Hyprland  (태그 v0.50.1 에서 갈라진 포크)"
                 else
                     echo "원본:    hyprbars — https://github.com/hyprwm/hyprland-plugins  (태그 v0.50.0, plugins/hyprbars 로 가져옴)"
@@ -241,12 +253,14 @@ mkdeb() {
     fi
 
     # 안전망: shlibs 로 이미 잡힌 건 빼고 없는 것만 추가 (중복 방지)
+    #   (쉼표로 나눈다 — "sekaicomp (>= 0.50.1-sekai18)" 처럼 버전 조건이 붙은 것도 한 덩어리로)
     extra=$(extra_deps_for "$pkg")
-    for e in ${extra//,/ }; do
-        case ",${deps// /}," in
-            *",$e,"*|*",$e("*) continue ;;
-        esac
-        echo "$deps" | grep -qE "(^|, )$e( |,|\()" && continue
+    local extras e name
+    IFS=',' read -ra extras <<< "$extra"
+    for e in "${extras[@]}"; do
+        e="$(echo "$e" | sed 's/^ *//; s/ *$//')"; [ -n "$e" ] || continue
+        name="${e%% *}"
+        echo "$deps" | grep -qE "(^|, )$name( |,|\(|$)" && continue
         deps="${deps:+$deps, }$e"
     done
 
@@ -259,6 +273,7 @@ mkdeb() {
         echo "Section: x11"
         echo "Priority: optional"
         [ -n "$deps" ] && echo "Depends: $deps"
+        extra_control_for "$pkg"
         echo "Description: $desc"
         echo " Built from upstream source for SekaiOS."
     } > "$stage/DEBIAN/control"
@@ -270,10 +285,36 @@ mkdeb() {
     ok "$(basename "$OUT/${pkg}_${ver}-$(rev_for "$pkg")_amd64.deb")"
     printf '     Depends: %s\n' "${deps:-(없음)}" | cut -c1-140
 
-    dpkg -i --force-depends "$OUT/${pkg}_${ver}-$(rev_for "$pkg")_amd64.deb" >/dev/null 2>&1 \
+    dpkg -i --force-depends --force-breaks "$OUT/${pkg}_${ver}-$(rev_for "$pkg")_amd64.deb" >/dev/null 2>&1 \
       || die ".deb 설치 실패: $pkg"
     register_shlibs "$pkg" "$ver" "$stage"
     ldconfig
+}
+
+# ── 전환용 빈 패키지 (이름을 바꾼 패키지의 옛 이름) ──
+build_transitional() {
+    local pkg="$1" ver="$2" dep="$3" desc="$4" stage="/build/stage/$1"
+    already_built "$pkg" "$ver" && return 0
+    say "전환 패키지: $pkg → $dep"
+    rm -rf "$stage"; mkdir -p "$stage/DEBIAN" "$stage/usr/share/doc/$pkg"
+    printf '패키지:  %s (SekaiOS 전환용 빈 패키지)\n%s 의 새 이름으로 넘어가게 하는 것뿐이다 — 지워도 된다.\n' "$pkg" "$dep" \
+        > "$stage/usr/share/doc/$pkg/copyright"
+    {
+        echo "Package: $pkg"
+        echo "Version: ${ver}-$(rev_for "$pkg")"
+        echo "Architecture: all"
+        echo "Maintainer: $MAINT"
+        echo "Section: oldlibs"
+        echo "Priority: optional"
+        echo "Depends: $dep"
+        echo "Description: $desc"
+    } > "$stage/DEBIAN/control"
+    rm -f "$OUT/${pkg}"_*.deb
+    dpkg-deb --root-owner-group --build "$stage" "$OUT/${pkg}_${ver}-$(rev_for "$pkg")_all.deb" >/dev/null \
+      || die ".deb 생성 실패: $pkg"
+    ok "$(basename "$OUT/${pkg}_${ver}-$(rev_for "$pkg")_all.deb")"
+    # 빌드 환경에도 깐다 — 이 이름을 요구하는 플러그인(hyprexpo 등)의 의존성이 맞아야 다음 빌드의 apt 가 멈추지 않는다
+    dpkg -i --force-depends "$OUT/${pkg}_${ver}-$(rev_for "$pkg")_all.deb" >/dev/null 2>&1 || die ".deb 설치 실패: $pkg"
 }
 
 # ── 이미 만든 .deb 이 있으면 설치만 하고 생략 ────────
@@ -284,7 +325,7 @@ already_built() {
     local deb="$OUT/${pkg}_${ver}-$(rev_for "$pkg")_amd64.deb"
     [ -f "$deb" ] || return 1
     say "생략(이미 빌드됨): $pkg $ver"
-    dpkg -i "$deb" >/dev/null 2>&1 || die "기존 .deb 설치 실패: $pkg"
+    dpkg -i --force-depends --force-breaks "$deb" >/dev/null 2>&1 || die "기존 .deb 설치 실패: $pkg"
     ldconfig
     return 0
 }
@@ -378,9 +419,19 @@ build_cmake aquamarine           v0.9.2  aquamarine           "Hyprland renderin
 fetch sekaicompose v0.50.1
 install -m644 "$SRC/sekaicompose/sekai/cxx26-compat.hpp" /build/cxx26-compat.hpp
 verify_shim
-build_cmake sekaicompose         v0.50.1 hyprland             "Dynamic tiling Wayland compositor (SekaiCompose)" \
+# 이름을 바꾸기 전의 hyprland(합성기 본체, sekai17 이하)가 빌드 환경에 깔려 있으면 지운다 —
+#   sekaicomp 가 그 파일을 넘겨받는데, 둘이 함께 남아 있으면 apt 가 빌드 환경을 "깨짐"으로 보고 멈춘다
+if v=$(dpkg-query -W -f='${Version}' hyprland 2>/dev/null) && dpkg --compare-versions "$v" lt 0.50.1-sekai18; then
+    say "빌드 환경의 옛 hyprland ($v) 지움 — sekaicomp 로 바뀐다"
+    dpkg --purge --force-depends hyprland >/dev/null 2>&1 || true
+fi
+build_cmake sekaicompose         v0.50.1 sekaicomp            "SekaiCompose - the Wayland compositor of SekaiOS (a fork of Hyprland)" \
             -DNO_XWAYLAND=false -DNO_SYSTEMD=false \
             -DCMAKE_CXX_FLAGS="-include /build/cxx26-compat.hpp"
+
+# 전환 패키지: 옛 이름 hyprland → sekaicomp (빈 패키지, 지우지 않고 넘어오게)
+build_transitional hyprland 0.50.1 "sekaicomp (>= 0.50.1-sekai18)" \
+    "transitional package - the compositor is now sekaicomp (SekaiCompose)"
 
 # Hyprland 플러그인
 build_plugin sekaicompose     v0.50.1 plugins/hyprbars hyprbars 0.50.0 \

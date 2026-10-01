@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SekaiOS GRUB 부팅 메뉴 테마 생성기.
 
-  src/sekai-desktop/usr/share/grub/themes/sekai/
+  src/sekaios-base/usr/share/grub/themes/sekai/
     theme.txt            배치
     background.png       배경 (배경화면 hatsune 을 어둡게 + 가운데 빛)
     logo.png             두 별 로고
@@ -25,8 +25,8 @@ P = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(P, "src", "sekai-shell"))
 from sekaishell import logo  # noqa: E402
 
-OUT = os.path.join(P, "src", "sekai-desktop", "usr", "share", "grub", "themes", "sekai")
-WALL = os.path.join(P, "src", "sekai-desktop", "usr", "share", "backgrounds", "sekai", "hatsune.jpg")
+OUT = os.path.join(P, "src", "sekaios-base", "usr", "share", "grub", "themes", "sekai")
+WALL = os.path.join(P, "src", "sekai-de", "usr", "share", "backgrounds", "sekai", "hatsune.jpg")
 FONT_DIRS = [os.path.join(P, "rootfs", "usr", "share", "fonts", "opentype", "pretendard"),
              "/usr/share/fonts/opentype/pretendard"]
 ACCENT = (0x39 / 255, 0xc5 / 255, 0xbb / 255)
@@ -77,7 +77,7 @@ def background():
     surf = cairo.ImageSurface(cairo.FORMAT_RGB24, W, H)
     cr = cairo.Context(surf)
     try:
-        img = cairo.ImageSurface.create_from_png(os.path.join(P, "src", "sekai-desktop", "usr",
+        img = cairo.ImageSurface.create_from_png(os.path.join(P, "src", "sekaios-base", "usr",
                                                                "share", "sekai", "refind", "background.png"))
         cr.scale(W / img.get_width(), H / img.get_height())
         cr.set_source_surface(img, 0, 0)

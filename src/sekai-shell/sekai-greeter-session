@@ -50,7 +50,7 @@ run_greeter() {
     fi
     rm -f "$DONE"
     started=$(date +%s)
-    Hyprland -c "$1" >/dev/null 2>&1
+    sekaicomp -c "$1" >/dev/null 2>&1
     rc=$?
     [ -e "$DONE" ] && { rm -f "$DONE"; exit 0; }
     if [ $rc -ne 0 ] && [ $(( $(date +%s) - started )) -lt 10 ]; then

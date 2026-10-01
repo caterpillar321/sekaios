@@ -70,7 +70,7 @@ def run_status(cmd, lo, hi, label):
 
 
 # 업데이트가 이것들을 지우려 하면 설치하지 않는다 (저장소끼리 충돌할 때 apt 는 조용히 지운다)
-PROTECTED = re.compile(r"^(sekai-|hyprland|hyprbars|hyprexpo|greetd|linux-image-amd64$|shim-signed|"
+PROTECTED = re.compile(r"^(sekai-|sekaios-|sekaicomp|hyprland|hyprbars|hyprexpo|greetd|linux-image-amd64$|shim-signed|"
                        r"grub-efi-amd64-signed|systemd$|network-manager$)")
 
 
@@ -153,7 +153,7 @@ def check():
 # 이것들이 바뀌면 다시 시작해야 새 것이 쓰인다
 #   (데비안은 /run/reboot-required 를 스스로 만들지 않는다)
 REBOOT_PKGS = re.compile(r"^(linux-image-|linux-base$|libc6$|systemd$|dbus$|dbus-daemon$|"
-                         r"hyprland$|aquamarine$|mesa-|libgl1-mesa|nvidia-|firmware-|intel-microcode$|amd64-microcode$)")
+                         r"sekaicomp$|hyprland$|aquamarine$|mesa-|libgl1-mesa|nvidia-|firmware-|intel-microcode$|amd64-microcode$)")
 
 
 def apply():

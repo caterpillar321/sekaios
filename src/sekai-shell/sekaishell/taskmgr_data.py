@@ -28,7 +28,7 @@ MIB = 1024 * 1024
 # 이름으로 알아보는 세션 핵심 — 끝내면 작업 표시줄·바탕화면이 사라지거나 로그아웃된다.
 #   이들의 조상(greetd → sekai-session → Hyprland …)도 핵심으로 본다 (core_pids)
 CORE_NAMES = {
-    "Hyprland", "hyprland", "Xwayland", "Xorg", "X", "xinit", "xfwm4", "sxhkd", "xcape",
+    "sekaicomp", "Hyprland", "hyprland", "Xwayland", "Xorg", "X", "xinit", "xfwm4", "sxhkd", "xcape",
     "sekai-session", "sekai-panel", "sekai-desk", "sekai-idle", "sekai-lock", "keep-running",
     "sekai-greeter", "sekai-greeter-session", "greetd", "systemd", "dbus-daemon", "dbus-broker",
     "lxpolkit", "polkit-agent", "nm-agent", "automount",

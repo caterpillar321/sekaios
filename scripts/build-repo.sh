@@ -11,9 +11,9 @@
 #    키가 없다고 새로 만들지 않는다 (--init-key 로만). 모르는 새 키로 서명해 올리면
 #    이미 설치된 모든 SekaiOS 가 업데이트를 영영 못 받는다 → 키가 없으면 백업에서 되살릴 것.
 #    프로젝트 폴더 밖에 둔다 — ISO·저장소에 비밀 키가 섞여 나가지 않게.
-#    공개 키는 sekai-desktop 패키지에 들어간다:
-#      src/sekai-desktop/usr/share/keyrings/sekaios-archive-keyring.gpg
-#    키를 새로 만들면 sekai-desktop 을 다시 빌드·배포해야 기존 설치가 새 서명을 믿는다.
+#    공개 키는 sekaios-base 패키지에 들어간다:
+#      src/sekaios-base/usr/share/keyrings/sekaios-archive-keyring.gpg
+#    키를 새로 만들면 sekaios-base 를 다시 빌드·배포해야 기존 설치가 새 서명을 믿는다.
 #
 #  사용법:  scripts/build-repo.sh            저장소 만들기
 #           scripts/build-repo.sh --init-key 처음 한 번: 서명 키 만들기 (지문 파일도 새로 씀)
@@ -24,7 +24,7 @@ P="$(cd "$(dirname "$0")/.." && pwd)"
 REPO="$P/repo"
 SUITE=hatsune
 export GNUPGHOME="$HOME/.sekai-signing/gnupg"
-KEYRING_OUT="$P/src/sekai-desktop/usr/share/keyrings/sekaios-archive-keyring.gpg"
+KEYRING_OUT="$P/src/sekaios-base/usr/share/keyrings/sekaios-archive-keyring.gpg"
 UID_STR="SekaiOS Archive Signing Key <archive@sekaios.invalid>"
 
 say(){ printf '\033[1;36m==>\033[0m %s\n' "$*"; }
@@ -51,7 +51,7 @@ mkdir -p "$(dirname "$KEYRING_OUT")"
 gpg --batch --export "$FPR" > "$KEYRING_OUT.new"
 if ! cmp -s "$KEYRING_OUT.new" "$KEYRING_OUT" 2>/dev/null; then
     mv "$KEYRING_OUT.new" "$KEYRING_OUT"
-    say "공개 키 갱신 → sekai-desktop 을 다시 빌드하세요 (scripts/pack-shell.sh)"
+    say "공개 키 갱신 → sekaios-base 를 다시 빌드하세요 (scripts/pack-shell.sh)"
 else
     rm -f "$KEYRING_OUT.new"
 fi

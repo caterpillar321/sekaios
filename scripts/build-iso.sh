@@ -74,10 +74,10 @@ if [ -n "${SEKAI_ISO_DEFAULT:-}" ]; then
     [ "$KIND" = dev ] || { echo "E: SEKAI_ISO_DEFAULT 는 개발 빌드(SEKAI_DEV=1)에서만"; exit 1; }
 fi
 [ -n "${SEKAI_ISO_DEFAULT:-}" ] && sed -i "s/^set default=.*/set default=${SEKAI_ISO_DEFAULT}/" "$P/iso/boot/grub/grub.cfg"
-cp -r "$P/src/sekai-desktop/usr/share/grub/themes/sekai" "$P/iso/boot/grub/themes/"
+cp -r "$P/src/sekaios-base/usr/share/grub/themes/sekai" "$P/iso/boot/grub/themes/"
 mkdir -p "$P/iso/boot/grub/fonts"
 cp "$P/rootfs/usr/share/grub/unicode.pf2" "$P/iso/boot/grub/fonts/unicode.pf2"
-cp "$P"/src/sekai-desktop/usr/share/grub/themes/sekai/*.pf2 "$P/iso/boot/grub/fonts/"
+cp "$P"/src/sekaios-base/usr/share/grub/themes/sekai/*.pf2 "$P/iso/boot/grub/fonts/"
 
 # El Torito 용 FAT 이미지 — 부트로더만 (커널은 GRUB 이 ISO 에서 직접 읽는다)
 IMG="$P/build/efiboot.img"

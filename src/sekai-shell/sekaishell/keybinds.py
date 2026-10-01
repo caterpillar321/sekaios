@@ -26,7 +26,7 @@ from . import dbg
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _CONF_PATHS = ("/usr/share/sekai/hypr/hyprland.conf",
-               os.path.join(HERE, "..", "..", "sekai-desktop", "usr", "share", "sekai", "hypr",
+               os.path.join(HERE, "..", "..", "sekai-de", "usr", "share", "sekai", "hypr",
                             "hyprland.conf"))
 _X11_PATHS = ("/usr/lib/sekai/x11/sxhkdrc", os.path.join(HERE, "..", "lib", "x11", "sxhkdrc"))
 X11_USER = os.path.expanduser("~/.config/sekai/sxhkdrc")

@@ -4,7 +4,7 @@
 #
 #  원본: third_party/fluent-gtk-theme  (Fluent-gtk-theme by vinceliuice, GPL-3.0
 #        — 우리가 고친 파일은 머리에 "Modified by SekaiOS" 표시. 자세한 것은 그 폴더의 UPSTREAM.md)
-#  결과: src/sekai-desktop/usr/share/themes/Sekai-{Light,Dark}/gtk-{3.0,4.0}/
+#  결과: src/sekai-de/usr/share/themes/Sekai-{Light,Dark}/gtk-{3.0,4.0}/
 #        만든 CSS·그림도 저장소에 넣는다 — 패키지를 만들 때 sassc 가 필요 없게.
 #        원본(SCSS·assets.svg)을 고치면 이 스크립트를 다시 돌려 결과를 함께 커밋한다.
 #  필요: sassc, rsvg-convert (librsvg2-bin), optipng (있으면 PNG 를 줄인다)
@@ -13,7 +13,7 @@ set -euo pipefail
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 P="$(dirname "$SELF")"
 SRC="$P/third_party/fluent-gtk-theme/src"
-OUT="$P/src/sekai-desktop/usr/share/themes"
+OUT="$P/src/sekai-de/usr/share/themes"
 # 그림(체크 상자·입력 칸 테두리 …)에 칠할 강조색 — _sass/_colors.scss 의 $sekai-accent 와 같게
 ACCENT="#3CC8BE"
 
