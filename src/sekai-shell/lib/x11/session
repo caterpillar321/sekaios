@@ -14,7 +14,7 @@ export XDG_CURRENT_DESKTOP=SekaiOS
 # Hyprland 세션(hyprland.conf env)과 같은 SekaiOS 설정·데이터 계층 — 없으면 이 모드에서만
 #   메뉴에서 숨긴 항목(다른 DE 의 설정 창 등, /usr/share/sekai/data/applications)이 다시 보였다
 export XDG_CONFIG_DIRS=/etc/xdg/sekai:/etc/xdg
-export XDG_DATA_DIRS=/usr/share/sekai/data:/usr/local/share:/usr/share
+export XDG_DATA_DIRS=/usr/share/sekai/data:/usr/local/share:/usr/share:/var/lib/flatpak/exports/share   # 끝: Flathub 앱
 unset WAYLAND_DISPLAY
 export GDK_BACKEND=x11
 export QT_QPA_PLATFORM=xcb

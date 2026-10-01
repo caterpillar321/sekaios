@@ -358,6 +358,7 @@ APP_ALIASES = {
     "sekai-admin": ("컴퓨터 관리", "이벤트 뷰어", "서비스", "관리 도구", "로그 보기",
                     "compmgmt.msc", "eventvwr", "services.msc"),
     "im-config": ("입력기", "한글 입력"),
+    "sekai-store": ("스토어", "앱 스토어", "마이크로소프트 스토어", "microsoft store", "앱 설치", "프로그램 설치"),
 }
 
 

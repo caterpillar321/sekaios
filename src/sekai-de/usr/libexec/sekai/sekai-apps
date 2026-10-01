@@ -6,9 +6,15 @@
 #    sekai-apps plan-remove <패키지>        (보통 권한) 지우면 함께 지워지는 것
 #    sekai-apps install-deb <이름.deb>      (관리자, pkexec) 표준 입력으로 받은 .deb 를 설치
 #    sekai-apps remove <패키지>             (관리자, pkexec) 앱을 지운다 (따라 들어온 구성 요소도)
+#    sekai-apps plan-install <패키지>       (보통 권한) 저장소의 앱을 설치하면 함께 들어오는 것·크기
+#    sekai-apps install <패키지>            (관리자, pkexec) 저장소에서 설치 (스토어)
+#    sekai-apps refresh                     (관리자, pkexec) 패키지·앱 목록을 새로 받는다
+#  스토어는 sekai-apps-repo(install·remove·refresh 만, 잠시 인증을 기억하는 정책)를 거쳐 부른다 —
+#  서명된 저장소의 패키지만 이름으로 설치하므로. 아무 .deb(install-deb)는 이 프로그램으로만, 매번 인증.
 #
 #  출력은 한 줄에 하나씩 (sekai-update 와 같은 형식):
 #    INFO <키> <값>         Package · Version · Architecture · Maintainer · Homepage · Size(KB) · Summary
+#                           (plan-install: Version · Size(설치 KB, 함께 오는 것 포함) · Download(바이트))
 #    DESC <줄>              긴 설명
 #    STATE new|upgrade|same|downgrade [설치된 버전]
 #    ADD <이름> <버전>       함께 새로 설치되는 것
@@ -92,8 +98,8 @@ def explain(lines):
 
 
 # ── apt 진행 ──
-def run_status(cmd, lo, hi):
-    """apt 의 기계용 진행 정보(Status-Fd)를 읽어 PROGRESS 로 바꾼다."""
+def run_status(cmd, lo, hi, verb="설치하는 중"):
+    """apt 의 기계용 진행 정보(Status-Fd)를 읽어 PROGRESS 로 바꾼다. verb: dpkg 단계의 말 (제거면 "제거하는 중")"""
     r, w = os.pipe()
     p = subprocess.Popen(cmd + ["-o", f"APT::Status-Fd={w}"], env=ENV, pass_fds=(w,),
                          stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -113,7 +119,7 @@ def run_status(cmd, lo, hi):
                     pct = float(parts[2])
                 except ValueError:
                     continue
-                what = "내려받는 중" if parts[0] == "dlstatus" else "설치하는 중"
+                what = "내려받는 중" if parts[0] == "dlstatus" else verb
                 name = parts[1] if parts[0] == "pmstatus" else ""
                 out("PROGRESS", int(lo + (hi - lo) * pct / 100), f"{what} {name}".strip())
     p.wait()
@@ -408,7 +414,8 @@ def remove(pkg):
     if blocks:
         out("ERROR", blocks[0])
         return 1
-    rc, log = run_status(["apt-get", "-y", "-q"] + APT_OPTS + guard_opts() + ["remove", pkg] + extra, 5, 99)
+    rc, log = run_status(["apt-get", "-y", "-q"] + APT_OPTS + guard_opts() + ["remove", pkg] + extra, 5, 99,
+                         verb="제거하는 중")
     if rc != 0:
         b = blocked_by_guard(log)
         if b is not None:
@@ -423,6 +430,123 @@ def remove(pkg):
     return 0
 
 
+# ── 저장소에서 설치 (스토어) ──
+def candidate(pkg):
+    """설치할 수 있는 버전 — 없으면 None"""
+    res = subprocess.run(["apt-cache", "policy", pkg], env=ENV, capture_output=True, text=True)
+    m = re.search(r"^\s*Candidate: (\S+)", res.stdout, re.M)
+    return m.group(1) if m and m.group(1) != "(none)" else None
+
+
+def sizes(pkgs):
+    """[(이름, 버전)] → (설치 KB 합, 받을 바이트 합). 모르는 것은 0 으로."""
+    if not pkgs:
+        return 0, 0
+    res = subprocess.run(["apt-cache", "show", "--no-all-versions"] + [f"{n}={v}" for n, v in pkgs],
+                         env=ENV, capture_output=True, text=True)
+    inst = down = 0
+    for m in re.finditer(r"^Installed-Size: (\d+)", res.stdout, re.M):
+        inst += int(m.group(1))
+    for m in re.finditer(r"^Size: (\d+)", res.stdout, re.M):
+        down += int(m.group(1))
+    return inst, down
+
+
+def check_install(pkg):
+    if not PKG_NAME.match(pkg or ""):
+        out("ERROR", "패키지 이름이 올바르지 않습니다")
+        return None
+    ver = candidate(pkg)
+    if ver is None:
+        out("ERROR", "저장소에서 이 앱을 찾을 수 없습니다 — 앱 목록을 새로 고쳐 보세요")
+        return None
+    plan, err = simulate(["install", pkg])
+    if plan is None:
+        out("ERROR", explain(err))
+        return None
+    new, upg, gone = plan
+    blocks = []
+    bad = [n for n in gone if PROTECTED.match(n)]
+    if bad:
+        blocks.append("이 앱을 설치하면 SekaiOS 에 꼭 필요한 구성 요소(" + ", ".join(bad[:6])
+                      + ")가 지워집니다 — 설치하지 않는 것이 안전합니다")
+    return ver, plan, blocks
+
+
+def plan_install(pkg):
+    r = check_install(pkg)
+    if r is None:
+        return 1
+    ver, (new, upg, gone), blocks = r
+    for b in blocks:
+        out("BLOCK", b)
+    out("INFO", "Version", ver)
+    inst, down = sizes(new + [(n, v) for n, _o, v in upg])
+    out("INFO", "Size", inst)
+    out("INFO", "Download", down)
+    cur = installed_version(pkg)
+    out("STATE", "same" if cur == ver else ("upgrade" if cur else "new"), *( [cur] if cur else []))
+    for n, v in new:
+        if n != pkg:
+            out("ADD", n, v)
+    for n, o, v in upg:
+        if n != pkg:
+            out("UPG", n, o, v)
+    for n in gone:
+        out("DEL", n)
+    out("DONE")
+    return 0
+
+
+def install(pkg):
+    out("PROGRESS", 1, "확인하는 중")
+    r = check_install(pkg)
+    if r is None:
+        return 1
+    _ver, _plan, blocks = r
+    if blocks:
+        out("ERROR", blocks[0])
+        return 1
+    cmd = ["apt-get", "-y", "-q"] + APT_OPTS + guard_opts() + ["install", pkg]
+    rc, log = run_status(cmd, 3, 99)
+    if rc != 0 and re.search(r"404\s+Not Found|Unable to fetch some archives|Failed to fetch", "\n".join(log)):
+        # 목록이 오래되어 그 사이 저장소에서 바뀐 파일 — 목록을 새로 받고 한 번 더
+        out("PROGRESS", 3, "앱 목록을 새로 받는 중")
+        run_status(["apt-get", "-q"] + APT_OPTS + ["update"], 3, 10)
+        rc, log = run_status(cmd, 10, 99)
+    if rc != 0:
+        b = blocked_by_guard(log)
+        if b is not None:
+            out("ERROR", "이 앱을 설치하면 SekaiOS 에 꼭 필요한 구성 요소(" + (b or "?") + ")가 지워져서 멈췄습니다")
+            return 1
+        subprocess.run(["dpkg", "--configure", "-a"], env=ENV,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        out("ERROR", "설치하지 못했습니다: " + explain(log))
+        return 1
+    out("PROGRESS", 100, "완료")
+    for d in package_apps(pkg):
+        out("APP", d)
+    out("DONE")
+    return 0
+
+
+def refresh():
+    out("PROGRESS", 2, "앱 목록을 받는 중")
+    has_fp = shutil.which("flatpak") is not None
+    rc, log = run_status(["apt-get", "-q"] + APT_OPTS + ["update"], 2, 80 if has_fp else 98, verb="정리하는 중")
+    if rc != 0:
+        out("ERROR", "앱 목록을 받지 못했습니다: " + explain(log))
+        return 1
+    if has_fp:
+        # Flathub 앱 목록(AppStream) — 스토어가 데비안 목록과 함께 읽는다. 실패해도 데비안 쪽은 이미 새것이다
+        out("PROGRESS", 85, "Flathub 앱 목록을 받는 중")
+        subprocess.run(["flatpak", "update", "--appstream", "--system", "--noninteractive"], env=ENV,
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    out("PROGRESS", 100, "완료")
+    out("DONE")
+    return 0
+
+
 def main():
     a = sys.argv[1:]
     if a == ["guard"]:
@@ -431,12 +555,16 @@ def main():
         return inspect(a[1])
     if len(a) == 2 and a[0] == "plan-remove":
         return plan_remove(a[1])
-    if len(a) == 2 and a[0] in ("install-deb", "remove"):
+    if len(a) == 2 and a[0] == "plan-install":
+        return plan_install(a[1])
+    root = {"install-deb": install_deb, "remove": remove, "install": install}
+    if (len(a) == 2 and a[0] in root) or a == ["refresh"]:
         if os.geteuid() != 0:
             out("ERROR", "관리자 권한이 필요합니다")
             return 1
-        return install_deb(a[1]) if a[0] == "install-deb" else remove(a[1])
-    out("ERROR", "사용법: sekai-apps inspect <파일.deb> | plan-remove <패키지> | install-deb <이름.deb> | remove <패키지>")
+        return refresh() if a == ["refresh"] else root[a[0]](a[1])
+    out("ERROR", "사용법: sekai-apps inspect <파일.deb> | plan-remove <패키지> | plan-install <패키지> | "
+        "install-deb <이름.deb> | install <패키지> | remove <패키지> | refresh")
     return 2
 
 

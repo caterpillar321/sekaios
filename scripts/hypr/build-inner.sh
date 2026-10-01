@@ -8,7 +8,7 @@ OUT=/build/deb
 #   예전엔 여기서 원본에 patch-*.py 를 적용했다. 이제 그 고친 것들은 포크의 커밋이다 (git log v0.50.1..sekai).
 #   재현할 수 있게 커밋을 고정한다 — 합성기를 고치면 포크에 커밋·푸시하고 여기 REF 와 rev_for 를 올린다.
 SEKAICOMP_URL="https://github.com/caterpillar321/sekaicompose.git"
-SEKAICOMP_REF="e74f689086c53f7e6aec119407a3be12f77bce01"
+SEKAICOMP_REF="5bf2e478567fd46d5634a8bdd34e475b513ca206"
 MAINT="SekaiOS <sekai@localhost>"
 REV="sekai2"
 # 패키지별 리비전 (고친 패키지만 올린다 → apt 가 그 패키지만 업그레이드)
@@ -58,7 +58,8 @@ REV="sekai2"
 #      sekai20: 끌기 기준점을 누른 자리로 (포크 723858e) — hyprbars sekai17 · hyprexpo sekai5
 #      sekai21: 대화상자를 되살리면 부모도, hyprctl clients 에 sekaiParent (포크 b226561) — hyprbars sekai18 · hyprexpo sekai6
 #      sekai22: 크기를 바꿀 수 없는 창은 최대화·스냅하지 않는다, hyprctl clients 에 sekaiFixed (포크 e74f689) — hyprbars sekai19 · hyprexpo sekai7
-rev_for() { case "$1" in hyprbars) echo sekai19 ;; hyprexpo) echo sekai7 ;; sekaicomp|hyprland) echo sekai22 ;; *) echo "$REV" ;; esac; }
+#      sekai23: 하위 면·입력도 xdg 창 영역 기준 — 스스로 그림자를 두는 앱(Firefox)이 밀려 잘리던 것 (포크 5bf2e47) — hyprbars sekai20 · hyprexpo sekai8
+rev_for() { case "$1" in hyprbars) echo sekai20 ;; hyprexpo) echo sekai8 ;; sekaicomp|hyprland) echo sekai23 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"

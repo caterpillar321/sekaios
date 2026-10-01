@@ -1,0 +1,4 @@
+// SekaiDE 스토어 — apt update 때 AppStream 아이콘 묶음도 받는다 (appstream 의 50appstream 은 아이콘을 꺼 둔다).
+//   64px: 앱 타일, 128px: 앱 자세히·배너. 받은 묶음은 appstreamcli refresh 가 /var/lib/swcatalog/icons 에 푼다.
+Acquire::IndexTargets::deb::DEP-11-icons::DefaultEnabled "true";
+Acquire::IndexTargets::deb::DEP-11-icons-large::DefaultEnabled "true";

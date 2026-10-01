@@ -28,6 +28,7 @@ install -Dm755 "$SRC/sekai-admin"     "$STAGE/usr/bin/sekai-admin"
 install -Dm755 "$SRC/sekai-files"     "$STAGE/usr/bin/sekai-files"
 install -Dm755 "$SRC/sekai-notepad"   "$STAGE/usr/bin/sekai-notepad"
 install -Dm755 "$SRC/sekai-appinstall" "$STAGE/usr/bin/sekai-appinstall"
+install -Dm755 "$SRC/sekai-store"     "$STAGE/usr/bin/sekai-store"
 install -Dm755 "$SRC/sekai-calc"      "$STAGE/usr/bin/sekai-calc"
 install -Dm755 "$SRC/sekai-photos"    "$STAGE/usr/bin/sekai-photos"
 install -Dm755 "$SRC/sekai-wallpaper" "$STAGE/usr/bin/sekai-wallpaper"
@@ -68,8 +69,8 @@ for f in "$SRC/sekaisettings/pages"/*.py; do install -Dm644 "$f" "$DIST/sekaiset
 mkdir -p "$DIST/sekaiadmin/pages"
 for f in "$SRC/sekaiadmin"/*.py;        do install -Dm644 "$f" "$DIST/sekaiadmin/$(basename "$f")"; done
 for f in "$SRC/sekaiadmin/pages"/*.py;  do install -Dm644 "$f" "$DIST/sekaiadmin/pages/$(basename "$f")"; done
-# 파일 탐색기 (sekai-files) · 메모장 (sekai-notepad) · 계산기 (sekai-calc) · 사진 (sekai-photos) · 앱 설치 관리자 (sekai-appinstall)
-for pkg in sekaifiles sekainotepad sekaicalc sekaiphotos sekaiappinstall; do
+# 파일 탐색기 (sekai-files) · 메모장 (sekai-notepad) · 계산기 (sekai-calc) · 사진 (sekai-photos) · 앱 설치 관리자 (sekai-appinstall) · 스토어 (sekai-store)
+for pkg in sekaifiles sekainotepad sekaicalc sekaiphotos sekaiappinstall sekaistore; do
     mkdir -p "$DIST/$pkg"
     for f in "$SRC/$pkg"/*.py; do install -Dm644 "$f" "$DIST/$pkg/$(basename "$f")"; done
 done
@@ -119,8 +120,9 @@ Depends: python3, python3-gi, python3-gi-cairo, gir1.2-gtk-3.0,
  adwaita-icon-theme, papirus-icon-theme, swaybg, swayidle,
  gir1.2-gtksessionlock-0.1, libgtk-session-lock0, python3-pampy,
  libglib2.0-bin, sekai-winshot, gir1.2-gudev-1.0, pulseaudio-utils,
- gir1.2-gtksource-4, gir1.2-polkit-1.0, gir1.2-gcr-4
-Recommends: wireplumber, swaylock
+ gir1.2-gtksource-4, gir1.2-polkit-1.0, gir1.2-gcr-4,
+ appstream, gir1.2-appstream-1.0
+Recommends: wireplumber, swaylock, gir1.2-flatpak-1.0
 Provides: polkit-1-auth-agent, notification-daemon
 Description: SekaiOS desktop shell
  Panel, taskbar, start menu and the system settings app for
@@ -392,6 +394,15 @@ if [ "$1" = "configure" ]; then
     if [ ! -L /etc/os-release ] && [ -f /usr/lib/os-release ] && grep -q '^ID=sekai' /usr/lib/os-release; then
         ln -sfn ../usr/lib/os-release /etc/os-release
     fi
+    # Flathub — 스토어가 데비안 저장소에 없는 앱(Discord·VS Code·Spotify·Steam 등)을 여기서 받는다.
+    #   처음 한 번만 등록한다 (사용자가 지웠으면 업데이트 때 되살리지 않는다). 저장소 파일(서명 키 포함)을
+    #   패키지에 실어 두어 인터넷 없이(이미지 만드는 중) 등록된다. 앱 목록은 첫 새로 고침 때 받는다.
+    #   번역은 SekaiOS 가 고를 수 있는 언어로 — flatpak 은 시스템 기본 언어(en)만 받아서 앱이 영어로 떴다
+    if command -v flatpak >/dev/null && [ ! -e /var/lib/sekai/flathub-added ]; then
+        flatpak remote-add --system --if-not-exists --from flathub /usr/share/sekaios/flathub.flatpakrepo \
+            >/dev/null 2>&1 && mkdir -p /var/lib/sekai && touch /var/lib/sekai/flathub-added || true
+        flatpak config --system --set languages "ko;en;ja" >/dev/null 2>&1 || true
+    fi
 fi
 if [ "$1" = "configure" ] || [ "$1" = "triggered" ]; then
     # 부팅 메뉴(shim + GRUB)를 이 패키지 기준으로 다시 쓴다 — 설치된 디스크일 때만.
@@ -454,14 +465,15 @@ Priority: optional
 Depends: shim-signed, grub-efi-amd64-signed, grub-efi-amd64-bin, grub2-common, os-prober,
  efibootmgr, mokutil, pciutils, openssl,
  plymouth (>= 24.004.60-5+sekai1), plymouth-themes,
- network-manager, systemd-resolved
+ network-manager, systemd-resolved, flatpak
 Replaces: sekai-desktop (<< ${FULL})
 Breaks: sekai-desktop (<< ${FULL})
 Description: SekaiOS base system
  The distribution side of SekaiOS: os-release and branding, the boot
  chain (shim + GRUB menu, Plymouth boot splash, initramfs and kernel
  hooks), the signed SekaiOS update repository with its key, the update
- helper and the NVIDIA driver installer behind Settings > Graphics.
+ helper, the Flathub remote and the NVIDIA driver installer behind
+ Settings > Graphics.
 CTRL
 
 # ─────────────────────────────────────────────────────────

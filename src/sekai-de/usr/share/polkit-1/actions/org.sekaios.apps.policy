@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
-<!-- SekaiDE 앱 설치·제거 도우미 — 앱 설치 관리자(.deb)와 설정 › 설치된 앱이 pkexec 로 부른다 -->
+<!-- SekaiDE 앱 설치·제거 도우미 — 앱 설치 관리자(.deb)는 sekai-apps 를, 스토어·설정 › 설치된 앱은 sekai-apps-repo 를 pkexec 로 부른다 -->
 <policyconfig>
   <vendor>SekaiOS</vendor>
   <action id="org.sekaios.apps">
@@ -18,5 +18,19 @@
       <allow_active>auth_admin</allow_active>
     </defaults>
     <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/sekai/sekai-apps</annotate>
+  </action>
+  <action id="org.sekaios.apps.repo">
+    <description>Install or remove apps from the software sources</description>
+    <description xml:lang="ko">스토어에서 앱 설치·제거</description>
+    <message>Authentication is required to install or remove apps</message>
+    <message xml:lang="ko">앱을 설치하거나 제거하려면 인증이 필요합니다</message>
+    <icon_name>system-software-install</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <!-- 서명된 저장소의 패키지만 이름으로 — 업데이트처럼 잠시 다시 묻지 않는다 (앱 여럿을 연달아 설치할 때) -->
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/sekai/sekai-apps-repo</annotate>
   </action>
 </policyconfig>

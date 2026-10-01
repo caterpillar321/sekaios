@@ -1,7 +1,7 @@
 """업데이트 알림 — 받아 둔 패키지 목록으로 설치할 업데이트가 있는지 가끔 본다.
 
 목록을 새로 받는 일은 apt-daily.timer 가 한다 (/etc/apt/apt.conf.d/20sekai-periodic).
-여기서는 관리자 권한 없이 시뮬레이션만 해서 개수를 센다.
+여기서는 관리자 권한 없이 시뮬레이션만 해서 개수를 센다 (Flathub 앱 업데이트도 더한다).
 같은 개수로는 두 번 알리지 않는다.
 """
 import os
@@ -25,7 +25,22 @@ def count_pending():
     except Exception as e:
         dbg("업데이트 확인 실패", e)
         return None
-    return sum(1 for ln in res.stdout.splitlines() if re.match(r"Inst \S+", ln))
+    n = sum(1 for ln in res.stdout.splitlines() if re.match(r"Inst \S+", ln))
+    return n + count_flatpak()
+
+
+def count_flatpak():
+    """Flathub 앱(시스템 설치) 업데이트 수 — 관리자 권한 없이 원격 목록과 견준다. flatpak 이 없거나 실패하면 0"""
+    import shutil
+    if not shutil.which("flatpak"):
+        return 0
+    try:
+        res = subprocess.run(["flatpak", "remote-ls", "--system", "--updates", "--columns=application"],
+                             capture_output=True, text=True, timeout=120, env=dict(os.environ, LC_ALL="C.UTF-8"))
+    except Exception as e:
+        dbg("Flathub 업데이트 확인 실패", e)
+        return 0
+    return sum(1 for ln in res.stdout.splitlines() if ln.strip() and not ln.startswith("Application"))
 
 
 class UpdateNotifier:

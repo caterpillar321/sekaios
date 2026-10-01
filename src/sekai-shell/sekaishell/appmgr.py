@@ -16,17 +16,22 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 HELPER = next((p for p in ("/usr/libexec/sekai/sekai-apps",
                            os.path.join(HERE, "..", "..", "sekai-de", "usr", "libexec", "sekai", "sekai-apps"))
                if os.path.exists(p)), "/usr/libexec/sekai/sekai-apps")
+REPO_HELPER = "/usr/libexec/sekai/sekai-apps-repo"   # 스토어·제거 — 저장소 패키지만, 잠시 인증을 기억
 CANCELLED = (126, 127)          # pkexec: 인증 창을 닫았거나 인증에 실패
 
 
-def run_helper(args, on_line, on_done, root=False, stdin_path=None):
-    """도우미를 작업 스레드에서 돌린다. on_line(종류, 나머지)·on_done(종료 코드) 은 GTK 스레드에서 불린다."""
+def run_helper(args, on_line, on_done, root=False, stdin_path=None, repo=False):
+    """도우미를 작업 스레드에서 돌린다. on_line(종류, 나머지)·on_done(종료 코드) 은 GTK 스레드에서 불린다.
+    root: pkexec 로 (sekai-apps — 매번 인증), repo: 저장소 입구 sekai-apps-repo 로 (install·remove·refresh)"""
     def work():
         stdin = None
         try:
             if stdin_path is not None:
                 stdin = open(stdin_path, "rb")
-            cmd = (["pkexec", HELPER] if root else [HELPER]) + list(args)
+            if repo:
+                cmd = ["pkexec", REPO_HELPER] + list(args)
+            else:
+                cmd = (["pkexec", HELPER] if root else [HELPER]) + list(args)
             p = subprocess.Popen(cmd, stdin=stdin or subprocess.DEVNULL, stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT, text=True, errors="replace")
         except OSError as e:
@@ -209,3 +214,152 @@ def packages_of(paths):
         if sep and path in paths:
             found[path] = pkgs.split(",")[0].strip().split(":")[0]
     return found
+
+
+# ── Flathub 앱 (flatpak, 시스템 설치) ──
+#   설치·제거는 libflatpak 으로 — 시스템 설치는 flatpak 의 system-helper 가 polkit 으로 권한을 받는다
+#   (데비안 기본 규칙: 관리자(sudo) 계정은 암호 없이, 아니면 사용자 계정 컨트롤). 진행은 run_helper 와 같은 줄 형식.
+def flatpak_available():
+    try:
+        gi_require("Flatpak", "1.0")
+        from gi.repository import Flatpak  # noqa: F401
+        return True
+    except (ImportError, ValueError):
+        return False
+
+
+def gi_require(ns, ver):
+    import gi
+    gi.require_version(ns, ver)
+
+
+def _flatpak():
+    gi_require("Flatpak", "1.0")
+    from gi.repository import Flatpak
+    return Flatpak
+
+
+def flatpak_installation():
+    return _flatpak().Installation.new_system(None)
+
+
+def flatpak_installed_apps():
+    """{앱 id: 브랜치} — 시스템에 설치된 flatpak 앱"""
+    try:
+        Flatpak = _flatpak()
+        inst = flatpak_installation()
+        return {r.get_name(): r.get_branch() for r in inst.list_installed_refs_by_kind(Flatpak.RefKind.APP, None)}
+    except Exception:
+        return {}
+
+
+def flatpak_remote(inst=None):
+    """앱을 받을 원격 — flathub, 없으면 처음 것"""
+    inst = inst or flatpak_installation()
+    names = [r.get_name() for r in inst.list_remotes(None) if not r.get_disabled()]
+    return "flathub" if "flathub" in names else (names[0] if names else None)
+
+
+def _flatpak_error(e):
+    msg = getattr(e, "message", str(e))
+    low = msg.lower()
+    if "not authorized" in low or "authentication" in low or "dismissed" in low:
+        return "인증이 취소되었습니다"
+    if "no space" in low:
+        return "디스크 공간이 부족합니다"
+    if "could not resolve" in low or "unable to connect" in low or "timeout" in low or "network" in low:
+        return "Flathub 에 연결하지 못했습니다 — 인터넷 연결을 확인해 주세요"
+    if "already installed" in low:
+        return "이미 설치되어 있습니다"
+    if "not installed" in low:
+        return "설치되어 있지 않습니다"
+    return msg
+
+
+def flatpak_plan(ref):
+    """설치 전 크기 — {"dl": 바이트, "inst": 바이트, "runtime": 이름 또는 None, "rt_dl": 바이트, "rt_inst": 바이트,
+    "version": 문자열 또는 None} 또는 {"error": ...}. 인터넷으로 묻는다 — 작업 스레드에서."""
+    try:
+        Flatpak = _flatpak()
+        from gi.repository import GLib as _G
+        inst = flatpak_installation()
+        remote = flatpak_remote(inst)
+        _kind, name, arch, branch = ref.split("/")
+        rr = inst.fetch_remote_ref_sync(remote, Flatpak.RefKind.APP, name, arch, branch, None)
+        out = {"dl": rr.get_download_size(), "inst": rr.get_installed_size(), "runtime": None,
+               "rt_dl": 0, "rt_inst": 0, "version": None}
+        md = (rr.get_metadata().get_data() or b"").decode("utf-8", "replace") if rr.get_metadata() else ""
+        rt = next((l.split("=", 1)[1] for l in md.splitlines() if l.startswith("runtime=")), None)
+        if rt and rt.count("/") == 2:
+            n, a, b = rt.split("/")
+            try:
+                inst.get_installed_ref(Flatpak.RefKind.RUNTIME, n, a, b, None)
+            except _G.Error:
+                r2 = inst.fetch_remote_ref_sync(remote, Flatpak.RefKind.RUNTIME, n, a, b, None)
+                out.update(runtime=f"{n} {b}", rt_dl=r2.get_download_size(), rt_inst=r2.get_installed_size())
+        return out
+    except Exception as e:
+        return {"error": _flatpak_error(e)}
+
+
+def run_flatpak(op, ref, on_line, on_done):
+    """op: install · remove. 줄(PROGRESS·ERROR·DONE)과 끝(코드)은 GTK 스레드에서. 제거한 뒤엔 아무도 안 쓰는
+    런타임도 정리한다 (flatpak uninstall --unused 처럼)."""
+    def work():
+        try:
+            Flatpak = _flatpak()
+            inst = flatpak_installation()
+            t = Flatpak.Transaction.new_for_installation(inst, None)
+            t.set_no_interaction(True)
+            if op == "install":
+                t.add_install(flatpak_remote(inst), ref, None)
+            else:
+                t.add_uninstall(ref)
+            st = {"n": 0, "total": 1, "err": None}
+
+            def ready(tr):
+                st["total"] = max(1, len(tr.get_operations()))
+                return True
+
+            def new_op(tr, o, progress):
+                st["n"] += 1
+                parts = (o.get_ref() or "").split("/")
+                what = parts[1] if len(parts) > 1 else o.get_ref()
+                verb = "제거하는 중" if op == "remove" else "내려받는 중"
+                progress.set_update_frequency(400)
+
+                def changed(p):
+                    pct = int(((st["n"] - 1) + p.get_progress() / 100) / st["total"] * 100)
+                    GLib.idle_add(on_line, "PROGRESS", f"{min(99, pct)} {verb} {what}")
+                progress.connect("changed", changed)
+                GLib.idle_add(on_line, "PROGRESS",
+                              f"{int((st['n'] - 1) / st['total'] * 100)} {verb} {what}")
+
+            def op_error(tr, o, err, details):
+                st["err"] = _flatpak_error(err)
+                return False                    # 멈춘다
+
+            t.connect("ready", ready)
+            t.connect("new-operation", new_op)
+            t.connect("operation-error", op_error)
+            t.run(None)
+            if op == "remove":
+                try:
+                    unused = inst.list_unused_refs(None, None)
+                    if unused:
+                        GLib.idle_add(on_line, "PROGRESS", "99 쓰지 않는 런타임을 정리하는 중")
+                        t2 = Flatpak.Transaction.new_for_installation(inst, None)
+                        t2.set_no_interaction(True)
+                        for r in unused:
+                            t2.add_uninstall(r.format_ref())
+                        t2.run(None)
+                except Exception:
+                    pass                        # 정리는 덤 — 실패해도 앱은 지워졌다
+            GLib.idle_add(on_line, "PROGRESS", "100 완료")
+            GLib.idle_add(on_line, "DONE", "")
+            GLib.idle_add(on_done, 0)
+        except Exception as e:
+            msg = st["err"] if "st" in locals() and st.get("err") else _flatpak_error(e)
+            GLib.idle_add(on_line, "ERROR", msg)
+            GLib.idle_add(on_done, CANCELLED[0] if msg == "인증이 취소되었습니다" else 1)
+    threading.Thread(target=work, daemon=True).start()

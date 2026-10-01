@@ -155,7 +155,9 @@ class UpdatePage:
             r = Gtk.ListBoxRow()
             r.get_style_context().add_class("row")
             h = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-            n = Gtk.Label(label=name, xalign=0)
+            # Flathub 앱은 "flatpak:<앱 id>" 로 온다 — 앱 id 와 출처로
+            shown = f"{name[len('flatpak:'):]}  (Flathub)" if name.startswith("flatpak:") else name
+            n = Gtk.Label(label=shown, xalign=0)
             n.get_style_context().add_class("row-title")
             h.pack_start(n, True, True, 0)
             v = Gtk.Label(label="지워짐" if new == "삭제" else

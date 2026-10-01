@@ -46,6 +46,7 @@ def _desktop_dirs():
 
 DESKTOP_DIRS = _desktop_dirs()
 SEKAI_PKG = re.compile(r"^(sekai-|sekaios-)")
+FLATPAK_EXPORTS = "/var/lib/flatpak/exports/share/applications/"
 
 
 def _available(items):
@@ -74,6 +75,9 @@ def build_defaults(store):
                       lambda v: store.set("apps", "files", v)))
 
     s = p.section("추가 설치")
+    row(s, "스토어", "데비안 저장소의 앱 2,000여 개를 찾아 설치합니다",
+        icon=["system-software-install", "package-x-generic"],
+        control=button("스토어 열기", lambda: spawn("sekai-store")))
     if not shutil.which("google-chrome"):
         row(s, "Google Chrome 설치", "구글 계정 동기화가 되는 정식 크롬을 내려받습니다",
             icon=["google-chrome", "web-browser"],
@@ -168,7 +172,7 @@ def build_installed(store):
         ctl.pack_start(rm, False, False, 0)
         r = row(lb, name, fn, icon=[icon] if icon else ["application-x-executable"], control=ctl)
         r.search_key = (name + " " + fn).lower()
-        r.app_name, r.app_path, r.rm_btn, r.pkg = name, path, rm, None
+        r.app_name, r.app_path, r.rm_btn, r.pkg, r.flatpak = name, path, rm, None, None
         rm.connect("clicked", lambda _b, r=r: _remove_dialog(p, r, rows, rows_count))
         rows[path] = r
 
@@ -180,10 +184,20 @@ def build_installed(store):
 
     # 앱마다 어느 패키지인지 (dpkg 한 번에) — 패키지가 아닌 것(직접 만든 바로 가기 등)은 제거 단추가 없다
     def find():
-        found = appmgr.packages_of(list(rows))
-        GLib.idle_add(got, found)
+        found = appmgr.packages_of([x for x in rows if not x.startswith(FLATPAK_EXPORTS)])
+        fps = appmgr.flatpak_installed_apps() if any(x.startswith(FLATPAK_EXPORTS) for x in rows) else {}
+        GLib.idle_add(got, found, fps)
 
-    def got(found):
+    def got(found, fps):
+        # Flathub 앱 — 바로 가기가 flatpak 의 내보내기 자리에 있다 (앱 id.desktop)
+        for path, r in rows.items():
+            if path.startswith(FLATPAK_EXPORTS):
+                fid = os.path.basename(path)[:-len(".desktop")]
+                if fid in fps:
+                    r.pkg = None
+                    r.flatpak = f"app/{fid}/x86_64/{fps[fid]}"
+                    r.rm_btn.set_tooltip_text("Flathub 앱을 제거합니다")
+                    r.rm_btn.show()
         for path, pkg in found.items():
             r = rows.get(path)
             if r is not None:
@@ -203,7 +217,7 @@ def build_installed(store):
 def _remove_dialog(page, r, rows, recount):
     """앱 제거 — 함께 지워지는 것을 먼저 보여 주고, [제거] 를 누르면 사용자 계정 컨트롤 → 제거."""
     pkg = r.pkg
-    if not pkg:
+    if not pkg and not r.flatpak:
         return
     d = Gtk.Dialog(title=f"{r.app_name} 제거", transient_for=page.get_toplevel(), modal=True)
     d.set_default_size(460, -1)
@@ -255,7 +269,12 @@ def _remove_dialog(page, r, rows, recount):
         ok.set_sensitive(True)
         return False
 
-    appmgr.run_helper(["plan-remove", pkg], state["plan"].feed, planned)
+    if r.flatpak:
+        msg.set_text("Flathub 앱과, 더 이상 쓰는 앱이 없는 실행 환경(런타임)을 함께 정리합니다.\n"
+                     "내 문서와 앱 설정(홈 폴더의 .var/app)은 그대로 남습니다.")
+        ok.set_sensitive(True)
+    else:
+        appmgr.run_helper(["plan-remove", pkg], state["plan"].feed, planned)
 
     def line(kind, rest):
         if kind == "PROGRESS":
@@ -283,9 +302,9 @@ def _remove_dialog(page, r, rows, recount):
             cancel.set_sensitive(True)
             cancel.set_label("닫기")
             return False
-        gone = {pkg, *state["plan"].dele}
+        gone = {pkg, *state["plan"].dele} - {None}
         for x in list(rows.values()):
-            if x.pkg in gone:
+            if x is r or (x.pkg and x.pkg in gone):
                 rows.pop(x.app_path, None)
                 x.destroy()
         recount()
@@ -306,7 +325,10 @@ def _remove_dialog(page, r, rows, recount):
         bar.set_fraction(0)
         bar.show()
         msg.set_text("관리자 인증을 기다리는 중…")
-        appmgr.run_helper(["remove", pkg], line, removed, root=True)
+        if r.flatpak:
+            appmgr.run_flatpak("remove", r.flatpak, line, removed)
+        else:
+            appmgr.run_helper(["remove", pkg], line, removed, repo=True)
 
     d.connect("response", on_response)
     d.connect("delete-event", lambda *_: state["busy"])   # 제거 중엔 닫지 않는다 (결과를 보여 줄 곳)

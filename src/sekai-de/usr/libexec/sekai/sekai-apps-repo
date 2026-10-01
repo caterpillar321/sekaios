@@ -1,0 +1,11 @@
+#!/bin/sh
+# SekaiDE 스토어용 앱 설치·제거 — 저장소(서명된 apt 목록)의 패키지만 이름으로 다룬다
+#   sekai-apps-repo install <패키지> | remove <패키지> | refresh
+# polkit 정책 org.sekaios.apps.repo 는 잠시 인증을 기억한다 (앱 여러 개를 연달아 설치할 때 매번 묻지 않게).
+# 아무 .deb 설치(install-deb)는 여기서 받지 않는다 — 그건 sekai-apps(매번 인증)로만.
+case "$1" in
+    install|remove) [ $# -eq 2 ] && exec /usr/libexec/sekai/sekai-apps "$1" "$2" ;;
+    refresh)        [ $# -eq 1 ] && exec /usr/libexec/sekai/sekai-apps refresh ;;
+esac
+echo "ERROR 사용법: sekai-apps-repo install <패키지> | remove <패키지> | refresh"
+exit 2

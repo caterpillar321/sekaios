@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Store
+Name[ko]=스토어
+GenericName=App Store
+GenericName[ko]=앱 스토어
+Comment=Find and install apps
+Comment[ko]=앱과 게임을 찾아 설치합니다
+Exec=sekai-store
+Icon=system-software-install
+Terminal=false
+StartupWMClass=org.sekaios.Store
+Categories=System;PackageManager;GTK;
+Keywords=store;app store;install;software;스토어;앱;설치;프로그램;
