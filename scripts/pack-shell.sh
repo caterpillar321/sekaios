@@ -27,6 +27,7 @@ install -Dm755 "$SRC/sekai-taskmgr"   "$STAGE/usr/bin/sekai-taskmgr"
 install -Dm755 "$SRC/sekai-admin"     "$STAGE/usr/bin/sekai-admin"
 install -Dm755 "$SRC/sekai-files"     "$STAGE/usr/bin/sekai-files"
 install -Dm755 "$SRC/sekai-notepad"   "$STAGE/usr/bin/sekai-notepad"
+install -Dm755 "$SRC/sekai-appinstall" "$STAGE/usr/bin/sekai-appinstall"
 install -Dm755 "$SRC/sekai-calc"      "$STAGE/usr/bin/sekai-calc"
 install -Dm755 "$SRC/sekai-photos"    "$STAGE/usr/bin/sekai-photos"
 install -Dm755 "$SRC/sekai-wallpaper" "$STAGE/usr/bin/sekai-wallpaper"
@@ -67,8 +68,8 @@ for f in "$SRC/sekaisettings/pages"/*.py; do install -Dm644 "$f" "$DIST/sekaiset
 mkdir -p "$DIST/sekaiadmin/pages"
 for f in "$SRC/sekaiadmin"/*.py;        do install -Dm644 "$f" "$DIST/sekaiadmin/$(basename "$f")"; done
 for f in "$SRC/sekaiadmin/pages"/*.py;  do install -Dm644 "$f" "$DIST/sekaiadmin/pages/$(basename "$f")"; done
-# 파일 탐색기 (sekai-files) · 메모장 (sekai-notepad) · 계산기 (sekai-calc) · 사진 (sekai-photos)
-for pkg in sekaifiles sekainotepad sekaicalc sekaiphotos; do
+# 파일 탐색기 (sekai-files) · 메모장 (sekai-notepad) · 계산기 (sekai-calc) · 사진 (sekai-photos) · 앱 설치 관리자 (sekai-appinstall)
+for pkg in sekaifiles sekainotepad sekaicalc sekaiphotos sekaiappinstall; do
     mkdir -p "$DIST/$pkg"
     for f in "$SRC/$pkg"/*.py; do install -Dm644 "$f" "$DIST/$pkg/$(basename "$f")"; done
 done

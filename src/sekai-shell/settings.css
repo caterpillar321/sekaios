@@ -222,6 +222,9 @@ button.accent-btn {
 }
 button.accent-btn:hover { background: mix(@accent, #ffffff, 0.12); }
 button.accent-btn label { color: @on_accent; }
+/* 아직 누를 수 없는 주요 단추 (확인하는 중 등) — 눌리는 단추와 구별되게 */
+button.accent-btn:disabled { background: alpha(@accent, 0.35); border-color: transparent; }
+button.accent-btn:disabled label { color: alpha(@on_accent, 0.6); }
 
 progressbar.update-progress { margin: 4px 2px 2px 2px; }
 progressbar.update-progress trough {

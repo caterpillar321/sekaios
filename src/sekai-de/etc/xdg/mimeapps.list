@@ -34,6 +34,10 @@ application/x-xar=sekai-files-extract.desktop
 application/x-lha=sekai-files-extract.desktop
 application/x-lzh-compressed=sekai-files-extract.desktop
 application/zstd=sekai-files-extract.desktop
+# 설치 파일(.deb) → 앱 설치 관리자
+application/vnd.debian.binary-package=sekai-appinstall.desktop
+application/x-deb=sekai-appinstall.desktop
+application/x-debian-package=sekai-appinstall.desktop
 # 텍스트 → 메모장
 text/plain=sekai-notepad.desktop
 text/x-log=sekai-notepad.desktop

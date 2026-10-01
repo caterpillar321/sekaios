@@ -1,0 +1,444 @@
+#!/usr/bin/env python3
+# ═══════════════════════════════════════════════════════════════
+#  SekaiDE 앱 설치·제거 도우미 — 앱 설치 관리자(.deb)와 설정 › 설치된 앱이 부른다
+#
+#    sekai-apps inspect <파일.deb>         (보통 권한) 꾸러미 정보와 설치 계획
+#    sekai-apps plan-remove <패키지>        (보통 권한) 지우면 함께 지워지는 것
+#    sekai-apps install-deb <이름.deb>      (관리자, pkexec) 표준 입력으로 받은 .deb 를 설치
+#    sekai-apps remove <패키지>             (관리자, pkexec) 앱을 지운다 (따라 들어온 구성 요소도)
+#
+#  출력은 한 줄에 하나씩 (sekai-update 와 같은 형식):
+#    INFO <키> <값>         Package · Version · Architecture · Maintainer · Homepage · Size(KB) · Summary
+#    DESC <줄>              긴 설명
+#    STATE new|upgrade|same|downgrade [설치된 버전]
+#    ADD <이름> <버전>       함께 새로 설치되는 것
+#    UPG <이름> <옛> <새>    함께 바뀌는 것
+#    DEL <이름>             함께 지워지는 것
+#    BLOCK <이유>           이대로는 설치·제거하지 않는다 (SekaiOS 부품을 지우게 되는 등)
+#    PROGRESS <0-100> <설명>
+#    APP <.desktop 경로>    설치한 꾸러미의 앱 (실행 단추용)
+#    DONE
+#    ERROR <설명>
+#  install-deb 의 파일은 경로가 아니라 표준 입력으로 받는다 — 인증한 뒤 경로의 파일을 바꿔치기할 수 없고,
+#  관리자가 못 읽는 곳(사용자 세션의 네트워크 드라이브 등)의 파일도 설치된다. 이름은 화면·apt 용일 뿐이다.
+#  관리자 권한으로 도는 프로그램이라 바깥에서 apt 옵션·명령을 넘길 수 없게 한다.
+#  (guard 는 실제 설치에 거는 apt 훅이다 — sekai-update 의 것과 같다. sekaios-base 없이 SekaiDE 만
+#   깐 데비안에서도 돌아야 해서 이 파일 안에 따로 둔다)
+# ═══════════════════════════════════════════════════════════════
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+
+# 메시지는 영어로 받아 읽는다 (사용자의 LANGUAGE=ko 가 남아 있으면 apt 가 번역해 explain 이 못 알아본다)
+ENV = dict(os.environ, DEBIAN_FRONTEND="noninteractive", LANG="C.UTF-8", LC_ALL="C.UTF-8", LANGUAGE="",
+           PATH="/usr/sbin:/usr/bin:/sbin:/bin")
+APT_OPTS = ["-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold",
+            "-o", "Dpkg::Use-Pty=0",
+            # 업데이트·다른 설치가 dpkg 를 잡고 있으면 바로 실패하지 말고 잠시 기다린다
+            "-o", "DPkg::Lock::Timeout=120"]
+WORK = "/var/cache/sekai-apps"
+
+# 이것들을 지우게 되면 설치·제거하지 않는다 (sekai-update 와 같은 목록)
+PROTECTED = re.compile(r"^(sekai-|sekaios-|sekaicomp|hyprland|hyprbars|hyprexpo|greetd|linux-image-amd64$|shim-signed|"
+                       r"grub-efi-amd64-signed|systemd$|network-manager$)")
+PKG_NAME = re.compile(r"^[a-z0-9][a-z0-9+.-]+(:[a-z0-9]+)?$")
+
+SELF = os.path.abspath(__file__)
+GUARD_TAG = "SEKAI-BLOCKED:"
+
+
+def out(*a):
+    # 창을 닫아 읽는 쪽이 사라져도 설치는 끝까지 간다 (dpkg 가 반쯤 멈추면 안 됨)
+    try:
+        print(*a, flush=True)
+    except (BrokenPipeError, OSError):
+        try:
+            sys.stdout = open(os.devnull, "w")
+        except OSError:
+            pass
+
+
+def one_line(s):
+    return " ".join(str(s).split())
+
+
+# ── apt 오류를 사람 말로 ──
+def explain(lines):
+    """apt·dpkg 출력에서 가장 쓸모 있는 이유 하나를 한국어로."""
+    text = "\n".join(lines)
+    unmet = re.findall(r"^\s*\S+ : (?:Depends|PreDepends|Pre-Depends): (.+?)(?: but .*)?$", text, re.M)
+    if unmet:
+        need = ", ".join(dict.fromkeys(u.strip() for u in unmet))
+        return (f"필요한 구성 요소({need})를 설치할 수 없습니다 — 이 프로그램은 SekaiOS(데비안 13)용이 "
+                f"아니거나, 함께 받아야 하는 저장소가 따로 있을 수 있습니다")
+    if re.search(r"Could not get lock|Unable to acquire the dpkg frontend lock|Unable to lock", text):
+        return "다른 설치나 업데이트가 진행 중입니다 — 끝난 뒤 다시 해 주세요"
+    if re.search(r"not a Debian format archive|dpkg-deb.*error|Invalid archive signature|unexpected end of file|"
+                 r"Could not read meta data|Error reading archive member",
+                 text, re.I):
+        return "올바른 설치 파일(.deb)이 아닙니다 — 파일이 손상되었거나 다 받지 못했을 수 있습니다"
+    if re.search(r"No space left on device|You don't have enough free space", text):
+        return "디스크 공간이 부족합니다"
+    if "Temporary failure resolving" in text or "Could not resolve" in text:
+        return "함께 받아야 할 구성 요소를 내려받지 못했습니다 — 인터넷 연결을 확인해 주세요"
+    if "essential" in text.lower() and "remov" in text.lower():
+        return "시스템에 꼭 필요한 패키지라 지울 수 없습니다"
+    err = next((l for l in reversed(lines) if l.startswith(("E:", "dpkg:"))), None)
+    return one_line(err) if err else "알 수 없는 오류"
+
+
+# ── apt 진행 ──
+def run_status(cmd, lo, hi):
+    """apt 의 기계용 진행 정보(Status-Fd)를 읽어 PROGRESS 로 바꾼다."""
+    r, w = os.pipe()
+    p = subprocess.Popen(cmd + ["-o", f"APT::Status-Fd={w}"], env=ENV, pass_fds=(w,),
+                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    os.close(w)
+    log = []
+
+    def drain():
+        for line in p.stdout:
+            log.append(line.rstrip())
+    t = threading.Thread(target=drain, daemon=True)
+    t.start()
+    with os.fdopen(r, "r", errors="replace") as f:
+        for line in f:
+            parts = line.rstrip("\n").split(":", 3)
+            if len(parts) == 4 and parts[0] in ("dlstatus", "pmstatus"):
+                try:
+                    pct = float(parts[2])
+                except ValueError:
+                    continue
+                what = "내려받는 중" if parts[0] == "dlstatus" else "설치하는 중"
+                name = parts[1] if parts[0] == "pmstatus" else ""
+                out("PROGRESS", int(lo + (hi - lo) * pct / 100), f"{what} {name}".strip())
+    p.wait()
+    t.join(2)
+    return p.returncode, log
+
+
+def simulate(args):
+    """apt-get -s <args> → ((새로 [(이름, 버전)], 바뀜 [(이름, 옛, 새)], 지움 [이름]), None) 또는 (None, 오류 줄들).
+    실패를 "지울 것 없음"으로 읽으면 안 된다 (fail-closed)."""
+    res = subprocess.run(["apt-get", "-s", "-q", "-o", "Debug::NoLocking=1"] + args, env=ENV,
+                         stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    if res.returncode != 0:
+        return None, (res.stdout + "\n" + res.stderr).splitlines()
+    new, upg, gone = [], [], []
+    for line in res.stdout.splitlines():
+        m = re.match(r"Inst (\S+) (?:\[(\S+)\] )?\((\S+)", line)
+        if m:
+            (upg.append((m.group(1), m.group(2), m.group(3))) if m.group(2)
+             else new.append((m.group(1), m.group(3))))
+        elif line.startswith(("Remv ", "Purg ")) and len(line.split()) > 1:
+            gone.append(line.split()[1])
+    return (new, upg, gone), None
+
+
+def guard():
+    """apt 가 dpkg 를 부르기 직전에 도는 훅 (DPkg::Pre-Install-Pkgs, 프로토콜 2) — sekai-update 와 같다.
+    보호 패키지를 지우려 하면 실패해서 apt 를 멈춘다 (dpkg 는 아직 아무것도 바꾸지 않은 때)."""
+    lines = sys.stdin.read().splitlines()
+    if not lines or not lines[0].startswith("VERSION "):
+        print(f"{GUARD_TAG} (알 수 없는 훅 형식)", file=sys.stderr)
+        return 1
+    try:
+        start = lines.index("", 1) + 1
+    except ValueError:
+        print(f"{GUARD_TAG} (알 수 없는 훅 형식)", file=sys.stderr)
+        return 1
+    bad = [f[0] for f in (l.split() for l in lines[start:])
+           if len(f) >= 5 and f[-1] == "**REMOVE**" and PROTECTED.match(f[0])]
+    if bad:
+        print(f"{GUARD_TAG} " + " ".join(sorted(set(bad))), file=sys.stderr)
+        return 1
+    return 0
+
+
+def guard_opts():
+    return ["-o", f"DPkg::Pre-Install-Pkgs::={SELF} guard",
+            "-o", f"DPkg::Tools::Options::{SELF}::Version=2"]
+
+
+def blocked_by_guard(log):
+    return next((l.split(GUARD_TAG, 1)[1].strip() for l in log if GUARD_TAG in l), None)
+
+
+# ── 꾸러미 정보 ──
+def deb_fields(path):
+    keys = ["Package", "Version", "Architecture", "Maintainer", "Homepage", "Installed-Size", "Description"]
+    res = subprocess.run(["dpkg-deb", "-f", path] + keys, env=ENV, capture_output=True, text=True)
+    if res.returncode != 0:
+        return None, res.stderr.splitlines()
+    f, cur = {}, None
+    for line in res.stdout.splitlines():
+        m = re.match(r"^([A-Za-z-]+): ?(.*)$", line)
+        if m and not line.startswith(" "):
+            cur = m.group(1)
+            f[cur] = m.group(2)
+        elif cur:
+            f[cur] += "\n" + line
+    if not f.get("Package") or not f.get("Version"):
+        return None, ["dpkg-deb: error: 꾸러미 이름·버전이 없습니다"]
+    return f, None
+
+
+def installed_version(pkg):
+    res = subprocess.run(["dpkg-query", "-W", "-f=${Status}\t${Version}", pkg], env=ENV,
+                         capture_output=True, text=True)
+    if res.returncode != 0:
+        return None
+    status, _, ver = res.stdout.partition("\t")
+    return ver if status.endswith(" installed") else None
+
+
+def compare(a, op, b):
+    return subprocess.run(["dpkg", "--compare-versions", a, op, b]).returncode == 0
+
+
+def native_archs():
+    a = subprocess.run(["dpkg", "--print-architecture"], capture_output=True, text=True).stdout.strip()
+    extra = subprocess.run(["dpkg", "--print-foreign-architectures"], capture_output=True, text=True).stdout.split()
+    return {a, "all", *extra}, a
+
+
+ARCH_NAMES = {"amd64": "64비트 PC(x86_64)", "i386": "32비트 PC", "arm64": "ARM 64비트(라즈베리 파이 등)",
+              "armhf": "ARM 32비트", "riscv64": "RISC-V"}
+
+
+def check_deb(path):
+    """설치해도 되는 .deb 인지 — (정보, 계획, 막는 이유들) 또는 오류를 내보내고 None.
+    inspect 는 막는 이유를 BLOCK 으로 보여 주고, install-deb 는 오류로 멈춘다."""
+    f, err = deb_fields(path)
+    if f is None:
+        out("ERROR", explain(err or []))
+        return None
+    # 끝까지 읽어 본다 — 정보(control)는 파일 앞에 있어서, 다 받지 못한 파일도 여기까지는 멀쩡해 보인다
+    whole = subprocess.run(["dpkg-deb", "--fsys-tarfile", path], env=ENV,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    if whole.returncode != 0:
+        out("ERROR", "설치 파일이 손상되었거나 다 받지 못한 파일입니다 — 다시 내려받아 주세요")
+        return None
+    pkg, arch = f["Package"], f.get("Architecture", "")
+    ok_archs, native = native_archs()
+    if arch not in ok_archs:
+        out("ERROR", f"이 설치 파일은 {ARCH_NAMES.get(arch, arch)}용입니다 — "
+            f"이 컴퓨터는 {ARCH_NAMES.get(native, native)}라서 쓸 수 없습니다")
+        return None
+    if PROTECTED.match(pkg):
+        return f, None, ["SekaiOS 의 구성 요소는 설치 파일로 바꿀 수 없습니다 — 설정 › 업데이트로 받아 주세요"]
+    plan, err = simulate(["install", path])
+    if plan is None:
+        out("ERROR", explain(err))
+        return None
+    bad = [n for n in plan[2] if PROTECTED.match(n)]
+    if bad:
+        return f, plan, ["이 프로그램을 설치하면 SekaiOS 에 꼭 필요한 구성 요소(" + ", ".join(bad[:6])
+                         + ")가 지워집니다 — 설치하지 않는 것이 안전합니다"]
+    return f, plan, []
+
+
+def inspect(path):
+    path = os.path.abspath(path)
+    if not os.path.isfile(path):
+        out("ERROR", "설치 파일을 찾을 수 없습니다 — 옮겨졌거나 지워졌을 수 있습니다")
+        return 1
+    r = check_deb(path)
+    if r is None:
+        return 1
+    f, plan, blocks = r
+    for b in blocks:
+        out("BLOCK", b)
+    pkg = f["Package"]
+    desc = (f.get("Description") or "").split("\n")
+    out("INFO", "Package", pkg)
+    out("INFO", "Version", f["Version"])
+    out("INFO", "Architecture", f.get("Architecture", ""))
+    for k in ("Maintainer", "Homepage"):
+        if f.get(k):
+            out("INFO", k, one_line(f[k]))
+    if f.get("Installed-Size", "").strip().isdigit():
+        out("INFO", "Size", f["Installed-Size"].strip())
+    out("INFO", "Summary", one_line(desc[0]))
+    for line in desc[1:]:
+        line = line[1:] if line.startswith(" ") else line
+        out("DESC", "" if line.strip() == "." else line.rstrip())
+    cur = installed_version(pkg)
+    if cur is None:
+        out("STATE", "new")
+    elif compare(f["Version"], "gt", cur):
+        out("STATE", "upgrade", cur)
+    elif compare(f["Version"], "eq", cur):
+        out("STATE", "same", cur)
+    else:
+        out("STATE", "downgrade", cur)
+    if plan:
+        new, upg, gone = plan
+        for n, v in new:
+            if n != pkg:
+                out("ADD", n, v)
+        for n, o, v in upg:
+            if n != pkg:
+                out("UPG", n, o, v)
+        for n in gone:
+            out("DEL", n)
+    out("DONE")
+    return 0
+
+
+def package_apps(pkg):
+    res = subprocess.run(["dpkg-query", "-L", pkg], env=ENV, capture_output=True, text=True)
+    return [l for l in res.stdout.splitlines()
+            if re.match(r"^/usr/(local/)?share/applications/[^/]+\.desktop$", l)]
+
+
+def install_deb(name):
+    # 이름은 보여 주기·apt 용 (파일 자체는 표준 입력) — 경로·이상한 글자는 버린다
+    base = os.path.basename(name or "")
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._+~-]*\.deb$", base):
+        base = "package.deb"
+    os.makedirs(WORK, mode=0o700, exist_ok=True)
+    os.chmod(WORK, 0o700)
+    tmp = tempfile.mkdtemp(dir=WORK)
+    try:
+        path = os.path.join(tmp, base)
+        out("PROGRESS", 1, "설치 파일을 읽는 중")
+        try:
+            with open(path, "wb") as dst:
+                shutil.copyfileobj(sys.stdin.buffer, dst, 1 << 20)
+        except OSError as e:
+            out("ERROR", f"설치 파일을 읽지 못했습니다: {e}")
+            return 1
+        if os.path.getsize(path) == 0:
+            out("ERROR", "설치 파일이 비어 있습니다")
+            return 1
+        out("PROGRESS", 3, "확인하는 중")
+        r = check_deb(path)
+        if r is None:
+            return 1
+        f, _plan, blocks = r
+        if blocks:
+            out("ERROR", blocks[0])
+            return 1
+        pkg = f["Package"]
+        rc, log = run_status(["apt-get", "-y", "-q"] + APT_OPTS + guard_opts() + ["install", path], 5, 99)
+        if rc != 0:
+            b = blocked_by_guard(log)
+            if b is not None:
+                out("ERROR", "이 프로그램을 설치하면 SekaiOS 에 꼭 필요한 구성 요소(" + (b or "?")
+                    + ")가 지워져서 설치하지 않았습니다")
+                return 1
+            subprocess.run(["dpkg", "--configure", "-a"], env=ENV,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            out("ERROR", "설치하지 못했습니다: " + explain(log))
+            return 1
+        out("PROGRESS", 100, "완료")
+        for d in package_apps(pkg):
+            out("APP", d)
+        out("DONE")
+        return 0
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ── 제거 ──
+def remove_plan(pkg):
+    """(지워질 것 [이름], 따라 지울 구성 요소 [이름]) 또는 None. 따라 지울 것 = 이 앱을 지우면 새로
+    필요 없어지는 자동 설치 패키지만 — 원래부터 필요 없던 것(autoremove 대상)은 건드리지 않는다."""
+    plan, err = simulate(["remove", pkg])
+    if plan is None:
+        out("ERROR", explain(err))
+        return None
+    gone = plan[2]
+    before, _ = simulate(["autoremove"])
+    after, _ = simulate(["remove", "--auto-remove", pkg])
+    extra = []
+    if before is not None and after is not None:
+        old = set(before[2])
+        extra = [n for n in after[2] if n not in old and n not in gone]
+    return gone, extra
+
+
+def check_remove(pkg):
+    if not PKG_NAME.match(pkg or ""):
+        out("ERROR", "패키지 이름이 올바르지 않습니다")
+        return None
+    if installed_version(pkg) is None:
+        out("ERROR", "이미 설치되어 있지 않습니다")
+        return None
+    if PROTECTED.match(pkg):
+        return [], [], ["SekaiOS 의 구성 요소라 지울 수 없습니다"]
+    r = remove_plan(pkg)
+    if r is None:
+        return None
+    gone, extra = r
+    bad = [n for n in gone + extra if PROTECTED.match(n)]
+    if bad:
+        return gone, extra, ["이 앱을 지우면 SekaiOS 에 꼭 필요한 구성 요소(" + ", ".join(bad[:6])
+                             + ")도 함께 지워집니다 — SekaiOS 기본 구성에 들어 있는 앱입니다"]
+    return gone, extra, []
+
+
+def plan_remove(pkg):
+    r = check_remove(pkg)
+    if r is None:
+        return 1
+    gone, extra, blocks = r
+    for b in blocks:
+        out("BLOCK", b)
+    for n in gone:
+        if n != pkg:
+            out("DEL", n)
+    for n in extra:
+        out("DEL", n)
+    out("DONE")
+    return 0
+
+
+def remove(pkg):
+    out("PROGRESS", 2, "확인하는 중")
+    r = check_remove(pkg)
+    if r is None:
+        return 1
+    _gone, extra, blocks = r
+    if blocks:
+        out("ERROR", blocks[0])
+        return 1
+    rc, log = run_status(["apt-get", "-y", "-q"] + APT_OPTS + guard_opts() + ["remove", pkg] + extra, 5, 99)
+    if rc != 0:
+        b = blocked_by_guard(log)
+        if b is not None:
+            out("ERROR", "이 앱을 지우면 SekaiOS 에 꼭 필요한 구성 요소(" + (b or "?") + ")도 지워져서 멈췄습니다")
+            return 1
+        subprocess.run(["dpkg", "--configure", "-a"], env=ENV,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        out("ERROR", "지우지 못했습니다: " + explain(log))
+        return 1
+    out("PROGRESS", 100, "완료")
+    out("DONE")
+    return 0
+
+
+def main():
+    a = sys.argv[1:]
+    if a == ["guard"]:
+        return guard()
+    if len(a) == 2 and a[0] == "inspect":
+        return inspect(a[1])
+    if len(a) == 2 and a[0] == "plan-remove":
+        return plan_remove(a[1])
+    if len(a) == 2 and a[0] in ("install-deb", "remove"):
+        if os.geteuid() != 0:
+            out("ERROR", "관리자 권한이 필요합니다")
+            return 1
+        return install_deb(a[1]) if a[0] == "install-deb" else remove(a[1])
+    out("ERROR", "사용법: sekai-apps inspect <파일.deb> | plan-remove <패키지> | install-deb <이름.deb> | remove <패키지>")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

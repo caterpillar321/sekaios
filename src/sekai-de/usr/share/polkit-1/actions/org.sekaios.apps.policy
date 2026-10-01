@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- SekaiDE 앱 설치·제거 도우미 — 앱 설치 관리자(.deb)와 설정 › 설치된 앱이 pkexec 로 부른다 -->
+<policyconfig>
+  <vendor>SekaiOS</vendor>
+  <action id="org.sekaios.apps">
+    <description>Install or remove apps</description>
+    <description xml:lang="ko">앱 설치·제거</description>
+    <message>Authentication is required to install or remove apps</message>
+    <message xml:lang="ko">앱을 설치하거나 제거하려면 인증이 필요합니다</message>
+    <icon_name>system-software-install</icon_name>
+    <defaults>
+      <!-- 설치 파일의 설치 단계는 관리자 권한으로 돈다 — 한 번 인증했다고 잠시 다시 묻지 않으면,
+           그사이 다른 프로그램이 같은 길로 아무 꾸러미나 설치할 수 있다. 매번 묻는다 -->
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/sekai/sekai-apps</annotate>
+  </action>
+</policyconfig>

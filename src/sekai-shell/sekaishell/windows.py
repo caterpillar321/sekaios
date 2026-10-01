@@ -165,6 +165,8 @@ class WindowManager:
             return
         if c.get("fullscreen", 0) == 2:
             return                                        # 전체 화면(F11·동영상)은 건드리지 않는다
+        if c.get("sekaiFixed"):
+            return                                        # 크기를 바꿀 수 없는 창 — 칸에 맞출 수 없다
         maxed = c.get("fullscreen", 0) == 1
         if not c.get("floating"):
             self.hypr.dispatch(f"setfloating address:{addr}")
@@ -241,6 +243,8 @@ class WindowManager:
         if cur not in (None, "max") and not self._in_zone(c, cur):
             cur = None                                    # 다른 방법(Win+Shift+화살표·Super+끌기)으로 옮겨졌다
         to = self.KEYS[direction].get(cur, "restore")
+        if c.get("sekaiFixed") and to != "min":
+            return                                        # 크기 고정 창은 Win+↓(최소화)만
         if to == "min":
             self.hypr.dispatch(f"movetoworkspacesilent special:min,address:{addr}")
         elif to == "unmax":
@@ -287,6 +291,10 @@ class WindowManager:
         if not c:
             return False
         self._drag_addr = addr
+        # 크기를 바꿀 수 없는 창(SEKAI_FIXED_SIZE)은 칸에 맞출 수 없다 — 스냅 미리보기·레이아웃 바 없이 옮기기만
+        self._drag_fixed = bool(c.get("sekaiFixed"))
+        if self._drag_fixed:
+            return False
         if self.topbar is not None:
             # 새 끌기 — 멈추지 못한 옛 폴링이 남아 있어도 기준은 새로 잡는다
             self._drag_t0 = self._drag_still = GLib.get_monotonic_time()
@@ -398,6 +406,8 @@ class WindowManager:
         return False
 
     def _drag_zone(self, zone, mon_name):
+        if getattr(self, "_drag_fixed", False):
+            return False
         if self.topbar is not None and self.topbar.get_visible():
             return False                                 # 바가 내려와 있으면 미리보기는 바 쪽이 정한다
         rect = self.zone_rect(zone, mon_name=mon_name) if zone != "none" else None
@@ -408,6 +418,10 @@ class WindowManager:
         return False
 
     def _drag_drop(self, zone, mon_name, addr):
+        if getattr(self, "_drag_fixed", False):
+            self._drag_fixed = False
+            self._drag_abort()
+            return False
         bar_open, hit = self._stop_poll()
         self._drag_addr = None
         if self.preview is not None:

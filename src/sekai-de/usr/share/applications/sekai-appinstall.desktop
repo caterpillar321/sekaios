@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=App Installer
+Name[ko]=앱 설치 관리자
+GenericName=Package Installer
+GenericName[ko]=앱 설치 관리자
+Comment=Install apps from .deb files
+Comment[ko]=.deb 설치 파일로 앱을 설치합니다
+Exec=sekai-appinstall %F
+Icon=system-software-install
+Terminal=false
+NoDisplay=true
+StartupWMClass=org.sekaios.AppInstaller
+Categories=System;PackageManager;
+MimeType=application/vnd.debian.binary-package;application/x-deb;application/x-debian-package;
+Keywords=deb;설치;install;package;패키지;
