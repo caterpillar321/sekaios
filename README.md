@@ -6,11 +6,11 @@
 
 <p align="center">
   윈도우처럼 쓰는 리눅스 — 데비안 13 기반 데스크톱 배포판<br>
-  <b>1.0 “Hatsune”</b> · 개발 중
+  <b>1.0 “Hatsune”</b> · 활발히 개발 중
 </p>
 
 <p align="center"><i>A Windows-like Linux desktop built on Debian 13. Korean-first. The desktop shell and its apps are written
-from scratch in Python + GTK 3, running on SekaiCompose (our fork of the Hyprland compositor).</i></p>
+from scratch in Python + GTK 3, running on SekaiCompose (our fork of the Hyprland compositor). Under active development.</i></p>
 
 ![시작 메뉴를 연 SekaiOS 바탕화면](docs/screenshots/start-menu.png)
 
@@ -18,54 +18,66 @@ from scratch in Python + GTK 3, running on SekaiCompose (our fork of the Hyprlan
 
 ## 소개
 
-윈도우 11 을 쓰던 사람이 설명서 없이 바로 쓸 수 있는 리눅스 데스크톱을 목표로 한다.
+SekaiOS 는 윈도우 11 을 쓰던 분이 설명서 없이 바로 쓸 수 있는 리눅스 데스크톱을 목표로 합니다.
 작업 표시줄·시작 메뉴·창 배치·설정·파일 탐색기처럼 **화면에 보이는 것은 SekaiOS 가 직접 만들었고**,
-그 밑은 안정적인 데비안 13 (trixie) 이다. 한국어가 기본이고(한글 입력이 처음부터 된다) 영어·일본어도 고를 수 있다.
+그 밑은 안정적인 데비안 13 (trixie) 입니다. 한국어가 기본이며(한글 입력이 처음부터 됩니다) 영어·일본어도 고를 수 있습니다.
 
-## 상태
+## 지금 상태
 
-**개발 중이다.** 아직 내려받을 수 있는 설치 이미지(ISO)는 공개하지 않았다.
-VMware 가상 머신과 실제 PC(AMD · NVIDIA 그래픽)에서 시험하고 있다. 버그와 제안은 [이슈](https://github.com/caterpillar321/sekaios/issues)로.
+**한창 개발하고 있습니다.** 데스크톱의 주요 기능은 갖춰졌고, 지금은 실제로 매일 쓰면서 걸리는 부분을 다듬는 단계입니다.
+설치 프로그램으로 실제 PC 에 설치해 쓸 수 있고, 설치된 SekaiOS 는 서명된 SekaiOS 저장소에서 업데이트를 받습니다.
+다만 내려받을 수 있는 설치 이미지(ISO)는 아직 공개하지 않았습니다.
+
+가상 머신(VMware · KVM)과 실제 PC(AMD · NVIDIA 그래픽, 다중 모니터)에서 시험하고 있습니다.
+버그 제보와 제안은 [이슈](https://github.com/caterpillar321/sekaios/issues)로 남겨 주세요.
+
+**최근에 한 일**
+
+- 합성기를 Hyprland 패치 묶음에서 독자 포크인 **SekaiCompose**(`sekaicomp`)로 옮겼습니다
+- 데스크톱 환경(**SekaiDE**)을 배포판 부품과 나눠, 데비안에 데스크톱만 따로 깔 수 있게 했습니다
+- 잘못 누르거나 끄는 도중 손을 떼는 등 **오조작 시험**으로 창 단추·끌기·작업 표시줄·대화상자의 버그를 잡았습니다
+- 설치 USB 의 부팅 멈춤, 라이브 세션 잠금, 다중 모니터, 부팅 화면 깜박임 같은 실기 문제를 고쳤습니다
+- 데비안 rootfs 를 처음부터 다시 만드는 빌드 스크립트를 갖췄습니다
 
 ## 주요 기능
 
-- **작업 표시줄** — 모니터마다, 앱 고정, 창 미리보기, 빠른 설정(Wi-Fi · 소리 · 밝기 · 블루투스), 알림 센터
-- **시작 메뉴** — 앱 · 설정 항목 · 파일을 한 칸에서 찾고 계산도 한다 (한글 초성 · 한/영 잘못 친 글자도)
+- **작업 표시줄** — 모니터마다 하나씩, 앱 고정, 창 미리보기, 빠른 설정(Wi-Fi · 소리 · 밝기 · 블루투스), 알림 센터
+- **시작 메뉴** — 앱 · 설정 항목 · 파일을 한 칸에서 찾고 계산도 합니다 (한글 초성, 한/영을 잘못 친 글자도 찾습니다)
 - **창 배치** — 화면 가장자리로 끌면 반쪽 · 4분의 1, 위로 끌면 스냅 레이아웃, Win+화살표, 스냅 도우미
 - **기본 앱** — 파일 탐색기(탭) · 메모장 · 계산기 · 사진 · 작업 관리자 ·
   컴퓨터 관리(이벤트 뷰어 · 서비스 · 장치 관리자) · 설정(항목 검색)
 - **보안** — 사용자 계정 컨트롤(관리자 권한 확인 창), 보안 부팅(shim + 데비안 서명 GRUB)
-- **그래픽** — NVIDIA 드라이버는 설정 › 그래픽에서 설치. 드라이버가 없는 그래픽 카드는 자동으로 기본 화면 모드
-- **설치** — 설치 프로그램과 첫 설정. 윈도우와 다른 디스크에 전용 부팅 파티션으로 설치해 서로 건드리지 않는다
-- **업데이트** — 서명된 SekaiOS 저장소에서 자동으로 확인한다 (설정 › 업데이트)
+- **그래픽** — NVIDIA 드라이버는 설정 › 그래픽에서 설치합니다. 드라이버가 없는 그래픽 카드는 자동으로 기본 화면 모드로 켜집니다
+- **설치** — 설치 프로그램과 첫 설정. 윈도우와 다른 디스크에 전용 부팅 파티션으로 설치해 서로 건드리지 않습니다
+- **업데이트** — 서명된 SekaiOS 저장소에서 자동으로 확인합니다 (설정 › 업데이트)
 
 ## 시스템 요구 사항
 
 | | |
 |---|---|
 | CPU | 64비트 x86 (x86_64) |
-| 펌웨어 | UEFI (레거시 BIOS 는 지원하지 않는다). 보안 부팅은 켜 두어도 된다 |
+| 펌웨어 | UEFI (레거시 BIOS 는 지원하지 않습니다). 보안 부팅은 켜 두셔도 됩니다 |
 | 메모리 | 4GB 이상 권장 (최소 2GB) |
-| 디스크 | 12GB 이상 — 설치 프로그램은 고른 디스크 하나를 통째로 쓴다 |
-| 그래픽 | Intel · AMD 는 바로. NVIDIA 는 설치 뒤 설정 › 그래픽에서 드라이버를 받는다 |
+| 디스크 | 12GB 이상 — 설치 프로그램은 고른 디스크 하나를 통째로 씁니다 |
+| 그래픽 | Intel · AMD 는 바로 됩니다. NVIDIA 는 설치 뒤 설정 › 그래픽에서 드라이버를 받습니다 |
 
 ## SekaiDE 만 쓰기
 
-SekaiOS 의 데스크톱 환경(SekaiDE)은 배포판과 따로 깔 수 있다 — 데비안 13(trixie)에 SekaiOS 저장소를 더한 뒤
-`sudo apt install sekai-de` 하면 셸·로그인 화면·합성기(SekaiCompose)가 들어오고, 부팅·업데이트 같은 배포판 부품
-(`sekaios-base`)은 깔리지 않는다. (설정 앱의 그래픽 드라이버·업데이트 페이지는 그 부품이 있을 때만 보인다)
+SekaiOS 의 데스크톱 환경(SekaiDE)은 배포판과 따로 깔 수 있습니다. 데비안 13(trixie)에 SekaiOS 저장소를 더한 뒤
+`sudo apt install sekai-de` 하시면 셸·로그인 화면·합성기(SekaiCompose)가 들어오고, 부팅·업데이트 같은 배포판 부품
+(`sekaios-base`)은 깔리지 않습니다. (설정 앱의 그래픽 드라이버·업데이트 페이지는 그 부품이 있을 때만 보입니다)
 
 ## 설치와 업데이트
 
-- **설치 이미지** — 아직 공개하지 않았다. 직접 만들려면 아래 [직접 빌드하기](#직접-빌드하기)를 본다.
+- **설치 이미지** — 아직 공개하지 않았습니다. 직접 만드시려면 아래 [직접 빌드하기](#직접-빌드하기)를 참고해 주세요.
 - **업데이트** — 설치된 SekaiOS 는 `https://caterpillar321.github.io/sekaios-apt/`(SekaiOS 서명 키로 서명)에서
-  SekaiOS 부품을, 데비안 저장소에서 나머지를 받는다.
+  SekaiOS 부품을, 데비안 저장소에서 나머지를 받습니다.
 
 ## SekaiOS 가 만든 것과 함께 쓰는 것
 
-SekaiOS 의 화면은 직접 만들었다. 그 밑의 운영체제 부품(드라이버 · 네트워크 · 소리 · 인쇄 · 암호 저장 등)은
-다른 리눅스 데스크톱들과 같은 공개 부품을 함께 쓴다 — 윈도우에서 보이는 창은 마이크로소프트가 만들어도
-그 밑에 여러 회사의 드라이버와 표준 부품이 있는 것과 같다.
+SekaiOS 의 화면은 직접 만들었습니다. 그 밑의 운영체제 부품(드라이버 · 네트워크 · 소리 · 인쇄 · 암호 저장 등)은
+다른 리눅스 데스크톱들과 같은 공개 부품을 함께 씁니다. 윈도우에서 보이는 창은 마이크로소프트가 만들었어도
+그 밑에 여러 회사의 드라이버와 표준 부품이 있는 것과 같습니다.
 
 **직접 만든 것** (`src/sekai-shell`, Python + GTK 3)
 
@@ -75,7 +87,7 @@ SekaiOS 의 화면은 직접 만들었다. 그 밑의 운영체제 부품(드라
 - 사용자 계정 컨트롤(관리자 권한 확인 창) · 네트워크 암호 창 · 암호 저장소 창
 - 터미널 설정(`sekai-terminal` — kitty 를 윈도우 터미널처럼), 부팅 화면 테마, 이미지 · 패키지 빌드 도구
 
-**고쳐서 쓰는 것** (원본 라이선스와 출처, 고친 내용을 함께 싣는다)
+**고쳐서 쓰는 것** (원본 라이선스와 출처, 고친 내용을 함께 싣습니다)
 
 | 부품 | 쓰임 | 라이선스 · 고친 곳 |
 |---|---|---|
@@ -84,7 +96,7 @@ SekaiOS 의 화면은 직접 만들었다. 그 밑의 운영체제 부품(드라
 | Fluent-gtk-theme (vinceliuice) | GTK 테마 Sekai-Light · Sekai-Dark 의 바탕 | GPL-3.0 · `third_party/fluent-gtk-theme` |
 | Plymouth | 부팅 화면 | GPL-2.0 · `scripts/hypr/patch-plymouth-*.py` |
 
-**그대로 쓰는 기반** (데비안 13 패키지 — 화면에는 SekaiOS 창만 보인다)
+**그대로 쓰는 기반** (데비안 13 패키지 — 화면에는 SekaiOS 창만 보입니다)
 
 | 부품 | 하는 일 |
 |---|---|
@@ -121,26 +133,26 @@ SekaiOS 의 화면은 직접 만들었다. 그 밑의 운영체제 부품(드라
 
 ## 직접 빌드하기
 
-데비안 · 우분투 계열 호스트(WSL2 도 된다)에서, 관리자 권한(sudo)과 넉넉한 디스크(30GB 이상)가 필요하다.
+데비안 · 우분투 계열 호스트(WSL2 도 됩니다)에서 관리자 권한(sudo)과 넉넉한 디스크(30GB 이상)가 필요합니다.
 
 ```sh
 sudo scripts/mkrootfs.sh && sudo scripts/mkrootfs.sh --replace   # 데비안 rootfs 를 처음부터 (config/rootfs-packages.list)
 sudo scripts/build-hypr.sh        # SekaiCompose(합성기)·라이브러리·플러그인을 .deb 으로 (packages/)
-scripts/pack-shell.sh             # sekai-shell · sekai-desktop · sekai-installer .deb
+scripts/pack-shell.sh             # sekai-shell · sekai-de · sekaios-base · sekai-desktop · sekai-installer .deb
 sudo scripts/finalize.sh          # rootfs 에 설치 → squashfs → ISO
 scripts/build-repo.sh             # 서명된 apt 저장소 (repo/)
 scripts/publish-repo.sh           # 저장소 게시
 ```
 
-- 호스트에 `mmdebstrap` 과 trixie 키가 든 `debian-archive-keyring`(2025.1 이상)이 필요하다.
-- 저장소 서명 키는 이 저장소에 없다 — 직접 저장소를 만들려면 자신의 키를 쓴다.
-- 개발용 이미지(`sudo env SEKAI_DEV=1 scripts/finalize.sh`)에는 `local/overlay-dev/` 의 개발자 SSH 키가 들어간다
-  (`local/` 은 git 에 없다). 이름에 `-dev` 가 붙으며, 남에게 주면 안 된다.
+- 호스트에 `mmdebstrap` 과 trixie 키가 든 `debian-archive-keyring`(2025.1 이상)이 필요합니다.
+- 저장소 서명 키는 이 저장소에 없습니다. 직접 저장소를 만드시려면 본인의 키를 쓰시면 됩니다.
+- 개발용 이미지(`sudo env SEKAI_DEV=1 scripts/finalize.sh`)에는 `local/overlay-dev/` 의 개발자 SSH 키가 들어갑니다
+  (`local/` 은 git 에 없습니다). 이름에 `-dev` 가 붙으며, 다른 사람에게 주시면 안 됩니다.
 
 ## 라이선스
 
-SekaiOS 의 코드는 [Apache License 2.0](LICENSE) 이다.
-고쳐 쓰는 외부 부품은 각자의 라이선스를 따른다 — GTK 테마는 GPL-3.0(`third_party/fluent-gtk-theme/COPYING`),
-SekaiCompose(Hyprland 포크)와 플러그인은 BSD-3 이다. 패키지마다 `/usr/share/doc/<패키지>/copyright` 에 출처와 라이선스를 적었다.
+SekaiOS 의 코드는 [Apache License 2.0](LICENSE) 입니다.
+고쳐 쓰는 외부 부품은 각자의 라이선스를 따릅니다. GTK 테마는 GPL-3.0(`third_party/fluent-gtk-theme/COPYING`),
+SekaiCompose(Hyprland 포크)와 플러그인은 BSD-3 입니다. 패키지마다 `/usr/share/doc/<패키지>/copyright` 에 출처와 라이선스를 적었습니다.
 
-SekaiOS 는 개인이 만드는 비공식 프로젝트로, SEGA · Colorful Palette · Crypton Future Media 와 관계가 없다.
+SekaiOS 는 개인이 만드는 비공식 프로젝트로, SEGA · Colorful Palette · Crypton Future Media 와 관계가 없습니다.
