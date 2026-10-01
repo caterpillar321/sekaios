@@ -120,7 +120,7 @@ Depends: python3, python3-gi, python3-gi-cairo, gir1.2-gtk-3.0,
  libglib2.0-bin, sekai-winshot, gir1.2-gudev-1.0, pulseaudio-utils,
  gir1.2-gtksource-4, gir1.2-polkit-1.0, gir1.2-gcr-4
 Recommends: wireplumber, swaylock
-Provides: polkit-1-auth-agent
+Provides: polkit-1-auth-agent, notification-daemon
 Description: SekaiOS desktop shell
  Panel, taskbar, start menu and the system settings app for
  SekaiOS, built on gtk-layer-shell and the Hyprland IPC.
