@@ -234,6 +234,18 @@ if [ "$1" = "configure" ]; then
         t=/usr/share/dbus-1/services/org.gnome.keyring.$n.service
         divert_takeover sekai-de "$t" "$t.sekai-off"
     done
+    # 떠 있는 합성기 세션(사용자·로그인 화면)마다 설정을 다시 읽게 한다.
+    #   업데이트 중 파일이 잠깐 없어지는 틈(옛 sekai-desktop 이 내려놓고 이 패키지가 다시 놓기 전)에 합성기가
+    #   스스로 설정을 다시 읽으면 "source= ... found no match" 오류 막대가 뜨고 기본 모양으로 굳었다 (2026-10-01,
+    #   0928 설치본을 로그인한 채 업데이트해서 확인). 여기선 파일이 모두 제자리에 있다
+    for sock in /run/user/*/hypr/*/.socket.sock; do
+        [ -S "$sock" ] || continue
+        d=${sock%/.socket.sock}; sig=${d##*/}; rt=${d%/hypr/*}; uid=${rt##*/}
+        u=$(getent passwd "$uid" | cut -d: -f1)
+        [ -n "$u" ] || continue
+        runuser -u "$u" -- env XDG_RUNTIME_DIR="$rt" HYPRLAND_INSTANCE_SIGNATURE="$sig" \
+            hyprctl reload >/dev/null 2>&1 || true
+    done
 fi
 PI
 cat > "$STAGE_DE/DEBIAN/prerm" <<'PR'
@@ -475,7 +487,7 @@ Depends: sekai-de (= ${FULL}), sekaios-base (= ${FULL}), sekai-shell (= ${FULL})
  network-manager-l10n, wpasupplicant, wireless-regdb, iw, ntfs-3g, exfatprogs,
  bluez, wlsunset,
  cups, cups-client, cups-ipp-utils, avahi-daemon, libnss-mdns, ipp-usb,
- qt6-wayland, fonts-dejavu, fonts-symbola, locales,
+ qt6-wayland, wayland-utils, fonts-dejavu, fonts-symbola, locales,
  libgl1-mesa-dri, libegl-mesa0, mesa-utils
 Recommends: htop, tmux, tree, ncdu, vim, nano, git, curl, wget,
  bash-completion, less, man-db,
