@@ -1336,11 +1336,11 @@ class TaskbarMixin:
         # 미리보기가 이 작업 표시줄의 버튼으로 뜨길 기다리는 중이면 — 새 버튼으로 옮긴다 (아래)
         pend = self.preview.pending()
         pend = pend if pend and pend[1].get_toplevel() is self else None
-        for c in self.tasks.get_children():
-            self.tasks.remove(c)
-        self._task_btns = {}                                # 앱 묶음 → (버튼, 창들)
         clients = self._my_clients(snap["clients"], snap["origins"], snap.get("ws_mon"))
         clients = [c for c in clients if c.get("mapped", True) and c.get("address")]  # 연 순서
+        # 딸린 창(대화상자 — 부모가 있는 창)은 따로 세지 않는다, 윈도우처럼 (부모와 함께 최소화·복원된다 — SekaiCompose
+        #   SEKAI_DIALOG_FOLLOW). 전엔 "저장할까요?" 창이 메모장 묶음의 두 번째 창이 되어 누르면 미리보기가 떴다
+        clients = [c for c in clients if c.get("sekaiParent", "0x0") in ("0x0", "", None)]
         if snap.get("shown") and desktops.mode("taskbar") == "current":
             # 설정 › 멀티태스킹 — 지금 보고 있는 데스크톱의 창만 (윈도우 기본값과 같게)
             clients = [c for c in clients if desktops.visible(c, snap["shown"], snap.get("ndesk"))]
@@ -1356,9 +1356,22 @@ class TaskbarMixin:
                 order.append(key)
             groups[key].append(c)
         pinned = [pid for pid in pins.load() if pid in groups or pins.app_info(pid) is not None]
-        for key in pinned + [k for k in order if k not in pinned]:
-            self._app_button(key, groups.get(key, []), active_addr)
-        self.tasks.show_all()
+        keys = pinned + [k for k in order if k not in pinned]
+        olds = getattr(self, "_task_btns", None) or {}
+        if keys == getattr(self, "_task_order", None) and all(k in olds for k in keys):
+            # 같은 앱 묶음이 같은 순서 — 단추는 그대로 두고 상태(실행 중·활성·최소화)만 바꾼다.
+            #   다시 만들면 가만히 있는 커서 밑의 단추가 새것으로 바뀌는데, Wayland 의 GTK 는 커서가 움직여야 새 단추를
+            #   알아서 다음 클릭이 사라졌다 (빠르게 다시 누르면 최소화·복원이 어긋났다, 2026-10-01 서버 VM 에서 확인)
+            for key in keys:
+                self._app_button(key, groups.get(key, []), active_addr, btn=olds[key][0])
+        else:
+            for c in self.tasks.get_children():
+                self.tasks.remove(c)
+            self._task_btns = {}                            # 앱 묶음 → (버튼, 창들)
+            for key in keys:
+                self._app_button(key, groups.get(key, []), active_addr)
+            self.tasks.show_all()
+        self._task_order = keys
         if pend:
             new = self._task_btns.get(pend[0])
             if new and new[1]:
@@ -1367,45 +1380,51 @@ class TaskbarMixin:
                 self.preview.cancel_show()                  # 그 앱의 창이 없어졌다
         return False
 
-    def _app_button(self, key, wins, active_addr):
+    def _app_button(self, key, wins, active_addr, btn=None):
+        """작업 표시줄 단추 — btn 을 주면 그 단추를 지금 상태로 바꾼다 (새로 만들지 않는다, rebuild_tasks).
+        처리기는 만들 때의 값이 아니라 단추에 단 지금 값(btn._sekai)을 쓴다"""
         app_id = None if key.startswith("class:") else key
         info = pins.app_info(app_id) if app_id else None
         name = info.get_display_name() if info else \
             ((wins[0].get("class") or "?") if wins else key)
         name = name[:1].upper() + name[1:]
 
-        btn = Gtk.Button()
+        new = btn is None
+        if new:
+            btn = Gtk.Button()
+            ctx = btn.get_style_context()
+            ctx.add_class("task-btn")
+            ctx.add_class("app-btn")
+            btn.set_valign(Gtk.Align.CENTER)
+            if info is not None and info.get_icon() is not None:
+                img = Gtk.Image.new_from_gicon(info.get_icon(), Gtk.IconSize.DIALOG)
+                img.set_pixel_size(24)
+            else:
+                img = app_icon((wins[0].get("class") if wins else None) or app_id or "", 24)
+            btn.add(img)
+            d = lambda b: b._sekai                                         # noqa: E731
+            btn.connect("clicked", lambda b: self.on_app_click(b, d(b)["key"], d(b)["app_id"], d(b)["wins"], d(b)["active"]))
+            btn.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.ENTER_NOTIFY_MASK
+                           | Gdk.EventMask.LEAVE_NOTIFY_MASK)
+            btn.connect("enter-notify-event", lambda b, _e: (
+                self.preview.show_later(d(b)["key"], b, d(b)["wins"], d(b)["active"], self._preview_pick, self._preview_close)
+                if d(b)["wins"] else self.preview.schedule_hide()) and False)
+            btn.connect("leave-notify-event", lambda *_: self.preview.schedule_hide() and False)
+            btn.connect("button-press-event", lambda b, ev: self.on_app_press(b, ev, d(b)["app_id"], d(b)["wins"], d(b)["name"]))
+        btn._sekai = {"key": key, "app_id": app_id, "wins": wins, "active": active_addr, "name": name}
+
         ctx = btn.get_style_context()
-        ctx.add_class("task-btn")
-        ctx.add_class("app-btn")
-        btn.set_valign(Gtk.Align.CENTER)
+        for cls in ("running", "active", "minimized"):
+            ctx.remove_class(cls)
         if wins:
             ctx.add_class("running")
             if any(c.get("address") == active_addr for c in wins):
                 ctx.add_class("active")
             elif all(self._minimized(c) for c in wins):
                 ctx.add_class("minimized")
-        if not wins:
-            btn.set_tooltip_text(name)             # 창이 있으면 미리보기가 대신한다
-
-        if info is not None and info.get_icon() is not None:
-            img = Gtk.Image.new_from_gicon(info.get_icon(), Gtk.IconSize.DIALOG)
-            img.set_pixel_size(24)
-        else:
-            img = app_icon((wins[0].get("class") if wins else None) or app_id or "", 24)
-        btn.add(img)
-
-        btn.connect("clicked", self.on_app_click, key, app_id, wins, active_addr)
-        btn.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.ENTER_NOTIFY_MASK
-                       | Gdk.EventMask.LEAVE_NOTIFY_MASK)
-        if wins:
-            btn.connect("enter-notify-event", lambda b, _e: self.preview.show_later(
-                key, b, wins, active_addr, self._preview_pick, self._preview_close) and False)
-        else:
-            btn.connect("enter-notify-event", lambda *_: self.preview.schedule_hide() and False)
-        btn.connect("leave-notify-event", lambda *_: self.preview.schedule_hide() and False)
-        btn.connect("button-press-event", self.on_app_press, app_id, wins, name)
-        self.tasks.pack_start(btn, False, False, 0)
+        btn.set_tooltip_text(None if wins else name)       # 창이 있으면 미리보기가 대신한다
+        if new:
+            self.tasks.pack_start(btn, False, False, 0)
         self._task_btns[key] = (btn, wins)
 
     @staticmethod
@@ -1456,6 +1475,8 @@ class TaskbarMixin:
             self._queue_rebuild()
             return
         addr = c.get("address")
+        # 맨 앞 창인지는 지금 물어본다 — 단추를 만들 때의 값은 빠르게 다시 누르면 낡았다
+        active_addr = (self.hypr.query("activewindow") or {}).get("address") or active_addr
         if self._minimized(c):
             self.restore_window(addr)
         elif addr == active_addr:

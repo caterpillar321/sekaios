@@ -8,7 +8,7 @@ OUT=/build/deb
 #   예전엔 여기서 원본에 patch-*.py 를 적용했다. 이제 그 고친 것들은 포크의 커밋이다 (git log v0.50.1..sekai).
 #   재현할 수 있게 커밋을 고정한다 — 합성기를 고치면 포크에 커밋·푸시하고 여기 REF 와 rev_for 를 올린다.
 SEKAICOMP_URL="https://github.com/caterpillar321/sekaicompose.git"
-SEKAICOMP_REF="7d633649c665b86174a1e777e47ea72867470178"
+SEKAICOMP_REF="b2265613bc66f92e9c87d7fd97ea98a7adaca97d"
 MAINT="SekaiOS <sekai@localhost>"
 REV="sekai2"
 # 패키지별 리비전 (고친 패키지만 올린다 → apt 가 그 패키지만 업그레이드)
@@ -53,7 +53,11 @@ REV="sekai2"
 #      hyprbars sekai15: 포크(plugins/hyprbars)에서 빌드, sekaicomp 를 요구.
 #      hyprexpo sekai3: 포크 헤더로 다시 빌드 — 플러그인은 합성기와 같은 커밋 해시로 빌드돼야 로드된다 ("Version mismatch").
 #      그래서 플러그인은 sekaicomp 의 "정확한" 버전을 요구한다. SEKAICOMP_REF 를 올리면 플러그인 리비전도 함께 올릴 것.
-rev_for() { case "$1" in hyprbars) echo sekai15 ;; hyprexpo) echo sekai3 ;; sekaicomp|hyprland) echo sekai18 ;; *) echo "$REV" ;; esac; }
+#   ── 2026-10-01 오조작 시험: sekai19 — 창 단추는 같은 단추 위에서 뗄 때, 놓는 순간 커서 자리 반영·제목줄을 화면 안으로,
+#      대화상자도 부모와 같은 데스크톱으로 (포크 1ea3c19 · 5859a9c · ea3003f). 플러그인도 같은 커밋으로 (hyprbars sekai16 · hyprexpo sekai4)
+#      sekai20: 끌기 기준점을 누른 자리로 (포크 723858e) — hyprbars sekai17 · hyprexpo sekai5
+#      sekai21: 대화상자를 되살리면 부모도, hyprctl clients 에 sekaiParent (포크 b226561) — hyprbars sekai18 · hyprexpo sekai6
+rev_for() { case "$1" in hyprbars) echo sekai18 ;; hyprexpo) echo sekai6 ;; sekaicomp|hyprland) echo sekai21 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
