@@ -9,6 +9,10 @@
 #     잠김 표시로 안다 — 사용자가 풀었을 때만 지워진다. 1분에 세 번 넘게 죽으면 swaylock 으로.
 #   · 기본 화면 모드(X11)에선 sekai-lock 이 xsecurelock 으로 잠그고 풀릴 때까지 돈다
 #     (xss-lock 이 넘긴 절전 지연 fd 도 그대로 물려준다).
+#   · 라이브 세션(설치 USB)에선 잠그지 않는다 — 라이브 사용자의 암호(live-config 기본값)를 아는 사람이 없어
+#     자리를 비웠다 돌아오면 설치 도중에 갇혔다. 모든 잠금 경로가 여기를 지나므로 여기서 막는다.
+[ -d /run/live/medium ] && exit 0
+
 RUN="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 PIDF="$RUN/sekai-lock.pid"
 MARK="$PIDF.locked"

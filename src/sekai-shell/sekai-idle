@@ -45,6 +45,11 @@ def power():
             out[k] = max(0, int(p.get(k, d)))
         except (TypeError, ValueError):
             out[k] = d
+    if os.path.isdir("/run/live/medium"):
+        # 라이브 세션(설치 USB): 잠그지 않는다 — 암호를 아는 사람이 없다 (lock-now 도 막는다).
+        #   절전도 하지 않는다 — 설치 도중에 잠들면 안 된다. 화면 끄기만 남긴다
+        out["lock"] = 0
+        out["suspend"] = 0
     return out
 
 

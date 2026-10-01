@@ -682,6 +682,10 @@ class StartMenu(Gtk.Window):
              ("다시 시작",   "pw-reboot",  "system-reboot-symbolic",      lambda: subprocess.Popen(["systemctl", "reboot"])),
              ("시스템 종료", "pw-off",     "system-shutdown-symbolic",    lambda: subprocess.Popen(["systemctl", "poweroff"]))),
         )
+        if os.path.isdir("/run/live/medium"):
+            # 라이브 세션(설치 USB): 잠금·사용자 전환은 뺀다 — 라이브 사용자의 암호를 아는 사람이 없어
+            #   잠기면 돌아올 수 없다 (lock-now 도 라이브에선 잠그지 않는다)
+            groups = tuple(tuple(it for it in g if it[1] not in ("pw-lock", "pw-switch")) for g in groups)
         for gi_, group in enumerate(groups):
             if gi_:
                 sep = Gtk.Separator()
