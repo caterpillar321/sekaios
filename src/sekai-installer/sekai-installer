@@ -13,6 +13,7 @@
 #  SEKAI_INSTALLER_DEMO=1 이면 디스크를 건드리지 않고 흉내만 낸다 (화면 확인용)
 # ═══════════════════════════════════════════════════════════════
 import json
+import re
 import os
 import subprocess
 import sys
@@ -97,7 +98,20 @@ def disk_name(d):
         vendor = ""                                  # "VMware, VMware Virtual S" → 한 번만
     if vendor.upper() == "ATA":                      # SATA 디스크는 제조사 자리에 ATA 가 온다
         vendor = ""
-    return " ".join(x for x in (vendor, model) if x) or "알 수 없는 디스크"
+    if re.fullmatch(r"0x[0-9a-fA-F]+", vendor):       # 가상 디스크(virtio)는 제조사 자리에 장치 번호(0x1af4)가 온다
+        vendor = ""
+    name = " ".join(x for x in (vendor, model) if x)
+    if name:
+        return name
+    # 모델 이름이 없다 — 연결 방식으로 (컴퓨터 관리 › 디스크 관리와 같은 이름)
+    tran = (d.get("tran") or "").lower()
+    if tran == "virtio" or d.get("name", "").startswith("vd"):
+        return "가상 디스크"
+    if tran == "nvme":
+        return "NVMe SSD"
+    if tran == "usb":
+        return "USB 드라이브" if d.get("rm") in (True, 1, "1") else "외장 디스크"
+    return "SSD" if d.get("rota") in (False, 0, "0") else "하드 디스크"
 
 
 def human(b):

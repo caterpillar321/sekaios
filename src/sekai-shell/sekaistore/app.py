@@ -10,6 +10,7 @@
 import os
 import sys
 import threading
+import subprocess
 
 import gi
 gi.require_version("Gtk", "3.0")
@@ -129,6 +130,16 @@ def _scroller(child):
     sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
     sw.add(child)
     return sw
+
+
+def _dpkg_installed_kb(pkg):
+    """깔린 패키지의 Installed-Size (KiB) 또는 None"""
+    try:
+        r = subprocess.run(["dpkg-query", "-W", "-f=${Installed-Size}", pkg],
+                           capture_output=True, text=True, timeout=5)
+        return int(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
 
 
 def _human_bytes(n):
@@ -759,7 +770,10 @@ class StoreWindow(Gtk.ApplicationWindow):
             bits = []
             dl = _human_bytes(plan.info.get("Download"))
             sz = appmgr.human_size(plan.info.get("Size"))
-            if not self.cat.is_installed(app):
+            if self.cat.is_installed(app):
+                # 이미 깔렸으면 더 받을 것이 없어 계획이 0 KB 다 — 깔린 패키지 자체의 크기로
+                dl, sz = None, appmgr.human_size(_dpkg_installed_kb(app.pkg))
+            else:
                 if dl:
                     bits.append(f"다운로드 {dl}")
                 if sz:
@@ -768,7 +782,7 @@ class StoreWindow(Gtk.ApplicationWindow):
                     bits.append(f"함께 설치되는 구성 요소 {len(plan.add)}개")
             meta.set_text(" · ".join([app.category_name()] + bits))
             self._info_set("버전", plan.info.get("Version"))
-            self._info_set("다운로드 크기", dl)
+            self._info_set("다운로드 크기", dl, hide_empty=True)
             self._info_set("설치 크기", sz)
             refresh()
             return False
@@ -794,7 +808,9 @@ class StoreWindow(Gtk.ApplicationWindow):
                     if r["runtime"]:
                         bits.append(f"처음 한 번 실행 환경({r['runtime']}) {_human_bytes(r['rt_dl'])} 를 함께 받습니다")
                 meta.set_text(" · ".join([app.category_name()] + [b for b in bits if b]))
-                self._info_set("다운로드 크기", dl)
+                if self.cat.is_installed(app):
+                    dl = None
+                self._info_set("다운로드 크기", dl, hide_empty=True)
                 self._info_set("설치 크기", sz)
                 refresh()
                 return False
@@ -855,19 +871,21 @@ class StoreWindow(Gtk.ApplicationWindow):
         self.stack.add_named(sw, "detail")
         refresh()
 
-    def _info_set(self, key, val):
+    def _info_set(self, key, val, hide_empty=False):
+        """정보 표의 한 줄. hide_empty 면 값이 없을 때 줄째 숨긴다 (설치된 앱의 다운로드 크기처럼)"""
         g = getattr(self, "_info_grid", None)
         if g is None:
             return
-        if key in self._info_rows:
-            self._info_rows[key].set_text(val or "-")
-            return
-        n = len(self._info_rows)
-        g.attach(label(key, "info-k"), 0, n, 1, 1)
-        v = label(val or "-", "info-v")
-        g.attach(v, 1, n, 1, 1)
-        v.show()
-        self._info_rows[key] = v
+        if key not in self._info_rows:
+            n = len(self._info_rows)
+            k, v = label(key, "info-k"), label("", "info-v")
+            g.attach(k, 0, n, 1, 1)
+            g.attach(v, 1, n, 1, 1)
+            self._info_rows[key] = (k, v)
+        k, v = self._info_rows[key]
+        v.set_text(val or "-")
+        for w in (k, v):
+            w.set_visible(bool(val) or not hide_empty)
 
     def _show_shot(self, url):
         d = Gtk.Dialog(title="스크린샷", transient_for=self, modal=True)
