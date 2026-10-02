@@ -91,7 +91,7 @@ SekaiOS 의 화면은 직접 만들었습니다. 그 밑의 운영체제 부품(
 
 | 부품 | 쓰임 | 라이선스 · 고친 곳 |
 |---|---|---|
-| [WorldLink](https://github.com/caterpillar321/sekaicompose) — Hyprland 0.50.1 + hyprbars 의 포크 | 창을 그리는 합성기, 창 제목 표시줄 | BSD-3 · 포크의 커밋 (`git log v0.50.1..sekai`) |
+| [WorldLink](https://github.com/caterpillar321/worldlink) — Hyprland 0.50.1 + hyprbars 의 포크 | 창을 그리는 합성기, 창 제목 표시줄 | BSD-3 · 포크의 커밋 (`git log v0.50.1..sekai`) |
 | hyprexpo | 작업 보기 플러그인 | BSD-3 · 원본 그대로 |
 | Fluent-gtk-theme (vinceliuice) | GTK 테마 Sekai-Light · Sekai-Dark 의 바탕 | GPL-3.0 · `third_party/fluent-gtk-theme` |
 | Plymouth | 부팅 화면 | GPL-2.0 · `scripts/hypr/patch-plymouth-*.py` |

@@ -7,7 +7,7 @@ OUT=/build/deb
 # WorldLink(처음 이름 SekaiCompose) — Hyprland v0.50.1 에서 갈라진 SekaiOS 의 합성기 (hyprbars 포함).
 #   예전엔 여기서 원본에 patch-*.py 를 적용했다. 이제 그 고친 것들은 포크의 커밋이다 (git log v0.50.1..sekai).
 #   재현할 수 있게 커밋을 고정한다 — 합성기를 고치면 포크에 커밋·푸시하고 여기 REF 와 rev_for 를 올린다.
-SEKAICOMP_URL="https://github.com/caterpillar321/sekaicompose.git"
+SEKAICOMP_URL="https://github.com/caterpillar321/worldlink.git"
 SEKAICOMP_REF="720394213312a2b556d7679afc1335faaf54c6b4"
 MAINT="SekaiOS <sekai@localhost>"
 REV="sekai2"
@@ -218,7 +218,7 @@ add_copyright() {
         echo "패키지:  $pkg (SekaiOS 빌드)"
         case "$pkg" in
             worldlink|hyprbars)
-                echo "소스:    WorldLink — https://github.com/caterpillar321/sekaicompose  (커밋 $SEKAICOMP_REF)"
+                echo "소스:    WorldLink — https://github.com/caterpillar321/worldlink  (커밋 $SEKAICOMP_REF)"
                 if [ "$pkg" = worldlink ]; then
                     echo "원본:    Hyprland — https://github.com/hyprwm/Hyprland  (태그 v0.50.1 에서 갈라진 포크)"
                 else
