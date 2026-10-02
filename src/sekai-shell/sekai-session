@@ -8,10 +8,12 @@
 #  복사되고 끝이라 거기 넣으면 갱신이 안 된다.)
 # ═══════════════════════════════════════════════════════════
 
-# 데스크톱 이름은 SekaiOS — 창을 그리는 합성기가 Hyprland 라는 것은 뒤에 붙여 둔다 (우분투의 "ubuntu:GNOME" 처럼).
-#   앱이 목록을 앞에서부터 본다: 포털은 sekaios-portals.conf 를 먼저 찾고, OnlyShowIn=Hyprland 인 것도 그대로 뜬다.
+# 데스크톱 이름은 SekaiOS 하나. 예전엔 "SekaiOS:Hyprland" 로 합성기 이름을 뒤에 붙였는데, 앱들이 이 값에서 Hyprland 를 보면
+#   "제목줄 없는 타일링 창 관리자"로 여겨 제목줄을 끄거나 합성기에 맡겼다 (Lian Li Linux 같은 Tauri 앱 — 그러면 WorldLink 막대도
+#   빠져 제목줄이 아예 없다). SekaiOS 는 창을 겹쳐 쓰는 데스크톱이다 — GNOME·KDE 처럼 보이는 편이 맞다.
+#   포털은 sekaios-portals.conf 를 찾는다. Hyprland 계열 도구는 HYPRLAND_INSTANCE_SIGNATURE 로 합성기를 찾으니 그대로 된다.
 #   Hyprland 는 이 값이 "Hyprland" 가 아니면 경고를 띄우므로 hyprland.conf 에서 끈다 (misc:disable_xdg_env_checks)
-export XDG_CURRENT_DESKTOP=SekaiOS:Hyprland
+export XDG_CURRENT_DESKTOP=SekaiOS
 export XDG_SESSION_TYPE=wayland
 export XDG_SESSION_DESKTOP=SekaiOS
 
