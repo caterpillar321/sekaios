@@ -52,6 +52,9 @@ def apply_gtk_settings(gtk_settings, mode):
         return
     gtk_settings.set_property("gtk-application-prefer-dark-theme", mode == "dark")
     gtk_settings.set_property("gtk-icon-theme-name", icon_theme(mode))
+    # 대화상자 제목줄은 WorldLink 가 그린다 (제목 + 닫기). GTK 는 Wayland 에서 이 값을 늘 켜서 확인 창이 제목 띠를
+    #   스스로 한 겹 더 그렸다 — 제목줄이 두 겹. 끄면 대화상자 단추도 아래쪽 줄에 놓인다 (윈도우처럼)
+    gtk_settings.set_property("gtk-dialogs-use-header", False)
 
 
 def _write_ini(path, values):

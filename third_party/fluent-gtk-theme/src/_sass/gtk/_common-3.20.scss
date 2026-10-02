@@ -1,3 +1,4 @@
+// Modified by SekaiOS, 2026-10-03 — 확인 창(messagedialog) 제목 띠의 글자를 숨긴다 (UPSTREAM.md)
 * {
   // padding: 0;
   background-clip: padding-box;
@@ -3433,6 +3434,10 @@ messagedialog { // Message Dialog styling
       background-color: $surface;
       color: $text-secondary;
     }
+
+    // SekaiOS: 대화상자 제목은 합성기(WorldLink) 막대가 이미 보여 준다 — GTK 가 Wayland 에서 그리는 제목 띠의
+    //   글자까지 보이면 제목이 두 번 나온다. 자리(여백)는 그대로 두고 글자만 숨긴다
+    .title, &:backdrop .title { color: transparent; }
   }
 
   &, &.csd {

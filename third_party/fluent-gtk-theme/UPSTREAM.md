@@ -38,6 +38,7 @@ Fluent 는 다른 저작물을 바탕으로 한다 (각 저작자의 권리를 �
 |---|---|---|
 | `src/_sass/_tweaks.scss` | 2026-09-26 | 색 테마를 `'sekai'` 로 |
 | `src/_sass/_colors.scss` | 2026-09-26 | `$theme == 'sekai'` 일 때 강조색(#3CC8BE)·창 바탕·면·제목줄을 SekaiOS 셸 팔레트로 |
+| `src/_sass/gtk/_common-3.20.scss` | 2026-10-03 | GTK3 확인 창 제목 띠의 글자를 숨긴다 (제목은 WorldLink 막대에 있다 — 두 번 보이지 않게) |
 
 `scripts/build-theme.sh` 는 원본 `install.sh` 처럼 `_tweaks.scss` 를 `_tweaks-temp.scss` 로 복사해 컴파일하고,
 `assets.svg` 의 파란색(#1A73E8 · #3281EA)을 강조색으로 바꿔 PNG 로 굽는다 (원본 `make-assets.sh` · `render-assets.sh` 와 같은 방식).

@@ -1701,7 +1701,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
                        "확장명을 변경하면 파일을 사용할 수 없게 될 수도 있습니다.\n변경하시겠습니까?",
                        [("아니요", Gtk.ResponseType.NO), ("예", Gtk.ResponseType.YES)],
                        lambda r: do() if r == Gtk.ResponseType.YES else self.focus_view(),
-                       kind=Gtk.MessageType.WARNING, default=Gtk.ResponseType.NO)
+                       kind=Gtk.MessageType.WARNING, default=Gtk.ResponseType.YES)   # 윈도우처럼 Enter 는 예
             return
         do()
 

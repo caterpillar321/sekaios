@@ -3735,6 +3735,10 @@ messagedialog .titlebar:backdrop {
   color: rgba(255, 255, 255, 0.7);
 }
 
+messagedialog .titlebar .title, messagedialog .titlebar:backdrop .title {
+  color: transparent;
+}
+
 messagedialog .dialog-action-box > .linked > button, messagedialog .dialog-action-box > .linked > button:first-child, messagedialog .dialog-action-box > .linked > button:last-child, messagedialog.csd .dialog-action-box > .linked > button, messagedialog.csd .dialog-action-box > .linked > button:first-child, messagedialog.csd .dialog-action-box > .linked > button:last-child {
   border-radius: 2px;
 }
