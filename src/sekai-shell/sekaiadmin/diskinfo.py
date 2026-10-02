@@ -17,6 +17,11 @@ I_FS = UD + ".Filesystem"
 I_SWAP = UD + ".Swapspace"
 I_LOOP = UD + ".Loop"
 I_CRYPT = UD + ".Encrypted"
+I_ATA = UD + ".Drive.Ata"
+I_NVME = UD + ".NVMe.Controller"
+
+# Manager.CanResize 의 방식 (libblockdev BDFSResizeFlags)
+RESIZE_OFFLINE_SHRINK, RESIZE_OFFLINE_GROW, RESIZE_ONLINE_SHRINK, RESIZE_ONLINE_GROW = 2, 4, 8, 16
 
 MIB = 1024 * 1024
 MIN_FREE = 8 * MIB              # 이보다 작은 틈은 빈 공간으로 보이지 않는다 (정렬 때문에 생기는 자투리)
@@ -46,6 +51,16 @@ GPT_NAMES = {"c12a7328-f81f-11d2-ba4b-00a0c93ec93b": "EFI 시스템 파티션",
              "de94bba4-06d1-4d40-a16a-bfd50179d6ac": "윈도우 복구 파티션",
              "0657fd6d-a4ab-43c4-84e5-0933c84b4f4f": "스왑",
              "21686148-6449-6e6f-744e-656564454649": "BIOS 부트 파티션"}
+# 속성 창의 "파티션 종류" — 위 특수 파티션에 더해 흔한 것
+PTYPE_NAMES = dict(GPT_NAMES, **{
+    "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7": "기본 데이터 파티션 (윈도우와 같이 씀)",
+    "0fc63daf-8483-4772-8e79-3d69d8477de4": "리눅스 파일 시스템",
+    "4f68bce3-e8cd-4db1-96e7-fbcaf984b709": "리눅스 루트 (x86-64)",
+    "933ac7e1-2eb4-4f13-b844-0e14e2aef915": "리눅스 홈",
+    "e6d6d379-f507-44c2-a23c-238f2a3df928": "리눅스 LVM",
+    "ca7d7ccb-63ed-4c53-861c-1742536059cc": "LUKS 암호화",
+    "0x07": "NTFS · exFAT", "0x0c": "FAT32 (LBA)", "0x0b": "FAT32", "0x83": "리눅스", "0x82": "리눅스 스왑",
+    "0x05": "확장 파티션", "0x0f": "확장 파티션 (LBA)", "0xef": "EFI 시스템 파티션", "0x8e": "리눅스 LVM"})
 
 
 def _s(v):
@@ -80,10 +95,22 @@ class Disk:
         self.live = False           # 지금 켜진 설치 USB
         self.segments = []          # [Volume] — 위치 순서 (빈 공간 포함)
         self.whole = None           # 파티션 표 없이 디스크 전체가 볼륨이면 그 Volume
+        self.image = ""             # 디스크 이미지(루프 장치)면 그 파일 경로 — 윈도우의 "VHD 연결"
+        self.health = ""            # SMART — "정상" · "주의: …" · "" (모름)
+        self.health_bad = False
+        self.temp = None            # °C
+        self.power_on_hours = None
 
     @property
     def title(self):
         return f"디스크 {self.index}"
+
+    @property
+    def label(self):
+        """모델 이름 · 종류 (디스크 이미지면 파일 이름)"""
+        if self.image:
+            return os.path.basename(self.image)
+        return self.model or self.kind
 
     @property
     def state(self):
@@ -118,6 +145,9 @@ class Volume:
         self.used = None            # 연결돼 있을 때 쓴 바이트 (statvfs)
         self.avail = None
         self.protect = ""           # 포맷·삭제를 막는 이유 (빈 글자면 막지 않음)
+        self.logical = False        # MBR 확장 파티션 안의 논리 볼륨
+        self.next_free = None       # 바로 뒤에 붙은 할당되지 않은 공간 (볼륨 확장은 그리로만 — 윈도우처럼)
+        self.fstab = None           # 고정 연결 위치 — {"dir", "opts", "boot", "item"} (드라이브 문자 대신)
 
     @property
     def mount(self):
@@ -258,6 +288,7 @@ def build(objects):
         if I_FS in ifs:
             v.has_fs = True
             v.mounts = [_s(m) for m in ifs[I_FS].get("MountPoints", [])]
+        v.fstab = _fstab_item(b)
         if I_SWAP in ifs:
             v.swap_on = bool(ifs[I_SWAP].get("Active"))
         if I_CRYPT in ifs or v.usage == "crypto":
@@ -270,17 +301,27 @@ def build(objects):
                     v.mounts = [_s(m) for m in cfs[I_FS].get("MountPoints", [])]
                     inner = cfs[I_BLOCK]
                     v.label = v.label or inner.get("IdLabel", "")
+                    v.fstab = v.fstab or _fstab_item(inner)
         _usage(v)
 
     disks = []
+    uid = os.getuid()
     for p, ifs in blocks.items():
         b = ifs[I_BLOCK]
-        if I_PART in ifs or I_LOOP in ifs:
+        if I_PART in ifs:
             continue
+        image = ""
+        if I_LOOP in ifs:
+            # 이 사용자가 연결한 디스크 이미지만 (snap 같은 시스템 루프 장치는 뺀다)
+            lp = ifs[I_LOOP]
+            if lp.get("SetupByUID") != uid or not _s(lp.get("BackingFile")):
+                continue
+            image = _s(lp.get("BackingFile"))
         if b.get("CryptoBackingDevice", "/") not in ("", "/"):
             continue                                # 잠금 푼 암호화 볼륨 — 원래 볼륨 쪽에서 보인다
         dev = _s(b.get("Device"))
-        if re.match(r"/dev/(zram|ram|loop|dm-|md)", dev) or b.get("Size", 0) == 0:
+        if re.match(r"/dev/(zram|ram|dm-|md)", dev) or (not image and dev.startswith("/dev/loop")) \
+                or b.get("Size", 0) == 0:
             continue
         drv = b.get("Drive", "/")
         dr = drives.get(drv, {})
@@ -296,8 +337,12 @@ def build(objects):
         d.ejectable = bool(dr.get("Ejectable"))
         d.can_poweroff = bool(dr.get("CanPowerOff"))
         d.ro = bool(b.get("ReadOnly"))
+        d.image = image
+        if image:
+            d.kind = "디스크 이미지"
         if dr.get("Optical"):
             continue                                # CD/DVD 는 디스크 관리에서 다루지 않는다 (탐색기에서)
+        _health(d, objects.get(drv, {}))
         if I_TABLE in ifs:
             d.table = ifs[I_TABLE].get("Type") or "gpt"
             parts = []
@@ -324,10 +369,13 @@ def build(objects):
         for v in d.segments:
             if any(m in SYSTEM_MOUNTS for m in v.mounts):
                 d.system = True
-        for v in d.segments:
+        for i, v in enumerate(d.segments):
             v.protect = _protect_reason(d, v)
+            nxt = d.segments[i + 1] if i + 1 < len(d.segments) else None
+            if not v.free and not v.logical and nxt is not None and nxt.free and not nxt.logical:
+                v.next_free = nxt
     # 시스템 디스크가 먼저 (윈도우의 디스크 0 = 윈도우가 깔린 디스크인 경우가 많은 것처럼), 그다음 장치 이름 순
-    disks.sort(key=lambda d: (not d.system, d.detachable, d.dev))
+    disks.sort(key=lambda d: (not d.system, bool(d.image), d.detachable, d.dev))
     for i, d in enumerate(disks):
         d.index = i
     return disks
@@ -351,7 +399,10 @@ def _with_free(d, parts):
         if v.offset - pos >= MIN_FREE:
             out.append(_free(d, pos, v.offset - pos))
         if v.container:
-            out.extend(x for x in parts if x is not v and _inside_container(x, [v]))
+            for x in parts:
+                if x is not v and _inside_container(x, [v]):
+                    x.logical = True
+                    out.append(x)
         else:
             out.append(v)
         pos = max(pos, v.offset + v.size)
@@ -402,3 +453,77 @@ def fmt_size(n):
             x = n / k
             return f"{x:.1f} {unit}".replace(".0 ", " ") if x < 100 else f"{x:.0f} {unit}"
     return f"{n} B"
+
+
+def _fstab_item(b):
+    """Block 의 Configuration 에서 fstab 항목 → {"dir", "opts", "boot", "item"} 또는 None"""
+    for typ, d in b.get("Configuration", []) or []:
+        if typ != "fstab":
+            continue
+        opts = _s(d.get("opts", b""))
+        return {"dir": _s(d.get("dir", b"")), "opts": opts,
+                "boot": "noauto" not in opts.split(","), "item": (typ, d)}
+    return None
+
+
+def _health(d, ifs):
+    """SMART (SATA · NVMe) → d.health · d.temp · d.power_on_hours. 모르면 그대로 둔다"""
+    ata, nv = ifs.get(I_ATA), ifs.get(I_NVME)
+    if ata and ata.get("SmartSupported") and ata.get("SmartEnabled") and ata.get("SmartUpdated", 0):
+        bad = []
+        if ata.get("SmartFailing"):
+            bad.append("곧 고장 날 수 있습니다 (제조사 기준을 넘었습니다)")
+        if ata.get("SmartNumBadSectors", 0) > 0:
+            bad.append(f"불량 섹터 {ata['SmartNumBadSectors']}개")
+        if ata.get("SmartNumAttributesFailing", 0) > 0:
+            bad.append(f"기준을 넘은 항목 {ata['SmartNumAttributesFailing']}개")
+        d.health_bad = bool(bad)
+        d.health = ("주의: " + ", ".join(bad)) if bad else "정상"
+        k = ata.get("SmartTemperature", 0)
+        d.temp = round(k - 273.15) if k else None
+        sec = ata.get("SmartPowerOnSeconds", 0)
+        d.power_on_hours = sec // 3600 if sec else None
+    elif nv and nv.get("SmartUpdated", 0):
+        warn = [w for w in nv.get("SmartCriticalWarning", []) or []]
+        names = {"spare": "예비 공간 부족", "temperature": "온도", "degraded": "신뢰성 저하",
+                 "readonly": "읽기 전용으로 바뀜", "volatile_mem": "백업 메모리", "pmr_readonly": "읽기 전용"}
+        d.health_bad = bool(warn)
+        d.health = ("주의: " + ", ".join(names.get(w, w) for w in warn)) if warn else "정상"
+        k = nv.get("SmartTemperature", 0)
+        d.temp = round(k - 273.15) if k else None
+        d.power_on_hours = nv.get("SmartPowerOnHours") or None
+
+
+def shrink_min(v):
+    """줄일 수 있는 가장 작은 크기 (바이트, MiB 단위로 올림) — 쓴 공간 + 여유. 연결돼 있어야 안다 (statvfs)"""
+    if v.used is None:
+        return None
+    need = v.used * 1.05 + v.size * 0.02 + 128 * MIB     # 메타데이터(아이노드 표 등)와 여유
+    need = min(int(need), v.size)
+    return -(-need // MIB) * MIB
+
+
+FIXED_DIR_BAD = ("/", "/bin", "/boot", "/dev", "/etc", "/home", "/lib", "/lib64", "/proc", "/root", "/run",
+                 "/sbin", "/srv", "/sys", "/tmp", "/usr", "/var", "/opt", "/mnt", "/media")
+
+
+def fixed_dir_problem(path, home):
+    """고정 연결 위치로 쓸 수 없으면 그 이유 (쓸 수 있으면 빈 글자)"""
+    p = os.path.normpath(path or "")
+    if not p.startswith("/"):
+        return "전체 경로를 적어 주세요 (예: /mnt/data)"
+    if p in FIXED_DIR_BAD or p == os.path.normpath(home) or any(
+            p.startswith(b + "/") for b in ("/bin", "/boot", "/dev", "/etc", "/lib", "/proc", "/run", "/sbin",
+                                             "/sys", "/usr", "/var")):
+        return "SekaiOS 가 쓰는 폴더입니다 — /mnt 아래나 홈 폴더 안의 새 폴더를 골라 주세요"
+    if any(c in p for c in " \t\n#\\"):
+        return "경로에 빈칸·#·\\ 를 쓸 수 없습니다"
+    if os.path.isdir(p):
+        try:
+            if os.listdir(p):
+                return "비어 있지 않은 폴더입니다 — 연결하면 그 안의 파일이 가려집니다"
+        except OSError:
+            pass
+    elif os.path.exists(p):
+        return "같은 이름의 파일이 있습니다"
+    return ""

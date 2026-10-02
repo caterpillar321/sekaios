@@ -3,12 +3,15 @@
 위: 볼륨 목록 (볼륨 · 위치 · 파일 시스템 · 상태 · 용량 · 사용 가능 공간 · % 사용 가능).
 아래: 디스크 지도 — 디스크마다 한 줄, 파티션을 크기에 맞춘 칸으로 (할당되지 않은 공간은 검은 띠).
 둘 중 어디를 눌러도 같은 것이 골라진다. 동작은 제목줄 단추 · 오른쪽 클릭 메뉴:
-  열기 · 연결/연결 해제 · 꺼내기 · 새 볼륨(빈 공간) · 포맷 · 볼륨 삭제 · 이름 바꾸기 · 오류 검사 · 디스크 초기화.
+  열기 · 연결/연결 해제 · 꺼내기 · 새 볼륨(빈 공간) · 포맷 · 볼륨 삭제 · 이름 바꾸기 · 오류 검사 · 디스크 초기화 ·
+  볼륨 확장·축소 · 연결 위치 변경(윈도우의 "드라이브 문자 및 경로 변경" — fstab) · 속성(디스크 건강 상태 포함) ·
+  디스크 이미지 연결·분리(윈도우의 "VHD 연결" — .img · .iso 를 디스크처럼).
 모두 udisks2 를 D-Bus 로 부른다 (자료는 diskinfo.py). 관리자 권한이 필요한 것은 udisks 가 polkit 으로 묻는다
 (ALLOW_INTERACTIVE_AUTHORIZATION → SekaiOS 사용자 계정 컨트롤 창).
 SekaiOS 가 쓰는 볼륨(/ · 부팅 · 스왑)과 켜져 있는 설치 USB 는 포맷·삭제·초기화를 막는다 (diskinfo 의 protect).
 지우는 일은 모두 먼저 묻는다 — 기본 단추는 취소.
-나중에: 볼륨 확장·축소, 고정 연결 위치(윈도우의 드라이브 문자).
+크기 조절은 udisks 가 아는 파일 시스템만 (Manager.CanResize — ext4 · NTFS. exFAT · FAT32 는 윈도우처럼 못 한다).
+다른 프로그램이 부를 때: sekai-admin --page=disks --format=/dev/sdb1 (탐색기의 드라이브 "포맷…") · --select=/dev/sdb1
 """
 import os
 
@@ -92,7 +95,7 @@ class DiskMap(Gtk.DrawingArea):
             cr.rectangle(x0, y, LEFT_W, ROW_H)
             cr.fill()
             self.boxes.append((x0, y, LEFT_W, ROW_H, f"disk:{d.path}"))
-            self._text(cr, f"<b>{_esc(d.title)}</b>\n{_esc(d.model or d.kind)}\n"
+            self._text(cr, f"<b>{_esc(d.title)}</b>\n{_esc(d.label)}\n"
                            f"{_esc(D.fmt_size(d.size))}\n{_esc(d.state)}",
                        x0 + 10, y + 6, LEFT_W - 16, fg, 9)
             # 칸들
@@ -170,7 +173,7 @@ class DiskMap(Gtk.DrawingArea):
         if item is None:
             return False
         if isinstance(item, D.Disk):
-            tip.set_text(f"{item.title} — {item.model or item.kind}\n{item.dev} · {D.fmt_size(item.size)} · "
+            tip.set_text(f"{item.title} — {item.label}\n{item.dev} · {D.fmt_size(item.size)} · "
                          f"{'GPT' if item.table == 'gpt' else 'MBR' if item.table == 'dos' else '파티션 표 없음'}")
         elif item.free and item.disk.table is None:
             tip.set_text(f"초기화되지 않은 디스크 {D.fmt_size(item.size)} — 두 번 눌러 초기화합니다")
@@ -204,6 +207,8 @@ class DisksPage:
         self._settle = 0
         self._loading = False
         self._again = False
+        self.caps = {}                # 파일 시스템 → 크기 조절 방식 (D.RESIZE_*)
+        self._pending = None          # 목록을 읽은 뒤 할 일 (--format · --select)
 
         self.store = Gtk.ListStore(str, Gio.Icon, str, str, str, str, str, str, str, float, float, float)
         self.sorted = Gtk.TreeModelSort(model=self.store)
@@ -248,6 +253,7 @@ class DisksPage:
         self.b_new = self._abtn("새 볼륨…", self.do_new)
         self.b_fmt = self._abtn("포맷…", self.do_format)
         self.b_del = self._abtn("삭제…", self.do_delete)
+        self.b_ext = self._abtn("볼륨 확장…", self.do_extend)
         more = Gtk.MenuButton()
         more.add(Gtk.Image.new_from_icon_name("view-more-symbolic", Gtk.IconSize.BUTTON))
         more.set_tooltip_text("다른 동작")
@@ -263,7 +269,9 @@ class DisksPage:
         return b
 
     # ── 보이기·감시 ──
-    def on_show(self, **_kw):
+    def on_show(self, **kw):
+        if kw.get("format") or kw.get("select"):
+            self._pending = kw
         if self.bus is None:
             Gio.bus_get(Gio.BusType.SYSTEM, None, self._got_bus)
         else:
@@ -283,7 +291,19 @@ class DisksPage:
                                                         self._on_signal))
         self._subs.append(self.bus.signal_subscribe(D.UD, "org.freedesktop.DBus.Properties", "PropertiesChanged",
                                                     None, None, Gio.DBusSignalFlags.NONE, self._on_signal))
+        for fs in ("ext4", "ext3", "ext2", "ntfs", "btrfs", "xfs", "f2fs"):
+            self.bus.call(D.UD, UD_PATH + "/Manager", D.UD + ".Manager", "CanResize", GLib.Variant("(s)", (fs,)),
+                          GLib.VariantType("((bts))"), Gio.DBusCallFlags.NONE, 5000, None, self._got_cap, fs)
         self.refresh()
+
+    def _got_cap(self, bus, res, fs):
+        try:
+            ok, flags, _util = bus.call_finish(res).unpack()[0]
+        except GLib.Error:
+            return                        # 이 파일 시스템은 크기를 못 바꾼다
+        if ok:
+            self.caps[fs] = flags
+            self._update_actions()
 
     def _on_signal(self, *_a):
         if self._settle:
@@ -350,8 +370,24 @@ class DisksPage:
             self._update_actions()
         if not self.disks:
             self.notice.show_notice("디스크를 찾지 못했습니다.", kind="warn")
-        else:
+        elif not self.busy:
             self.notice.hide_notice()
+        if getattr(self, "_automount", None):
+            GLib.idle_add(lambda: (self._automount_now(), False)[1])
+        if self._pending:
+            kw, self._pending = self._pending, None
+            dev = os.path.realpath(kw.get("format") or kw.get("select"))
+            key = next((k for k, it in self.items.items()
+                        if isinstance(it, D.Volume) and not it.free and it.dev and os.path.realpath(it.dev) == dev), None)
+            if key is None:
+                self.win.toast(f"{dev} 볼륨을 찾지 못했습니다")
+            else:
+                self.select(key, from_map=True)
+                if kw.get("format"):
+                    if self._can()["format"]:
+                        self.do_format()
+                    else:
+                        self.win.notice("포맷할 수 없습니다", self.selected().protect or "이 볼륨은 포맷할 수 없습니다.")
 
     # ── 고르기 ──
     def item(self, key):
@@ -411,15 +447,19 @@ class DisksPage:
     def _can(self):
         it = self.selected()
         c = {"open": False, "mount": False, "unmount": False, "new": False, "format": False, "delete": False,
-             "label": False, "check": False, "init": False, "eject": False}
+             "label": False, "check": False, "init": False, "eject": False, "extend": False, "shrink": False,
+             "place": False, "props": False, "detach": False, "attach": not self.busy and self.bus is not None}
         if it is None or self.busy:
             return c
+        c["props"] = not getattr(it, "free", False)
         if isinstance(it, D.Disk):
             c["init"] = not D.disk_protect(it)
             c["eject"] = it.detachable and not it.system and not it.live
+            c["detach"] = bool(it.image)
             return c
         d = it.disk
         c["eject"] = d.detachable and not d.system and not d.live
+        c["detach"] = bool(d.image)
         if it.free:
             c["new"] = d.table is not None and not d.ro and not d.live
             return c
@@ -430,7 +470,36 @@ class DisksPage:
         c["delete"] = not it.protect and not d.ro and d.table is not None
         c["label"] = it.has_fs and it.fs in D.LABEL_MAX and not d.ro and not it.protect
         c["check"] = it.has_fs and it.fs in ("ext4", "ext3", "ext2", "ntfs", "vfat", "exfat") and not it.protect
+        c["extend"] = not self._resize_why(it, grow=True)
+        c["shrink"] = not self._resize_why(it, grow=False)
+        c["place"] = it.has_fs and bool(it.uuid) and not it.protect and not d.image and not it.encrypted
         return c
+
+    def _resize_why(self, v, grow):
+        """볼륨 확장·축소를 못 하는 이유 (할 수 있으면 빈 글자)"""
+        d = v.disk
+        if v.free or v.container or not v.has_fs or d.ro or d.live:
+            return "이 볼륨은 크기를 바꿀 수 없습니다"
+        if d.table is None or v.logical:
+            return "파티션이 아닌 볼륨(또는 확장 파티션 안의 논리 볼륨)은 크기를 바꿀 수 없습니다"
+        if v.encrypted:
+            return "암호화된 볼륨은 크기를 바꿀 수 없습니다"
+        flags = self.caps.get(v.fs)
+        if flags is None:
+            return f"{v.fs_name or '이'} 볼륨은 크기를 바꿀 수 없습니다 (윈도우에서도 NTFS · ext4 같은 것만 됩니다)"
+        if grow:
+            if v.next_free is None:
+                return "바로 뒤에 할당되지 않은 공간이 없습니다"
+            if not flags & (D.RESIZE_OFFLINE_GROW | D.RESIZE_ONLINE_GROW):
+                return "이 파일 시스템은 늘릴 수 없습니다"
+            if v.mounts and not flags & D.RESIZE_ONLINE_GROW and v.protect:
+                return v.protect
+            return ""
+        if v.protect:
+            return v.protect
+        if not flags & (D.RESIZE_OFFLINE_SHRINK | D.RESIZE_ONLINE_SHRINK):
+            return f"{v.fs_name} 볼륨은 줄일 수 없습니다"
+        return ""
 
     def _update_actions(self):
         c = self._can()
@@ -442,6 +511,9 @@ class DisksPage:
         reason = getattr(it, "protect", "") if it is not None and not isinstance(it, D.Disk) else ""
         for b in (self.b_fmt, self.b_del):
             b.set_tooltip_text(reason or None)
+        self.b_ext.set_sensitive(c["extend"])
+        self.b_ext.set_tooltip_text(None if c["extend"] or not isinstance(it, D.Volume) or it.free
+                                    else self._resize_why(it, grow=True))
 
     def default_action(self):
         it = self.selected()
@@ -470,7 +542,12 @@ class DisksPage:
         m = Gtk.Menu()
         if isinstance(it, D.Disk):
             menu_item(m, "디스크 초기화…", self.do_init, c["init"])
-            menu_item(m, "꺼내기", self.do_eject, c["eject"])
+            if it.image:
+                menu_item(m, "디스크 이미지 분리", self.do_detach, c["detach"])
+            else:
+                menu_item(m, "꺼내기", self.do_eject, c["eject"])
+            m.append(Gtk.SeparatorMenuItem())
+            menu_item(m, "속성", self.do_props, c["props"])
         elif it is not None and it.free:
             menu_item(m, "새 볼륨…", self.do_new, c["new"])
             if it.disk.table is None:
@@ -483,15 +560,24 @@ class DisksPage:
             else:
                 menu_item(m, "연결", self.do_mount, c["mount"])
             m.append(Gtk.SeparatorMenuItem())
+            menu_item(m, "볼륨 확장…", self.do_extend, c["extend"])
+            menu_item(m, "볼륨 축소…", self.do_shrink, c["shrink"])
+            menu_item(m, "연결 위치 변경…", self.do_place, c["place"])
             menu_item(m, "이름 바꾸기…", self.do_label, c["label"])
             menu_item(m, "오류 검사…", self.do_check, c["check"])
             m.append(Gtk.SeparatorMenuItem())
             menu_item(m, "포맷…", self.do_format, c["format"])
             menu_item(m, "볼륨 삭제…", self.do_delete, c["delete"])
-            if c["eject"]:
+            if c["detach"]:
+                m.append(Gtk.SeparatorMenuItem())
+                menu_item(m, "디스크 이미지 분리", self.do_detach, True)
+            elif c["eject"]:
                 m.append(Gtk.SeparatorMenuItem())
                 menu_item(m, "꺼내기", self.do_eject, True)
+            m.append(Gtk.SeparatorMenuItem())
+            menu_item(m, "속성", self.do_props, c["props"])
         m.append(Gtk.SeparatorMenuItem())
+        menu_item(m, "디스크 이미지 연결…", self.do_attach, c["attach"])
         menu_item(m, "새로 고침", self.refresh, not self.busy)
         view = widget if isinstance(widget, Gtk.TreeView) else self.view
         if isinstance(widget, Gtk.TreeView) or ev is None:
@@ -614,7 +700,7 @@ class DisksPage:
                 steps += self._release_steps(v)
         meth = "Eject" if d.ejectable else "PowerOff"
         steps.append((d.drive, D.I_DRIVE, meth, GLib.Variant("(a{sv})", ({},)), None))
-        name = d.model or d.kind
+        name = d.label
 
         def done(ok):
             self.refresh()
@@ -685,7 +771,8 @@ class DisksPage:
         v = self.selected()
         if not isinstance(v, D.Volume) or v.free or not self._can()["format"]:
             return
-        default = "exfat" if v.disk.removable else (v.fs if v.fs in ("ntfs", "exfat", "ext4", "vfat") else "ntfs")
+        # 윈도우처럼 지금 파일 시스템 그대로 — 없거나 고를 수 없는 것이면 이동식은 exFAT, 아니면 NTFS
+        default = v.fs if v.fs in ("ntfs", "exfat", "ext4", "vfat") else ("exfat" if v.disk.removable else "ntfs")
         dlg, box, _ok = self._dialog(f"{v.name} 포맷", "포맷", destructive=True)
         warn = Gtk.Label(xalign=0)
         warn.set_markup(f"<b>{_esc(v.name)}</b> ({_esc(D.fmt_size(v.size))}, {_esc(v.dev)})의 "
@@ -715,7 +802,7 @@ class DisksPage:
         d = v.disk
         dlg, box, _ok = self._dialog("새 볼륨 만들기", "만들기")
         info = Gtk.Label(xalign=0)
-        info.set_markup(f"{_esc(d.title)} ({_esc(d.model or d.kind)})의 할당되지 않은 공간 "
+        info.set_markup(f"{_esc(d.title)} ({_esc(d.label)})의 할당되지 않은 공간 "
                         f"<b>{_esc(D.fmt_size(v.size))}</b>에 새 볼륨을 만듭니다.")
         info.set_line_wrap(True)
         box.add(info)
@@ -851,10 +938,10 @@ class DisksPage:
         txt.set_line_wrap(True)
         txt.set_max_width_chars(52)
         if d.table or d.whole:
-            txt.set_markup(f"<b>{_esc(d.title)}</b> ({_esc(d.model or d.kind)}, {_esc(D.fmt_size(d.size))})의 "
+            txt.set_markup(f"<b>{_esc(d.title)}</b> ({_esc(d.label)}, {_esc(D.fmt_size(d.size))})의 "
                            "<b>모든 볼륨과 파일이 지워집니다.</b>")
         else:
-            txt.set_markup(f"<b>{_esc(d.title)}</b> ({_esc(d.model or d.kind)}, {_esc(D.fmt_size(d.size))})를 "
+            txt.set_markup(f"<b>{_esc(d.title)}</b> ({_esc(d.label)}, {_esc(D.fmt_size(d.size))})를 "
                            "쓰려면 먼저 초기화해야 합니다. 초기화한 뒤 새 볼륨을 만드세요.")
         box.add(txt)
         gpt = Gtk.RadioButton.new_with_label(None, "GPT (GUID 파티션 테이블) — 권장")
@@ -872,6 +959,450 @@ class DisksPage:
                        lambda res: (self.refresh(), res is not None and self.win.toast(f"{d.title} 을(를) 초기화했습니다")),
                        "디스크 초기화")
         dlg.connect("response", resp)
+
+
+    # ── 볼륨 확장 · 축소 ──
+    def _mb_row(self, grid, row, title, lo, hi, value):
+        adj = Gtk.Adjustment(value=value, lower=lo, upper=hi, step_increment=1024, page_increment=10240)
+        spin = Gtk.SpinButton(adjustment=adj, digits=0)
+        spin.set_numeric(True)
+        spin.set_activates_default(True)
+        unit = Gtk.Box(spacing=6)
+        unit.pack_start(spin, True, True, 0)
+        unit.pack_start(Gtk.Label(label=f"MB  (최대 {hi:,} MB)"), False, False, 0)
+        grid.attach(Gtk.Label(label=title, xalign=0), 0, row, 1, 1)
+        grid.attach(unit, 1, row, 1, 1)
+        return spin
+
+    def _kv(self, grid, row, key, val):
+        k = Gtk.Label(label=key, xalign=0)
+        k.get_style_context().add_class("dim-label")
+        v = Gtk.Label(label=val, xalign=0)
+        v.set_selectable(True)
+        v.set_line_wrap(True)
+        v.set_max_width_chars(44)
+        grid.attach(k, 0, row, 1, 1)
+        grid.attach(v, 1, row, 1, 1)
+        return v
+
+    def _resize_steps(self, v, size, grow):
+        """크기를 바꾸는 차례 — 늘릴 땐 파티션 먼저, 줄일 땐 파일 시스템 먼저. 연결된 채로 못 하면 잠시 연결을 푼다"""
+        flags = self.caps.get(v.fs, 0)
+        online = bool(v.mounts) and bool(flags & (D.RESIZE_ONLINE_GROW if grow else D.RESIZE_ONLINE_SHRINK))
+        fsp = self._fs_path(v)
+        empty = GLib.Variant("(a{sv})", ({},))
+        steps = []
+        offline = not online
+        if offline and v.mounts:
+            steps.append((fsp, D.I_FS, "Unmount", empty, None))
+        if offline and v.fs.startswith("ext"):
+            # resize2fs 는 연결을 푼 ext 를 먼저 검사(e2fsck -f)해야 바꾼다
+            steps.append((fsp, D.I_FS, "Repair", empty, "(b)"))
+        part = (v.path, D.I_PART, "Resize", GLib.Variant("(ta{sv})", (size, {})), None)
+        fs = (fsp, D.I_FS, "Resize", GLib.Variant("(ta{sv})", (0 if grow else size, {})), None)
+        steps += [part, fs] if grow else [fs, part]
+        if v.fs == "ntfs":
+            # ntfsresize 는 다음 윈도우 부팅 때 검사하라고 '더러움' 표시를 남긴다 — 리눅스의 ntfs3 은 그런 볼륨을
+            #   연결하지 않는다. 검사는 ntfsresize 가 이미 했다 → 표시만 지운다 (udisks 의 NTFS 복구 = ntfsfix -d)
+            steps.append((fsp, D.I_FS, "Repair", empty, "(b)"))
+        if offline and v.mounts:
+            steps.append((fsp, D.I_FS, "Mount", empty, "(s)"))
+        return steps, offline and bool(v.mounts)
+
+    def _resized(self, v, size, grow):
+        """크기 조절이 끝났을 때 — 실패했는데 연결을 풀어 둔 채면 다시 연결한다"""
+        def done(ok):
+            if ok:
+                self.win.toast(f"{v.name} 을(를) {D.fmt_size(size)} 로 {'늘렸' if grow else '줄였'}습니다")
+                self.refresh()
+            elif v.mounts:
+                self._call(self._fs_path(v), D.I_FS, "Mount", GLib.Variant("(a{sv})", ({},)), "(s)",
+                           lambda _r: self.refresh(), "다시 연결")
+            else:
+                self.refresh()
+        return done
+
+    def do_extend(self):
+        v = self.selected()
+        if not isinstance(v, D.Volume) or not self._can()["extend"]:
+            return
+        free = v.next_free
+        max_mb = free.size // D.MIB
+        dlg, box, _ok = self._dialog(f"{v.name} 확장", "확장")
+        txt = Gtk.Label(xalign=0)
+        txt.set_line_wrap(True)
+        txt.set_max_width_chars(56)
+        txt.set_markup(f"<b>{_esc(v.name)}</b> 바로 뒤의 할당되지 않은 공간 <b>{_esc(D.fmt_size(free.size))}</b> 중 "
+                       "이 볼륨에 붙일 크기를 고르세요. 파일은 그대로 남습니다.")
+        box.add(txt)
+        grid = Gtk.Grid(column_spacing=12, row_spacing=8)
+        box.add(grid)
+        self._kv(grid, 0, "지금 크기", f"{D.fmt_size(v.size)}  ({v.size // D.MIB:,} MB)")
+        spin = self._mb_row(grid, 1, "늘릴 크기", 1, max_mb, max_mb)
+        after = self._kv(grid, 2, "늘린 뒤 크기", "")
+        spin.connect("value-changed", lambda *_: after.set_text(
+            D.fmt_size(v.size + int(spin.get_value()) * D.MIB)))
+        spin.emit("value-changed")
+        _steps, unmounts = self._resize_steps(v, 0, True)
+        if unmounts:
+            note = Gtk.Label(xalign=0, label="늘리는 동안 이 볼륨의 연결을 잠시 해제합니다. "
+                                             "이 볼륨의 파일을 연 프로그램은 먼저 닫아 주세요.")
+            note.set_line_wrap(True)
+            note.set_max_width_chars(56)
+            note.get_style_context().add_class("dim-label")
+            box.add(note)
+        dlg.show_all()
+
+        def resp(_d, r):
+            mb = int(spin.get_value())
+            dlg.destroy()
+            if r != Gtk.ResponseType.OK:
+                return
+            size = v.size + (free.size if mb >= max_mb else mb * D.MIB)
+            steps, _u = self._resize_steps(v, size, True)
+            self._chain(steps, self._resized(v, size, True), "볼륨 확장")
+        dlg.connect("response", resp)
+
+    def _measure(self, v, then):
+        """쓴 공간을 지금 잰다 (목록을 읽은 뒤에 파일을 썼을 수 있다) — 연결돼 있지 않으면 잠시 연결해 재고 다시 푼다.
+        then(쓴 바이트 또는 None)"""
+        fsp = self._fs_path(v)
+
+        def used_at(where):
+            try:
+                st = os.statvfs(where)
+                return max(0, (st.f_blocks - st.f_bfree) * st.f_frsize)
+            except OSError:
+                return None
+        if v.mount:
+            then(used_at(v.mount))
+            return
+
+        def mounted(r):
+            if not r:
+                then(None)
+                return
+            used = used_at(r[0])
+            self._call(fsp, D.I_FS, "Unmount", GLib.Variant("(a{sv})", ({},)), None, lambda _r: then(used),
+                       "사용 공간 확인")
+        self._call(fsp, D.I_FS, "Mount", GLib.Variant("(a{sv})", ({},)), "(s)", mounted, "사용 공간 확인")
+
+    def do_shrink(self):
+        v = self.selected()
+        if not isinstance(v, D.Volume) or not self._can()["shrink"]:
+            return
+
+        def measured(used):
+            if used is None:
+                self.win.notice("볼륨 축소", "이 볼륨이 쓰는 공간을 알아내지 못했습니다 (연결이 되지 않았습니다).")
+                return
+            v.used = used
+            self._shrink_dialog(v, D.shrink_min(v))
+        self._measure(v, measured)
+
+    def _shrink_dialog(self, v, min_size):
+        can_mb = max(0, (v.size - min_size) // D.MIB)
+        if can_mb < 16:
+            self.win.notice("볼륨 축소", f"{v.name} 은(는) 거의 가득 차 있어 줄일 수 있는 공간이 없습니다.")
+            return
+        dlg, box, _ok = self._dialog(f"{v.name} 축소", "축소")
+        txt = Gtk.Label(xalign=0)
+        txt.set_line_wrap(True)
+        txt.set_max_width_chars(56)
+        txt.set_markup(f"<b>{_esc(v.name)}</b> 의 끝에서 떼어 낼 크기를 고르세요. 떼어 낸 자리는 할당되지 않은 공간이 되어 "
+                       "새 볼륨을 만들 수 있습니다. 파일은 그대로 남습니다.")
+        box.add(txt)
+        grid = Gtk.Grid(column_spacing=12, row_spacing=8)
+        box.add(grid)
+        self._kv(grid, 0, "지금 크기", f"{D.fmt_size(v.size)}  ({v.size // D.MIB:,} MB)")
+        self._kv(grid, 1, "줄일 수 있는 공간", f"{D.fmt_size(can_mb * D.MIB)}  ({can_mb:,} MB)")
+        spin = self._mb_row(grid, 2, "줄일 크기", 1, can_mb, can_mb)
+        after = self._kv(grid, 3, "줄인 뒤 크기", "")
+        spin.connect("value-changed", lambda *_: after.set_text(
+            D.fmt_size(v.size - int(spin.get_value()) * D.MIB)))
+        spin.emit("value-changed")
+        if v.mounts:
+            note = Gtk.Label(xalign=0, label="줄이는 동안 이 볼륨의 연결을 잠시 해제합니다. "
+                                             "이 볼륨의 파일을 연 프로그램은 먼저 닫아 주세요.")
+            note.set_line_wrap(True)
+            note.set_max_width_chars(56)
+            note.get_style_context().add_class("dim-label")
+            box.add(note)
+        dlg.show_all()
+
+        def resp(_d, r):
+            mb = int(spin.get_value())
+            dlg.destroy()
+            if r != Gtk.ResponseType.OK:
+                return
+            size = (v.size - mb * D.MIB) // D.MIB * D.MIB
+            steps, _u = self._resize_steps(v, size, False)
+            self._chain(steps, self._resized(v, size, False), "볼륨 축소")
+        dlg.connect("response", resp)
+
+    # ── 연결 위치 (윈도우의 드라이브 문자 및 경로 변경) ──
+    @staticmethod
+    def _fstab_variant(item):
+        typ, d = item
+        out = {}
+        for k, val in d.items():
+            if k in ("freq", "passno"):
+                out[k] = GLib.Variant("i", int(val))
+            else:
+                b = val if isinstance(val, (bytes, bytearray)) else bytes(x for x in val if isinstance(x, int))
+                out[k] = GLib.Variant("ay", bytes(b).rstrip(b"\0") + b"\0")
+        return (typ, out)
+
+    def do_place(self):
+        v = self.selected()
+        if not isinstance(v, D.Volume) or not self._can()["place"]:
+            return
+        cur = v.fstab
+        dlg, box, ok = self._dialog(f"{v.name} 연결 위치 변경", "확인")
+        auto = Gtk.RadioButton.new_with_label(None, "자동 — 연결할 때마다 SekaiOS 가 정합니다 (/media/사용자/볼륨 이름)")
+        fix = Gtk.RadioButton.new_with_label_from_widget(auto, "항상 이 폴더에 연결:")
+        box.add(auto)
+        box.add(fix)
+        row = Gtk.Box(spacing=8, margin_start=24)
+        entry = Gtk.Entry()
+        entry.set_hexpand(True)
+        entry.set_activates_default(True)
+        base = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in (v.label or f"disk{v.disk.index}-{v.number}"))
+        entry.set_text(cur["dir"] if cur else f"/mnt/{base}")
+        browse = Gtk.Button(label="찾아보기…")
+        row.pack_start(entry, True, True, 0)
+        row.pack_start(browse, False, False, 0)
+        box.add(row)
+        boot = Gtk.CheckButton(label="SekaiOS 를 시작할 때 자동으로 연결", margin_start=24)
+        boot.set_active(cur["boot"] if cur else not v.disk.detachable)
+        box.add(boot)
+        err = Gtk.Label(xalign=0, margin_start=24)
+        err.set_line_wrap(True)
+        err.set_max_width_chars(56)
+        err.get_style_context().add_class("error")
+        box.add(err)
+        hint = Gtk.Label(xalign=0)
+        hint.set_line_wrap(True)
+        hint.set_max_width_chars(56)
+        hint.get_style_context().add_class("dim-label")
+        hint.set_text("폴더가 없으면 새로 만듭니다. 바꾸는 데 관리자 권한이 필요합니다.")
+        box.add(hint)
+        (fix if cur else auto).set_active(True)
+
+        def check(*_):
+            on = fix.get_active()
+            for w in (entry, browse, boot):
+                w.set_sensitive(on)
+            why = ""
+            if on:
+                path = os.path.normpath(entry.get_text().strip())
+                if not (cur and path == os.path.normpath(cur["dir"])) and path not in v.mounts:
+                    why = D.fixed_dir_problem(path, os.path.expanduser("~"))
+            err.set_text(why)
+            err.set_visible(bool(why))
+            ok.set_sensitive(not why)
+        for w, sig in ((auto, "toggled"), (entry, "changed")):
+            w.connect(sig, check)
+
+        def pick(*_):
+            fc = Gtk.FileChooserNative.new("연결할 폴더 고르기", dlg, Gtk.FileChooserAction.SELECT_FOLDER, "고르기", "취소")
+            fc.set_create_folders(True)
+            if fc.run() == Gtk.ResponseType.ACCEPT and fc.get_filename():
+                entry.set_text(fc.get_filename())
+            fc.destroy()
+        browse.connect("clicked", pick)
+        dlg.show_all()
+        check()
+
+        def resp(_d, r):
+            want_fix, path, at_boot = fix.get_active(), os.path.normpath(entry.get_text().strip()), boot.get_active()
+            dlg.destroy()
+            if r != Gtk.ResponseType.OK:
+                return
+            fsp = self._fs_path(v)
+            empty = GLib.Variant("(a{sv})", ({},))
+            was = bool(v.mounts)
+            steps = []
+            if not want_fix:
+                if not cur:
+                    return
+                if was:
+                    steps.append((fsp, D.I_FS, "Unmount", empty, None))
+                steps.append((fsp, D.I_BLOCK, "RemoveConfigurationItem",
+                              GLib.Variant("((sa{sv})a{sv})", (self._fstab_variant(cur["item"]), {})), None))
+                if was:
+                    steps.append((fsp, D.I_FS, "Mount", empty, "(s)"))
+                done_text = "연결 위치를 자동으로 되돌렸습니다"
+            else:
+                # users — 이 사용자가 연결·해제할 때 다시 묻지 않는다 (udisks 가 이 사용자로 mount 를 부른다).
+                #   users 는 noexec 를 함께 켜므로 exec 로 되돌린다. 폴더는 udisks 가 항목을 넣을 때 만든다
+                opts = ["nofail", "x-gvfs-show", "users", "exec"]
+                if not at_boot:
+                    opts.append("noauto")
+                if v.fs in ("ntfs", "exfat", "vfat"):          # 권한이 없는 파일 시스템 — 이 사용자의 것으로 연결
+                    opts += [f"uid={os.getuid()}", f"gid={os.getgid()}"]
+                item = ("fstab", {"fsname": f"UUID={v.uuid}".encode(), "dir": path.encode(), "type": b"auto",
+                                  "opts": ",".join(opts).encode(), "freq": 0, "passno": 0})
+                new = self._fstab_variant(item)
+                if was:
+                    steps.append((fsp, D.I_FS, "Unmount", empty, None))
+                if cur:
+                    steps.append((fsp, D.I_BLOCK, "UpdateConfigurationItem",
+                                  GLib.Variant("((sa{sv})(sa{sv})a{sv})",
+                                               (self._fstab_variant(cur["item"]), new, {})), None))
+                else:
+                    steps.append((fsp, D.I_BLOCK, "AddConfigurationItem",
+                                  GLib.Variant("((sa{sv})a{sv})", (new, {})), None))
+                if was or at_boot:
+                    steps.append((fsp, D.I_FS, "Mount", empty, "(s)"))
+                done_text = f"{v.name} 을(를) 이제 {path} 에 연결합니다"
+            self._chain(steps, lambda okk: (self.refresh(), okk and self.win.toast(done_text)), "연결 위치 변경")
+        dlg.connect("response", resp)
+
+    # ── 속성 ──
+    def do_props(self):
+        it = self.selected()
+        if it is None or getattr(it, "free", False):
+            return
+        disk = it if isinstance(it, D.Disk) else it.disk
+        title = f"{disk.title} 속성" if isinstance(it, D.Disk) else f"{it.name} 속성"
+        dlg = Gtk.Dialog(title=title, transient_for=self.win, modal=True)
+        dlg.add_button("닫기", Gtk.ResponseType.CLOSE)
+        dlg.set_default_response(Gtk.ResponseType.CLOSE)
+        dlg.set_resizable(False)                      # 내용에 맞는 높이 (아래에 빈 자리가 남지 않게)
+        box = dlg.get_content_area()
+        box.set_border_width(16)
+        grid = Gtk.Grid(column_spacing=18, row_spacing=7)
+        box.add(grid)
+        rows = []
+        if isinstance(it, D.Volume):
+            v = it
+            rows += [("볼륨", v.name), ("파일 시스템", v.fs_name or "-"), ("상태", v.status),
+                     ("용량", f"{D.fmt_size(v.size)}  ({v.size:,} 바이트)")]
+            if v.used is not None:
+                rows += [("사용 중", D.fmt_size(v.used)), ("사용 가능", D.fmt_size(v.avail))]
+            rows.append(("연결 위치", v.mount or "연결되지 않음"))
+            if v.fstab:
+                rows.append(("고정 연결 위치", v.fstab["dir"] + ("  (시작할 때 연결)" if v.fstab["boot"] else "")))
+            where = f"{disk.title}" + (f" · 파티션 {v.number}" if v.number else "")
+            rows += [("위치", where), ("장치", v.dev), ("UUID", v.uuid or "-")]
+            pt = D.PTYPE_NAMES.get(v.ptype.lower()) or v.ptype
+            if pt:
+                rows.append(("파티션 종류", pt))
+        else:
+            rows += [("디스크", f"{disk.title} — {disk.label}"), ("종류", disk.kind)]
+            if disk.image:
+                rows.append(("이미지 파일", disk.image))
+            if disk.bus:
+                rows.append(("연결 방식", {"usb": "USB", "ata": "SATA", "nvme": "NVMe", "sdio": "SD",
+                                           "scsi": "SCSI"}.get(disk.bus, disk.bus.upper())))
+            if disk.serial:
+                rows.append(("일련 번호", disk.serial))
+            rows += [("용량", f"{D.fmt_size(disk.size)}  ({disk.size:,} 바이트)"),
+                     ("파티션 형식", {"gpt": "GPT (GUID 파티션 테이블)", "dos": "MBR (마스터 부트 레코드)"}.get(
+                         disk.table, "없음 (초기화되지 않음)" if disk.whole is None else "없음 (디스크 전체가 볼륨)")),
+                     ("장치", disk.dev), ("디스크 상태", disk.health or "알 수 없음 (이 디스크는 상태를 알려 주지 않습니다)")]
+            if disk.temp is not None:
+                rows.append(("온도", f"{disk.temp} °C"))
+            if disk.power_on_hours is not None:
+                rows.append(("사용 시간", f"{disk.power_on_hours:,} 시간"))
+        for i, (k, val) in enumerate(rows):
+            lab = self._kv(grid, i, k, val)
+            if k == "디스크 상태" and disk.health_bad:
+                lab.get_style_context().add_class("error")
+        dlg.connect("response", lambda d, _r: d.destroy())
+        dlg.show_all()
+
+    # ── 디스크 이미지 (윈도우의 VHD 연결 · 분리) ──
+    def do_attach(self):
+        if self.bus is None or self.busy:
+            return
+        fc = Gtk.FileChooserDialog(title="디스크 이미지 연결", transient_for=self.win, modal=True,
+                                   action=Gtk.FileChooserAction.OPEN)
+        fc.add_button("취소", Gtk.ResponseType.CANCEL)
+        fc.add_button("연결", Gtk.ResponseType.ACCEPT)
+        fc.set_default_response(Gtk.ResponseType.ACCEPT)
+        flt = Gtk.FileFilter()
+        flt.set_name("디스크 이미지 (.img · .iso · .raw · .vhd)")
+        for pat in ("*.img", "*.iso", "*.raw", "*.vhd", "*.IMG", "*.ISO", "*.RAW", "*.VHD"):
+            flt.add_pattern(pat)
+        fc.add_filter(flt)
+        allf = Gtk.FileFilter()
+        allf.set_name("모든 파일")
+        allf.add_pattern("*")
+        fc.add_filter(allf)
+        ro = Gtk.CheckButton(label="읽기 전용으로 연결")
+        fc.set_extra_widget(ro)
+        fc.connect("selection-changed", lambda *_: ro.set_active(
+            (fc.get_filename() or "").lower().endswith(".iso") or not os.access(fc.get_filename() or "/", os.W_OK)))
+
+        def resp(_d, r):
+            path, readonly = fc.get_filename(), ro.get_active()
+            fc.destroy()
+            if r == Gtk.ResponseType.ACCEPT and path:
+                self._loop_setup(path, readonly)
+        fc.connect("response", resp)
+        fc.show_all()
+
+    def _loop_setup(self, path, readonly):
+        try:
+            fd = os.open(path, os.O_RDONLY if readonly else os.O_RDWR)
+        except OSError as e:
+            self.win.notice("디스크 이미지를 열지 못했습니다", f"{path}: {e.strerror}")
+            return
+        fdl = Gio.UnixFDList.new()
+        try:
+            idx = fdl.append(fd)
+        finally:
+            os.close(fd)
+        self._set_busy(True, "디스크 이미지 연결")
+
+        def fin(bus, res):
+            self._set_busy(False)
+            try:
+                out, _fds = bus.call_with_unix_fd_list_finish(res)
+            except GLib.Error as e:
+                self._fail("디스크 이미지 연결", e)
+                return
+            obj = out.unpack()[0]
+            self.sel = f"disk:{obj}"
+            self._automount = obj                   # 윈도우처럼 볼륨을 바로 쓸 수 있게 연결해 둔다
+            self.win.toast(f"{os.path.basename(path)} 을(를) 디스크로 연결했습니다")
+            self.refresh()
+        self.bus.call_with_unix_fd_list(D.UD, UD_PATH + "/Manager", D.UD + ".Manager", "LoopSetup",
+                                        GLib.Variant("(ha{sv})", (idx, {"read-only": GLib.Variant("b", readonly)})),
+                                        GLib.VariantType("(o)"), Gio.DBusCallFlags.ALLOW_INTERACTIVE_AUTHORIZATION,
+                                        60000, fdl, None, fin)
+
+    def _automount_now(self):
+        """막 연결한 이미지의 볼륨을 연결 — 파티션은 조금 뒤에 나타날 수 있어 몇 번 다시 본다"""
+        obj = getattr(self, "_automount", None)
+        if not obj or self.busy:
+            return
+        self._automount_tries = getattr(self, "_automount_tries", 0) + 1
+        d = self.items.get(f"disk:{obj}")
+        steps = [(self._fs_path(v), D.I_FS, "Mount", GLib.Variant("(a{sv})", ({},)), "(s)")
+                 for v in (d.segments if d else []) if not v.free and v.has_fs and not v.mounts]
+        if not steps and self._automount_tries < 6:
+            GLib.timeout_add(500, lambda: (self.refresh(), False)[1])
+            return
+        self._automount, self._automount_tries = None, 0
+        if steps:
+            self._chain(steps, lambda _ok: self.refresh(), "연결")
+
+    def do_detach(self):
+        it = self.selected()
+        d = it if isinstance(it, D.Disk) else getattr(it, "disk", None)
+        if d is None or not d.image:
+            return
+        steps = []
+        for v in d.segments:
+            if not v.free:
+                steps += self._release_steps(v)
+        steps.append((d.path, D.I_LOOP, "Delete", GLib.Variant("(a{sv})", ({},)), None))
+        name = os.path.basename(d.image)
+        self._chain(steps, lambda ok: (self.refresh(), ok and self.win.toast(f"{name} 을(를) 분리했습니다")),
+                    "디스크 이미지 분리")
 
 
 def build(win):

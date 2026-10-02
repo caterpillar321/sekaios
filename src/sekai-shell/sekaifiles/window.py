@@ -1481,6 +1481,23 @@ class ExplorerWindow(Gtk.ApplicationWindow):
                 self.navigate(m.get_root().get_uri())
         d.volume.mount(Gio.MountMountFlags.NONE, op, None, done)
 
+    @staticmethod
+    def _drive_dev(d):
+        """드라이브의 장치 (/dev/sdb1) — 포맷은 디스크 관리가 한다. 루트·네트워크 드라이브는 None"""
+        if d.volume is None:
+            return None
+        return d.volume.get_identifier("unix-device") or None
+
+    def format_drive(self, d):
+        """윈도우 탐색기의 "포맷…" — 컴퓨터 관리 › 디스크 관리의 포맷 창을 그 볼륨으로 연다"""
+        dev = self._drive_dev(d)
+        if not dev:
+            return
+        try:
+            Gio.Subprocess.new(["sekai-admin", "--page=disks", f"--format={dev}"], Gio.SubprocessFlags.NONE)
+        except GLib.Error as e:
+            opener.error(self, "디스크 관리를 열지 못했습니다.", e.message)
+
     def eject_drive(self, d):
         op = Gtk.MountOperation(parent=self)
         name = d.name
@@ -2374,6 +2391,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
                 _sep(m)
                 _mitem(m, "꺼내기", lambda: self.eject_drive(d), ["media-eject-symbolic"])
             _sep(m)
+            _mitem(m, "포맷…", lambda: self.format_drive(d), None, None, self._drive_dev(d) is not None)
             _mitem(m, "속성", lambda: self.show_properties([Gio.File.new_for_uri(d.root_uri)]),
                    ["document-properties-symbolic"], None, properties is not None and bool(d.root_uri))
         m.show_all()
@@ -2396,6 +2414,7 @@ class ExplorerWindow(Gtk.ApplicationWindow):
                 _sep(m)
                 _mitem(m, "꺼내기", lambda: self.eject_drive(d), ["media-eject-symbolic"])
             _sep(m)
+            _mitem(m, "포맷…", lambda: self.format_drive(d), None, None, self._drive_dev(d) is not None)
             _mitem(m, "속성", lambda: self.show_properties([Gio.File.new_for_uri(d.root_uri)]),
                    ["document-properties-symbolic"], None, properties is not None and bool(d.root_uri))
         else:
