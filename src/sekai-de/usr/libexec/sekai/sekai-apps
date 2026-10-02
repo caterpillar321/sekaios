@@ -530,7 +530,23 @@ def install(pkg):
     return 0
 
 
+def wait_apt(limit=600):
+    """다른 apt·dpkg(업데이트·스토어 목록 받기 sekai-catalog 등)가 끝나기를 기다린다 → 끝났으면 True"""
+    import time
+    t0 = time.monotonic()
+    while subprocess.run(["pgrep", "-x", "apt|apt-get|dpkg|aptitude|unattended-upgr"],
+                         stdout=subprocess.DEVNULL).returncode == 0:
+        if time.monotonic() - t0 > limit:
+            return False
+        out("PROGRESS", 1, "다른 설치나 앱 목록 받기가 끝나기를 기다리는 중")
+        time.sleep(3)
+    return True
+
+
 def refresh():
+    if not wait_apt():
+        out("ERROR", "다른 설치나 업데이트가 오래 진행 중입니다 — 끝난 뒤 다시 해 주세요")
+        return 1
     out("PROGRESS", 2, "앱 목록을 받는 중")
     has_fp = shutil.which("flatpak") is not None
     rc, log = run_status(["apt-get", "-q"] + APT_OPTS + ["update"], 2, 80 if has_fp else 98, verb="정리하는 중")

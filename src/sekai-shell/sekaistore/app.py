@@ -304,9 +304,20 @@ class StoreWindow(Gtk.ApplicationWindow):
         v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         v.set_valign(Gtk.Align.CENTER)
         v.set_halign(Gtk.Align.CENTER)
-        v.pack_start(label("앱 목록이 아직 없습니다", "sec-h", xalign=0.5), False, False, 0)
-        msg = (self.cat.error or "") + ("\n" if self.cat.error else "") + \
-            "인터넷에 연결된 상태에서 앱 목록을 받아 주세요."
+        import subprocess
+        busy = subprocess.run(["systemctl", "is-active", "--quiet", "sekai-store-catalog.service"]).returncode == 0
+        if busy:
+            # 업데이트 직후 — sekai-store-catalog 가 뒤에서 받는 중 (다 받으면 _wait_catalog 가 다시 읽는다)
+            sp = Gtk.Spinner()
+            sp.start()
+            sp.set_size_request(28, 28)
+            v.pack_start(sp, False, False, 0)
+            v.pack_start(label("앱 목록을 받는 중입니다", "sec-h", xalign=0.5), False, False, 0)
+            msg = "업데이트 뒤 처음 한 번 받습니다. 다 받으면 저절로 나타납니다."
+        else:
+            v.pack_start(label("앱 목록이 아직 없습니다", "sec-h", xalign=0.5), False, False, 0)
+            msg = (self.cat.error or "") + ("\n" if self.cat.error else "") + \
+                "인터넷에 연결된 상태에서 앱 목록을 받아 주세요."
         v.pack_start(label(msg, "detail-meta", wrap=True, xalign=0.5), False, False, 0)
         b = Gtk.Button(label="앱 목록 받기")
         b.get_style_context().add_class("accent-btn")
@@ -654,9 +665,19 @@ class StoreWindow(Gtk.ApplicationWindow):
         rm.set_size_request(200, -1)
         bar = Gtk.ProgressBar()
         bar.get_style_context().add_class("update-progress")
-        ptext = label("", "detail-meta", wrap=True)
+        # 진행 문구는 설치하는 패키지 이름이 계속 바뀐다 — 글자 길이에 따라 오른쪽 칸 너비가 널뛰지 않게
+        #   너비를 못 박고(width/max_width_chars) 긴 것은 줄여 보인다
+        ptext = label("", "detail-meta", ellipsize=True)
         err = label("", "detail-err", wrap=True)
-        for w in (main, rm, bar, ptext, err):
+        for lb in (ptext, err):
+            lb.set_width_chars(26)
+            lb.set_max_width_chars(26)
+        ext_note = label("", "detail-meta", wrap=True)
+        ext_note.set_width_chars(26)
+        ext_note.set_max_width_chars(26)
+        ext_note.set_no_show_all(True)
+        act.set_hexpand(False)
+        for w in (main, rm, bar, ptext, ext_note, err):
             act.pack_start(w, False, False, 0)
         head.pack_end(act, False, False, 0)
         v.pack_start(head, False, False, 0)
@@ -682,6 +703,13 @@ class StoreWindow(Gtk.ApplicationWindow):
             if st == "installed" and self.cat.is_system(app):
                 rm.set_sensitive(False)
                 rm.set_tooltip_text("SekaiOS 기본 구성에 들어 있어 제거할 수 없습니다")
+            ext = self.cat.external(app) if st == "installed" else None
+            ext_note.set_visible(bool(ext))
+            if ext:
+                # 스토어 밖에서 깐 판 — 여는 것만. 지우기·업데이트는 그 판의 길로 (설정 › 앱 › 설치된 앱)
+                rm.set_visible(False)
+                ext_note.set_text(f"이 컴퓨터에 이미 설치되어 있습니다 — {ext[0]}. "
+                                  "제거는 설정 › 앱 › 설치된 앱에서 할 수 있습니다.")
             bar.set_visible(prog is not None)
             ptext.set_visible(prog is not None or st == "queued")
             if st == "installed":
@@ -706,7 +734,7 @@ class StoreWindow(Gtk.ApplicationWindow):
         def on_main(*_):
             st = self.jobs.state_of(app, merged=False)
             if st == "installed":
-                if not launch(app):
+                if not launch(app, self.cat):
                     err.set_text("이 앱은 시작 메뉴에 나오는 창이 없습니다 (명령줄 프로그램이거나 구성 요소일 수 있습니다)")
                     err.show()
             elif st == "queued":
@@ -940,6 +968,7 @@ class StoreWindow(Gtk.ApplicationWindow):
             v.pack_start(fb, False, False, 0)
 
         inst = sorted((a for a in self.cat.by_pkg.values() if self.cat.is_installed(a)), key=lambda a: a.name.lower())
+        inst += sorted((a for a in self.cat.apps if self.cat.external(a)), key=lambda a: a.name.lower())
         mine = [a for a in inst if not self.cat.is_system(a)]
         base = [a for a in inst if self.cat.is_system(a)]
         v.pack_start(label(f"설치한 앱 {len(mine)}개", "sec-h"), False, False, 0)
@@ -966,14 +995,17 @@ class StoreWindow(Gtk.ApplicationWindow):
             name.set_halign(Gtk.Align.START)
             name.connect("clicked", lambda *_, x=a: self.show_app(x))
             col.pack_start(name, False, False, 0)
-            col.pack_start(label(a.summary + (" · Flathub" if a.is_flatpak else ""), "tile-sub", ellipsize=True),
-                           False, False, 0)
+            ext = self.cat.external(a)
+            col.pack_start(label(a.summary + (f" · {ext[0]}" if ext else " · Flathub" if a.is_flatpak else ""),
+                                 "tile-sub", ellipsize=True), False, False, 0)
             row.pack_start(col, True, True, 0)
             o = Gtk.Button(label="열기")
-            o.connect("clicked", lambda *_, x=a: launch(x))
+            o.connect("clicked", lambda *_, x=a: launch(x, self.cat))
             r = Gtk.Button(label="제거")
             r.connect("clicked", lambda *_, x=a: self._confirm_remove(x))
-            r.set_sensitive(removable)
+            r.set_sensitive(removable and not ext)
+            if ext:
+                r.set_tooltip_text("스토어 밖에서 설치한 판 — 설정 › 앱 › 설치된 앱에서 제거할 수 있습니다")
             row.pack_end(r, False, False, 0)
             row.pack_end(o, False, False, 0)
             v.pack_start(row, False, False, 0)

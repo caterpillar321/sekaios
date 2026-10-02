@@ -127,6 +127,28 @@ ALIASES = {
 #   여기 있는 앱만 Flathub 쪽을 앞에 (데비안 steam-installer 는 32비트 라이브러리·contrib 가 필요해 자주 깨진다)
 PREFER_FLATHUB = {"com.valvesoftware.Steam"}
 
+# 업체가 직접 배포하는 .deb 의 패키지 이름 — 이게 깔려 있으면 스토어의 같은 앱(Flathub 등)을 "이미 설치됨"으로
+#   (예: VS Code 홈페이지의 .deb 는 패키지 code, Flathub 는 com.visualstudio.code — 이름으로는 이어지지 않는다)
+VENDOR_DEBS = {
+    "com.visualstudio.code": ("code", "code-insiders"),
+    "com.google.Chrome": ("google-chrome-stable", "google-chrome-beta"),
+    "com.discordapp.Discord": ("discord",),
+    "com.spotify.Client": ("spotify-client",),
+    "com.slack.Slack": ("slack-desktop",),
+    "us.zoom.Zoom": ("zoom",),
+    "md.obsidian.Obsidian": ("obsidian",),
+    "org.mozilla.firefox": ("firefox",),
+    "com.valvesoftware.Steam": ("steam-launcher", "steam"),
+    "com.brave.Browser": ("brave-browser",),
+    "com.microsoft.Edge": ("microsoft-edge-stable",),
+    "com.github.IsmaelMartinez.teams_for_linux": ("teams-for-linux",),
+    "org.signal.Signal": ("signal-desktop",),
+    "com.getpostman.Postman": ("postman",),
+    "io.dbeaver.DBeaverCommunity": ("dbeaver-ce",),
+}
+_APP_DIRS = ("/usr/share/applications", "/usr/local/share/applications",
+             os.path.expanduser("~/.local/share/applications"))
+
 
 class App:
     """스토어의 앱 하나. pkg 가 열쇠 — 데비안은 패키지 이름, Flathub 는 앱 id (com.discordapp.Discord).
@@ -262,6 +284,34 @@ def system_packages():
     return {l.strip() for l in res.stdout.splitlines() if l and not l.startswith(" ")}
 
 
+def _local_desktop_names():
+    """시작 메뉴에 보이는 앱(.desktop, flatpak 내보내기 자리 제외)의 이름 → 경로"""
+    import configparser
+    out = {}
+    for d in _APP_DIRS:
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        for fn in names:
+            if not fn.endswith(".desktop"):
+                continue
+            path = os.path.join(d, fn)
+            cp = configparser.RawConfigParser(strict=False, interpolation=None)
+            cp.optionxform = str
+            try:
+                cp.read(path, encoding="utf-8")
+                e = cp["Desktop Entry"]
+            except (configparser.Error, KeyError, OSError, UnicodeError):
+                continue
+            if e.get("NoDisplay", "").lower() == "true" or e.get("Hidden", "").lower() == "true":
+                continue
+            n = (e.get("Name") or "").strip().casefold()
+            if len(n) >= 3:
+                out.setdefault(n, path)
+    return out
+
+
 def to_pango(desc):
     """AppStream 설명(<p>·<ul>·<ol>·<li>·<em>·<code>) → Pango 마크업"""
     if not desc:
@@ -292,6 +342,7 @@ class Catalog:
         self.by_pkg = {}
         self.installed = set()
         self.fp_installed = {}          # Flathub(flatpak) 로 설치된 앱 id → 브랜치
+        self.local_names = {}           # 시작 메뉴의 앱 이름(소문자) → .desktop 경로 — 스토어 밖에서 깐 것 찾기용
         self.flatpak = False            # flatpak 을 쓸 수 있나 (없으면 Flathub 앱을 보이지 않는다)
         self.system = set()             # SekaiOS 가 꼭 필요로 하는 패키지 (지우면 데스크톱이 같이 지워진다)
         self.error = None
@@ -352,9 +403,24 @@ class Catalog:
         if self.flatpak:
             from sekaishell import appmgr
             self.fp_installed = appmgr.flatpak_installed_apps()
+        self.local_names = _local_desktop_names()
 
     def is_installed(self, app):
         return app.pkg in (self.fp_installed if app.is_flatpak else self.installed)
+
+    def external(self, app):
+        """스토어 밖에서(업체 .deb·AppImage 바로 가기 등) 깐 같은 앱 → (설명, .desktop 경로 또는 None, 패키지 또는 None) · None.
+        스토어가 아는 방법으로 깔린 것(이 앱이나 다른 출처)이면 None"""
+        if any(self.is_installed(v) for v in app.variants()):
+            return None
+        for v in app.variants():
+            for deb in VENDOR_DEBS.get(v.pkg, ()):
+                if deb in self.installed:
+                    return (f"직접 설치한 판 (패키지 {deb})", None, deb)
+        path = self.local_names.get(app.name.casefold())
+        if path:
+            return ("직접 설치한 판", path, None)
+        return None
 
     def installed_variant(self, app):
         """양쪽에 있는 앱 — 설치된 쪽 (없으면 None)"""

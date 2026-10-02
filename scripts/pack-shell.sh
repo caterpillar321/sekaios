@@ -158,6 +158,35 @@ stage_tree() {
     [ -s "$stage/DEBIAN/conffiles" ] || rm -f "$stage/DEBIAN/conffiles"
 }
 
+# 떠 있는 합성기 세션(사용자·로그인 화면)마다 hyprctl 을 부른다 — 메인테이너 스크립트에 넣는 조각
+HYPR_EACH='
+# hypr_each <hyprctl 인자…>
+hypr_each() {
+    for sock in /run/user/*/hypr/*/.socket.sock; do
+        [ -S "$sock" ] || continue
+        d=${sock%/.socket.sock}; sig=${d##*/}; rt=${d%/hypr/*}; uid=${rt##*/}
+        u=$(getent passwd "$uid" | cut -d: -f1)
+        [ -n "$u" ] || continue
+        runuser -u "$u" -- env XDG_RUNTIME_DIR="$rt" HYPRLAND_INSTANCE_SIGNATURE="$sig" \
+            hyprctl "$@" >/dev/null 2>&1 || true
+    done
+}'
+# 업데이트가 합성기 설정 파일을 지우기 전에 — 떠 있는 합성기는 읽은 설정 파일이 "지워지면"(inotify IN_IGNORED)
+#   스스로 다시 읽는다. 옛 판(설정을 싣던 sekai-desktop)에서 올릴 때 새 sekai-desktop 이 먼저 풀리면 그 파일이
+#   sekai-de 가 다시 놓을 때까지 없어서, 그 순간 다시 읽다가 "source= … globbing error: found no match" 오류 막대가 떴다
+#   (2026-10-02 실기, VM 에서 같은 오류 재현). 하드 링크를 걸어 두면 경로가 지워져도 파일(inode)이 남아 신호가 없다.
+#   (hyprctl keyword misc:disable_autoreload 는 다음 reload 까지 감시를 풀지 않아 소용없다)
+#   끝에서 hyprctl reload 로 감시를 새 파일로 옮긴 뒤 치운다 (HYPR_KEEP_DROP)
+HYPR_KEEP='
+K=/usr/share/sekai/hypr/.sekai-keep
+if [ -d /usr/share/sekai/hypr ]; then
+    mkdir -p "$K"
+    for f in /usr/share/sekai/hypr/*; do
+        [ -f "$f" ] && ln -f "$f" "$K/" 2>/dev/null || true
+    done
+fi'
+HYPR_KEEP_DROP='rm -rf /usr/share/sekai/hypr/.sekai-keep'
+
 # 옛 sekai-desktop 이 걸어 둔 divert 를 새 주인에게 (파일은 이미 옮겨진 자리에 그대로) — 메인테이너 스크립트에 넣는 조각
 DIVERT_TAKEOVER='
 # divert_takeover <새 주인> <원래 경로> <옮긴 경로>
@@ -177,10 +206,16 @@ divert_takeover() {
 # ─────────────────────────────────────────────────────────
 echo "==> sekai-de 스테이징"
 stage_tree "$P/src/sekai-de" "$STAGE_DE"
+cat > "$STAGE_DE/DEBIAN/preinst" <<PRI
+#!/bin/sh
+set -e
+$HYPR_KEEP
+PRI
 cat > "$STAGE_DE/DEBIAN/postinst" <<PI
 #!/bin/sh
 set -e
 $DIVERT_TAKEOVER
+$HYPR_EACH
 PI
 cat >> "$STAGE_DE/DEBIAN/postinst" <<'PI'
 if [ "$1" = "configure" ] && command -v pam-auth-update >/dev/null; then
@@ -244,14 +279,8 @@ if [ "$1" = "configure" ]; then
     #   업데이트 중 파일이 잠깐 없어지는 틈(옛 sekai-desktop 이 내려놓고 이 패키지가 다시 놓기 전)에 합성기가
     #   스스로 설정을 다시 읽으면 "source= ... found no match" 오류 막대가 뜨고 기본 모양으로 굳었다 (2026-10-01,
     #   0928 설치본을 로그인한 채 업데이트해서 확인). 여기선 파일이 모두 제자리에 있다
-    for sock in /run/user/*/hypr/*/.socket.sock; do
-        [ -S "$sock" ] || continue
-        d=${sock%/.socket.sock}; sig=${d##*/}; rt=${d%/hypr/*}; uid=${rt##*/}
-        u=$(getent passwd "$uid" | cut -d: -f1)
-        [ -n "$u" ] || continue
-        runuser -u "$u" -- env XDG_RUNTIME_DIR="$rt" HYPRLAND_INSTANCE_SIGNATURE="$sig" \
-            hyprctl reload >/dev/null 2>&1 || true
-    done
+    hypr_each reload
+    rm -rf /usr/share/sekai/hypr/.sekai-keep   # preinst 가 걸어 둔 하드 링크 (HYPR_KEEP) — reload 로 감시를 옮긴 뒤
 fi
 PI
 cat > "$STAGE_DE/DEBIAN/prerm" <<'PR'
@@ -273,7 +302,7 @@ if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
     done
 fi
 PO
-chmod 755 "$STAGE_DE/DEBIAN/postinst" "$STAGE_DE/DEBIAN/prerm" "$STAGE_DE/DEBIAN/postrm"
+chmod 755 "$STAGE_DE/DEBIAN/preinst" "$STAGE_DE/DEBIAN/postinst" "$STAGE_DE/DEBIAN/prerm" "$STAGE_DE/DEBIAN/postrm"
 
 copyright "$STAGE_DE" sekai-de
 # GTK 테마(Sekai-Light · Sekai-Dark)는 Apache 2.0 이 아니라 GPL-3.0 — 원본 저작권·출처·소스 위치를 함께 적는다
@@ -517,6 +546,25 @@ Description: SekaiOS desktop (metapackage)
  (sekaios-base) and the default set of drivers, firmware, printing,
  sound, network and applications.
 CTRL
+
+# 옛 판(합성기 설정을 싣던 sekai-desktop)에서 올릴 때 이 패키지가 먼저 풀리면 /usr/share/sekai/hypr 의 파일이
+#   sekai-de 가 다시 놓을 때까지 잠깐 없다 — 그 전에 떠 있는 세션의 자동 재적용을 끄고, 끝(모든 부품이 제자리)에 다시 읽힌다
+cat > "$STAGE_M/DEBIAN/preinst" <<PRI
+#!/bin/sh
+set -e
+$HYPR_KEEP
+PRI
+cat > "$STAGE_M/DEBIAN/postinst" <<PI
+#!/bin/sh
+set -e
+$HYPR_EACH
+if [ "\$1" = configure ]; then
+    hypr_each reload
+    $HYPR_KEEP_DROP
+fi
+exit 0
+PI
+chmod 755 "$STAGE_M/DEBIAN/preinst" "$STAGE_M/DEBIAN/postinst"
 
 for pkg in sekai-de sekaios-base sekai-desktop; do
     case "$pkg" in sekai-de) st="$STAGE_DE" ;; sekaios-base) st="$STAGE_B" ;; *) st="$STAGE_M" ;; esac

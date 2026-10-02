@@ -8,7 +8,7 @@ OUT=/build/deb
 #   예전엔 여기서 원본에 patch-*.py 를 적용했다. 이제 그 고친 것들은 포크의 커밋이다 (git log v0.50.1..sekai).
 #   재현할 수 있게 커밋을 고정한다 — 합성기를 고치면 포크에 커밋·푸시하고 여기 REF 와 rev_for 를 올린다.
 SEKAICOMP_URL="https://github.com/caterpillar321/worldlink.git"
-SEKAICOMP_REF="720394213312a2b556d7679afc1335faaf54c6b4"
+SEKAICOMP_REF="5dfee569a5c3f310f47a92429481e9253ec7a269"
 MAINT="SekaiOS <sekai@localhost>"
 REV="sekai2"
 # 패키지별 리비전 (고친 패키지만 올린다 → apt 가 그 패키지만 업그레이드)
@@ -61,7 +61,8 @@ REV="sekai2"
 #      sekai23: 하위 면·입력도 xdg 창 영역 기준 — 스스로 그림자를 두는 앱(Firefox)이 밀려 잘리던 것 (포크 5bf2e47) — hyprbars sekai20 · hyprexpo sekai8
 #   ── 2026-10-02: 이름을 WorldLink 로 — 패키지 worldlink (sekai24). sekaicomp·hyprland 는 worldlink 를 요구하는 빈 전환 패키지
 #      (설치된 PC 의 sekai-update 보호 목록이 둘 다 지우는 업데이트를 막는다 — 지우지 않고 넘어오게). 포크 7203942 — hyprbars sekai21 · hyprexpo sekai9
-rev_for() { case "$1" in hyprbars) echo sekai21 ;; hyprexpo) echo sekai9 ;; worldlink|sekaicomp|hyprland) echo sekai24 ;; *) echo "$REV" ;; esac; }
+#      sekai25: 앱이 고른 장식 모드를 따른다 — 제목줄을 스스로 그리는 앱엔 막대 없음, hyprctl 에 sekaiCSD (포크 5dfee56) — hyprbars sekai22 · hyprexpo sekai10
+rev_for() { case "$1" in hyprbars) echo sekai22 ;; hyprexpo) echo sekai10 ;; worldlink|sekaicomp|hyprland) echo sekai25 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"

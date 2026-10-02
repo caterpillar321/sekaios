@@ -199,8 +199,10 @@ class Jobs:
         if self.cat.is_installed(app):
             return "installed"
         if merged and app.alt is not None:
-            return self.state_of(app.alt, merged=False)
-        return "none"
+            st = self.state_of(app.alt, merged=False)
+            if st != "none":
+                return st
+        return "installed" if self.cat.external(app) else "none"
 
     def progress_of(self, app):
         if self.current and self.current[1] is app:
@@ -268,9 +270,26 @@ class Jobs:
             appmgr.run_helper([op, app.pkg], line, done, repo=True)
 
 
-def launch(app):
-    """설치된 앱 열기 → 열었으면 True"""
+def launch(app, cat=None):
+    """설치된 앱 열기 → 열었으면 True. cat 을 주면 스토어 밖에서 깐 판(업체 .deb 등)도 연다"""
     from gi.repository import Gdk, Gio
+    ext = cat.external(app) if cat is not None else None
+    if ext:
+        paths = [ext[1]] if ext[1] else []
+        if ext[2]:
+            import subprocess
+            res = subprocess.run(["dpkg-query", "-L", ext[2]], capture_output=True, text=True)
+            paths += [p for p in res.stdout.splitlines()
+                      if p.startswith("/usr/share/applications/") and p.endswith(".desktop")]
+        for p in paths:
+            info = Gio.DesktopAppInfo.new_from_filename(p) if os.path.exists(p) else None
+            if info is None or info.get_nodisplay():
+                continue
+            try:
+                info.launch([], Gdk.Display.get_default().get_app_launch_context())
+                return True
+            except GLib.Error:
+                continue
     ids = app.desktop_ids()
     if app.is_flatpak and f"{app.pkg}.desktop" not in ids:
         ids.append(f"{app.pkg}.desktop")
