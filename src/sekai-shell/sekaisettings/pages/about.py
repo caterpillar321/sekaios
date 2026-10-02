@@ -47,16 +47,16 @@ def _cpu():
 
 
 def _compositor():
-    """창을 그리는 합성기 — SekaiCompose(sekaicomp 패키지 판, Hyprland 의 포크) 또는 기본 화면 모드의 xfwm4"""
+    """창을 그리는 합성기 — WorldLink(worldlink 패키지 판, Hyprland 의 포크 — 처음 이름 SekaiCompose) 또는 기본 화면 모드의 xfwm4"""
     import subprocess
     if os.environ.get("SEKAI_BASIC") == "1" or os.environ.get("XDG_SESSION_TYPE") == "x11":
         return "xfwm4 (기본 화면 모드)"
     try:
-        v = subprocess.run(["dpkg-query", "-W", "-f=${Version}", "sekaicomp"], capture_output=True, text=True,
+        v = subprocess.run(["dpkg-query", "-W", "-f=${Version}", "worldlink"], capture_output=True, text=True,
                            timeout=3).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         v = ""
-    return f"SekaiCompose {v.split('-')[0]}" if v else "SekaiCompose"
+    return f"WorldLink {v.split('-')[0]}" if v else "WorldLink"
 
 
 def build_about(store):

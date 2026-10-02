@@ -69,16 +69,16 @@ for deb in "$P"/packages/*.deb; do
         best[$name]=$deb
     fi
 done
-# 합성기 플러그인은 sekaicomp 의 "정확한" 판을 요구한다 (같은 커밋 해시로 빌드돼야 로드된다).
-#   저장소에 실릴 sekaicomp 와 어긋나면 apt 가 플러그인 → sekai-de 를 지우려 하고, 설치된 PC 의 sekai-update 는
+# 합성기 플러그인은 worldlink 의 "정확한" 판을 요구한다 (같은 커밋 해시로 빌드돼야 로드된다).
+#   저장소에 실릴 worldlink 와 어긋나면 apt 가 플러그인 → sekai-de 를 지우려 하고, 설치된 PC 의 sekai-update 는
 #   그 업데이트를 통째로 막는다 — 모든 설치본의 업데이트가 멈춘다. 그래서 여기서 거부한다.
-if [ -n "${best[sekaicomp]:-}" ]; then
-    COMP_VER=$(dpkg-deb -f "${best[sekaicomp]}" Version)
+if [ -n "${best[worldlink]:-}" ]; then
+    COMP_VER=$(dpkg-deb -f "${best[worldlink]}" Version)
     for plug in hyprbars hyprexpo; do
         [ -n "${best[$plug]:-}" ] || continue
-        want=$(dpkg-deb -f "${best[$plug]}" Depends | grep -o 'sekaicomp (= [^)]*)' | sed 's/.*= //; s/)//')
+        want=$(dpkg-deb -f "${best[$plug]}" Depends | grep -o 'worldlink (= [^)]*)' | sed 's/.*= //; s/)//')
         if [ "$want" != "$COMP_VER" ]; then
-            echo "E: $plug 이(가) sekaicomp (= ${want:-?}) 을 요구하는데 저장소의 sekaicomp 는 $COMP_VER 입니다."
+            echo "E: $plug 이(가) worldlink (= ${want:-?}) 을 요구하는데 저장소의 worldlink 는 $COMP_VER 입니다."
             echo "   SEKAICOMP_REF 를 올렸으면 플러그인 리비전도 올려 다시 빌드하세요 (scripts/hypr/build-inner.sh 의 rev_for)."
             exit 1
         fi

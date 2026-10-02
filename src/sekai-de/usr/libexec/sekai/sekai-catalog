@@ -1,0 +1,21 @@
+#!/bin/sh
+# SekaiDE 스토어 — 앱 목록(AppStream)이 없으면 한 번 받는다 (sekai-store-catalog.service 가 root 로 부른다)
+#   옛 SekaiOS 에서 올라온 PC: 업데이트의 목록 받기가 appstream·flatpak 이 깔리기 전에 끝나서 목록이 없다
+#   (그 업데이트는 옛 업데이트 도우미가 돌린다). 새로 설치한 PC 도 이미지에 목록이 없을 수 있다.
+#   목록이 있으면 아무것도 하지 않는다 — 그 뒤는 apt-daily(하루 한 번)·스토어·설정 › 업데이트가 새로 받는다.
+have_debian() { ls /var/lib/apt/lists/*_dep11_Components-* >/dev/null 2>&1; }
+have_flathub() {
+    command -v flatpak >/dev/null || return 0
+    flatpak remotes --system 2>/dev/null | grep -q '^flathub' || return 0
+    [ -e /var/lib/flatpak/appstream/flathub/x86_64/active/appstream.xml.gz ]
+}
+have_debian && have_flathub && exit 0
+# 업데이트 도중에(패키지 설치 스크립트에서) 불렸으면 apt·dpkg 가 끝날 때까지 기다린다 (최대 30분)
+i=0
+while pgrep -x 'apt|apt-get|dpkg|aptitude|unattended-upgr' >/dev/null 2>&1; do
+    i=$((i + 1)); [ "$i" -gt 360 ] && exit 0
+    sleep 5
+done
+have_debian || apt-get -q -o DPkg::Lock::Timeout=120 update >/dev/null 2>&1 || true
+have_flathub || flatpak update --appstream --system --noninteractive >/dev/null 2>&1 || true
+exit 0

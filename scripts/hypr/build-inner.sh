@@ -4,11 +4,11 @@ set -euo pipefail
 
 SRC=/build/src
 OUT=/build/deb
-# SekaiCompose — Hyprland v0.50.1 에서 갈라진 SekaiOS 의 합성기 (hyprbars 포함).
+# WorldLink(처음 이름 SekaiCompose) — Hyprland v0.50.1 에서 갈라진 SekaiOS 의 합성기 (hyprbars 포함).
 #   예전엔 여기서 원본에 patch-*.py 를 적용했다. 이제 그 고친 것들은 포크의 커밋이다 (git log v0.50.1..sekai).
 #   재현할 수 있게 커밋을 고정한다 — 합성기를 고치면 포크에 커밋·푸시하고 여기 REF 와 rev_for 를 올린다.
 SEKAICOMP_URL="https://github.com/caterpillar321/sekaicompose.git"
-SEKAICOMP_REF="5bf2e478567fd46d5634a8bdd34e475b513ca206"
+SEKAICOMP_REF="720394213312a2b556d7679afc1335faaf54c6b4"
 MAINT="SekaiOS <sekai@localhost>"
 REV="sekai2"
 # 패키지별 리비전 (고친 패키지만 올린다 → apt 가 그 패키지만 업그레이드)
@@ -59,7 +59,9 @@ REV="sekai2"
 #      sekai21: 대화상자를 되살리면 부모도, hyprctl clients 에 sekaiParent (포크 b226561) — hyprbars sekai18 · hyprexpo sekai6
 #      sekai22: 크기를 바꿀 수 없는 창은 최대화·스냅하지 않는다, hyprctl clients 에 sekaiFixed (포크 e74f689) — hyprbars sekai19 · hyprexpo sekai7
 #      sekai23: 하위 면·입력도 xdg 창 영역 기준 — 스스로 그림자를 두는 앱(Firefox)이 밀려 잘리던 것 (포크 5bf2e47) — hyprbars sekai20 · hyprexpo sekai8
-rev_for() { case "$1" in hyprbars) echo sekai20 ;; hyprexpo) echo sekai8 ;; sekaicomp|hyprland) echo sekai23 ;; *) echo "$REV" ;; esac; }
+#   ── 2026-10-02: 이름을 WorldLink 로 — 패키지 worldlink (sekai24). sekaicomp·hyprland 는 worldlink 를 요구하는 빈 전환 패키지
+#      (설치된 PC 의 sekai-update 보호 목록이 둘 다 지우는 업데이트를 막는다 — 지우지 않고 넘어오게). 포크 7203942 — hyprbars sekai21 · hyprexpo sekai9
+rev_for() { case "$1" in hyprbars) echo sekai21 ;; hyprexpo) echo sekai9 ;; worldlink|sekaicomp|hyprland) echo sekai24 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
@@ -146,7 +148,7 @@ fetch() {
 }
 
 # ── 패키지별 후처리 (build_cmake 가 post_<pkg> 를 자동 호출) ──
-post_sekaicomp() {
+post_worldlink() {
     local stage="$1"
     # Hyprland 기본 배경화면 46MB — SekaiOS 는 자체 배경을 쓰므로 제거
     local before=$(du -sm "$stage" | cut -f1)
@@ -165,16 +167,16 @@ extra_deps_for() {
         hyprcursor)   echo "hyprlang" ;;
         hyprgraphics) echo "hyprutils" ;;
         aquamarine)   echo "hyprutils" ;;
-        sekaicomp)    echo "hyprutils, hyprlang, hyprcursor, hyprgraphics, aquamarine, xwayland, binutils" ;;
-        hyprbars|hyprexpo) echo "sekaicomp (= 0.50.1-$(rev_for sekaicomp))" ;;
+        worldlink)    echo "hyprutils, hyprlang, hyprcursor, hyprgraphics, aquamarine, xwayland, binutils" ;;
+        hyprbars|hyprexpo) echo "worldlink (= 0.50.1-$(rev_for worldlink))" ;;
         *)            echo "" ;;
     esac
 }
 
-# control 에 더 적을 줄 — 이름을 바꾼 합성기가 옛 hyprland 의 파일(/usr/bin/Hyprland·hyprctl·헤더 등)을 넘겨받는다
+# control 에 더 적을 줄 — 이름을 바꾼 합성기가 옛 hyprland·sekaicomp 의 파일(/usr/bin/Hyprland·sekaicomp·hyprctl·헤더 등)을 넘겨받는다
 extra_control_for() {
     case "$1" in
-        sekaicomp) printf 'Replaces: hyprland (<< 0.50.1-sekai18)\nBreaks: hyprland (<< 0.50.1-sekai18)\n' ;;
+        worldlink) printf 'Replaces: hyprland (<< 0.50.1-sekai18), sekaicomp (<< 0.50.1-sekai24)\nBreaks: hyprland (<< 0.50.1-sekai18), sekaicomp (<< 0.50.1-sekai24)\n' ;;
     esac
 }
 
@@ -215,9 +217,9 @@ add_copyright() {
     {
         echo "패키지:  $pkg (SekaiOS 빌드)"
         case "$pkg" in
-            sekaicomp|hyprbars)
-                echo "소스:    SekaiCompose — https://github.com/caterpillar321/sekaicompose  (커밋 $SEKAICOMP_REF)"
-                if [ "$pkg" = sekaicomp ]; then
+            worldlink|hyprbars)
+                echo "소스:    WorldLink — https://github.com/caterpillar321/sekaicompose  (커밋 $SEKAICOMP_REF)"
+                if [ "$pkg" = worldlink ]; then
                     echo "원본:    Hyprland — https://github.com/hyprwm/Hyprland  (태그 v0.50.1 에서 갈라진 포크)"
                 else
                     echo "원본:    hyprbars — https://github.com/hyprwm/hyprland-plugins  (태그 v0.50.0, plugins/hyprbars 로 가져옴)"
@@ -426,22 +428,29 @@ fetch sekaicompose v0.50.1
 install -m644 "$SRC/sekaicompose/sekai/cxx26-compat.hpp" /build/cxx26-compat.hpp
 verify_shim
 # 이름을 바꾸기 전의 hyprland(합성기 본체, sekai17 이하)가 빌드 환경에 깔려 있으면 지운다 —
-#   sekaicomp 가 그 파일을 넘겨받는데, 둘이 함께 남아 있으면 apt 가 빌드 환경을 "깨짐"으로 보고 멈춘다
+#   worldlink 가 그 파일을 넘겨받는데, 둘이 함께 남아 있으면 apt 가 빌드 환경을 "깨짐"으로 보고 멈춘다.
+#   이름을 WorldLink 로 바꾸기 전의 sekaicomp(합성기 본체, sekai23 이하)도 같다
 if v=$(dpkg-query -W -f='${Version}' hyprland 2>/dev/null) && dpkg --compare-versions "$v" lt 0.50.1-sekai18; then
-    say "빌드 환경의 옛 hyprland ($v) 지움 — sekaicomp 로 바뀐다"
+    say "빌드 환경의 옛 hyprland ($v) 지움 — worldlink 로 바뀐다"
     dpkg --purge --force-depends hyprland >/dev/null 2>&1 || true
 fi
-build_cmake sekaicompose         v0.50.1 sekaicomp            "SekaiCompose - the Wayland compositor of SekaiOS (a fork of Hyprland)" \
+if v=$(dpkg-query -W -f='${Version}' sekaicomp 2>/dev/null) && dpkg --compare-versions "$v" lt 0.50.1-sekai24; then
+    say "빌드 환경의 옛 sekaicomp ($v) 지움 — worldlink 로 바뀐다"
+    dpkg --purge --force-depends sekaicomp >/dev/null 2>&1 || true
+fi
+build_cmake sekaicompose         v0.50.1 worldlink            "WorldLink - the Wayland compositor of SekaiOS (a fork of Hyprland)" \
             -DNO_XWAYLAND=false -DNO_SYSTEMD=false \
             -DCMAKE_CXX_FLAGS="-include /build/cxx26-compat.hpp"
 
-# 전환 패키지: 옛 이름 hyprland → sekaicomp (빈 패키지, 지우지 않고 넘어오게)
-build_transitional hyprland 0.50.1 "sekaicomp (>= 0.50.1-sekai18)" \
-    "transitional package - the compositor is now sekaicomp (SekaiCompose)"
+# 전환 패키지: 옛 이름 hyprland·sekaicomp → worldlink (빈 패키지, 지우지 않고 넘어오게)
+build_transitional hyprland 0.50.1 "worldlink (>= 0.50.1-sekai24)" \
+    "transitional package - the compositor is now worldlink (WorldLink)"
+build_transitional sekaicomp 0.50.1 "worldlink (>= 0.50.1-sekai24)" \
+    "transitional package - SekaiCompose is now worldlink (WorldLink)"
 
 # Hyprland 플러그인
 build_plugin sekaicompose     v0.50.1 plugins/hyprbars hyprbars 0.50.0 \
-             "Window title bars for SekaiCompose (from hyprland-plugins)"
+             "Window title bars for WorldLink (from hyprland-plugins)"
 build_plugin hyprland-plugins v0.50.0 hyprexpo  hyprexpo  0.50.0 \
              "Hyprland plugin: workspace overview (task view)"
 

@@ -80,7 +80,7 @@ s = Store(); s.write_hypr_fragment(); theme.apply_system(theme.mode_of(s.get("ap
 UP="${XDG_RUNTIME_DIR:-/tmp}/sekai-session.up"
 rm -f "$UP"
 started=$(date +%s)
-sekaicomp >"$LOGDIR/session.log" 2>&1
+worldlink >"$LOGDIR/session.log" 2>&1
 rc=$?
 if [ ! -e "$UP" ] && [ $rc -ne 0 ] && [ $(( $(date +%s) - started )) -lt 10 ]; then
     export SEKAI_BASIC=1 SEKAI_BASIC_REASON=crash

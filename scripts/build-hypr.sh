@@ -87,7 +87,7 @@ NEW=$(grep -c '^Setting up' /tmp/.deps.log 2>/dev/null || echo 0)
 say "의존성 준비 완료 (이번에 새로 설치: ${NEW}개)"
 
 install -m755 "$SELF/hypr/build-inner.sh"   "$BR/build/build-inner.sh"
-#   Hyprland·hyprbars 의 고친 것과 C++26 shim 은 SekaiCompose 포크에 있다 (build-inner.sh 가 받는다)
+#   Hyprland·hyprbars 의 고친 것과 C++26 shim 은 WorldLink(SekaiCompose) 포크에 있다 (build-inner.sh 가 받는다)
 
 # ── 빌드 ─────────────────────────────────────────────
 say "빌드 시작"; echo

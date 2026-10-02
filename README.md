@@ -10,7 +10,7 @@
 </p>
 
 <p align="center"><i>A Windows-like Linux desktop built on Debian 13. Korean-first. The desktop shell and its apps are written
-from scratch in Python + GTK 3, running on SekaiCompose (our fork of the Hyprland compositor). Under active development.</i></p>
+from scratch in Python + GTK 3, running on WorldLink (our fork of the Hyprland compositor). Under active development.</i></p>
 
 ![시작 메뉴를 연 SekaiOS 바탕화면](docs/screenshots/start-menu.png)
 
@@ -33,7 +33,7 @@ SekaiOS 는 윈도우 11 을 쓰던 분이 설명서 없이 바로 쓸 수 있�
 
 **최근에 한 일**
 
-- 합성기를 Hyprland 패치 묶음에서 독자 포크인 **SekaiCompose**(`sekaicomp`)로 옮겼습니다
+- 합성기를 Hyprland 패치 묶음에서 독자 포크인 **WorldLink**(`worldlink`, 처음 이름 SekaiCompose)로 옮겼습니다
 - 데스크톱 환경(**SekaiDE**)을 배포판 부품과 나눠, 데비안에 데스크톱만 따로 깔 수 있게 했습니다
 - 잘못 누르거나 끄는 도중 손을 떼는 등 **오조작 시험**으로 창 단추·끌기·작업 표시줄·대화상자의 버그를 잡았습니다
 - 설치 USB 의 부팅 멈춤, 라이브 세션 잠금, 다중 모니터, 부팅 화면 깜박임 같은 실기 문제를 고쳤습니다
@@ -64,7 +64,7 @@ SekaiOS 는 윈도우 11 을 쓰던 분이 설명서 없이 바로 쓸 수 있�
 ## SekaiDE 만 쓰기
 
 SekaiOS 의 데스크톱 환경(SekaiDE)은 배포판과 따로 깔 수 있습니다. 데비안 13(trixie)에 SekaiOS 저장소를 더한 뒤
-`sudo apt install sekai-de` 하시면 셸·로그인 화면·합성기(SekaiCompose)가 들어오고, 부팅·업데이트 같은 배포판 부품
+`sudo apt install sekai-de` 하시면 셸·로그인 화면·합성기(WorldLink)가 들어오고, 부팅·업데이트 같은 배포판 부품
 (`sekaios-base`)은 깔리지 않습니다. (설정 앱의 그래픽 드라이버·업데이트 페이지는 그 부품이 있을 때만 보입니다)
 
 ## 설치와 업데이트
@@ -91,7 +91,7 @@ SekaiOS 의 화면은 직접 만들었습니다. 그 밑의 운영체제 부품(
 
 | 부품 | 쓰임 | 라이선스 · 고친 곳 |
 |---|---|---|
-| [SekaiCompose](https://github.com/caterpillar321/sekaicompose) — Hyprland 0.50.1 + hyprbars 의 포크 | 창을 그리는 합성기, 창 제목 표시줄 | BSD-3 · 포크의 커밋 (`git log v0.50.1..sekai`) |
+| [WorldLink](https://github.com/caterpillar321/sekaicompose) — Hyprland 0.50.1 + hyprbars 의 포크 | 창을 그리는 합성기, 창 제목 표시줄 | BSD-3 · 포크의 커밋 (`git log v0.50.1..sekai`) |
 | hyprexpo | 작업 보기 플러그인 | BSD-3 · 원본 그대로 |
 | Fluent-gtk-theme (vinceliuice) | GTK 테마 Sekai-Light · Sekai-Dark 의 바탕 | GPL-3.0 · `third_party/fluent-gtk-theme` |
 | Plymouth | 부팅 화면 | GPL-2.0 · `scripts/hypr/patch-plymouth-*.py` |
@@ -127,7 +127,7 @@ SekaiOS 의 화면은 직접 만들었습니다. 그 밑의 운영체제 부품(
 | (패키지 `sekai-desktop`) | 메타패키지 — `sekai-de` + `sekaios-base` + 드라이버·펌웨어·인쇄·소리·기본 앱 |
 | `src/sekai-installer/` | 설치 프로그램 (패키지 `sekai-installer`) |
 | `overlay/`, `config/` | 설치 이미지에 직접 넣는 파일, 라이브 이미지 부트로더 설정 |
-| `scripts/` | 빌드 스크립트 (`scripts/hypr/` — SekaiCompose·Hyprland 라이브러리 빌드, Plymouth 패치) |
+| `scripts/` | 빌드 스크립트 (`scripts/hypr/` — WorldLink·Hyprland 라이브러리 빌드, Plymouth 패치) |
 | `third_party/` | 고쳐 쓰는 외부 원본과 그 라이선스 |
 | `docs/` | 문서 · 스크린샷 |
 
@@ -137,7 +137,7 @@ SekaiOS 의 화면은 직접 만들었습니다. 그 밑의 운영체제 부품(
 
 ```sh
 sudo scripts/mkrootfs.sh && sudo scripts/mkrootfs.sh --replace   # 데비안 rootfs 를 처음부터 (config/rootfs-packages.list)
-sudo scripts/build-hypr.sh        # SekaiCompose(합성기)·라이브러리·플러그인을 .deb 으로 (packages/)
+sudo scripts/build-hypr.sh        # WorldLink(합성기)·라이브러리·플러그인을 .deb 으로 (packages/)
 scripts/pack-shell.sh             # sekai-shell · sekai-de · sekaios-base · sekai-desktop · sekai-installer .deb
 sudo scripts/finalize.sh          # rootfs 에 설치 → squashfs → ISO
 scripts/build-repo.sh             # 서명된 apt 저장소 (repo/)
@@ -153,6 +153,6 @@ scripts/publish-repo.sh           # 저장소 게시
 
 SekaiOS 의 코드는 [Apache License 2.0](LICENSE) 입니다.
 고쳐 쓰는 외부 부품은 각자의 라이선스를 따릅니다. GTK 테마는 GPL-3.0(`third_party/fluent-gtk-theme/COPYING`),
-SekaiCompose(Hyprland 포크)와 플러그인은 BSD-3 입니다. 패키지마다 `/usr/share/doc/<패키지>/copyright` 에 출처와 라이선스를 적었습니다.
+WorldLink(Hyprland 포크)와 플러그인은 BSD-3 입니다. 패키지마다 `/usr/share/doc/<패키지>/copyright` 에 출처와 라이선스를 적었습니다.
 
 SekaiOS 는 개인이 만드는 비공식 프로젝트로, SEGA · Colorful Palette · Crypton Future Media 와 관계가 없습니다.

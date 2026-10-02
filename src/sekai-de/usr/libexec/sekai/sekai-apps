@@ -49,7 +49,7 @@ APT_OPTS = ["-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--fo
 WORK = "/var/cache/sekai-apps"
 
 # 이것들을 지우게 되면 설치·제거하지 않는다 (sekai-update 와 같은 목록)
-PROTECTED = re.compile(r"^(sekai-|sekaios-|sekaicomp|hyprland|hyprbars|hyprexpo|greetd|linux-image-amd64$|shim-signed|"
+PROTECTED = re.compile(r"^(sekai-|sekaios-|worldlink|sekaicomp|hyprland|hyprbars|hyprexpo|greetd|linux-image-amd64$|shim-signed|"
                        r"grub-efi-amd64-signed|systemd$|network-manager$)")
 PKG_NAME = re.compile(r"^[a-z0-9][a-z0-9+.-]+(:[a-z0-9]+)?$")
 

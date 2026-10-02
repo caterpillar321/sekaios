@@ -1,0 +1,15 @@
+[Unit]
+Description=SekaiOS store catalog (download once if missing)
+Documentation=file:///usr/libexec/sekai/sekai-catalog
+# 목록이 있으면 바로 끝난다. 부팅을 붙잡지 않게 simple (oneshot 이면 multi-user 까지 기다린다)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/sekai/sekai-catalog
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

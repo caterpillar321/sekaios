@@ -116,7 +116,7 @@ Maintainer: SekaiOS <sekai@localhost>
 Section: x11
 Priority: optional
 Depends: python3, python3-gi, python3-gi-cairo, gir1.2-gtk-3.0,
- gir1.2-gtklayershell-0.1, sekaicomp, kitty, foot, fuzzel,
+ gir1.2-gtklayershell-0.1, worldlink, kitty, foot, fuzzel,
  adwaita-icon-theme, papirus-icon-theme, swaybg, swayidle,
  gir1.2-gtksessionlock-0.1, libgtk-session-lock0, python3-pampy,
  libglib2.0-bin, sekai-winshot, gir1.2-gudev-1.0, pulseaudio-utils,
@@ -126,7 +126,7 @@ Recommends: wireplumber, swaylock, gir1.2-flatpak-1.0
 Provides: polkit-1-auth-agent, notification-daemon
 Description: SekaiOS desktop shell
  Panel, taskbar, start menu and the system settings app for
- SekaiOS, built on gtk-layer-shell and the SekaiCompose (Hyprland) IPC.
+ SekaiOS, built on gtk-layer-shell and the WorldLink (Hyprland) IPC.
 EOF
 
 echo "==> sekai-shell .deb 생성"
@@ -192,6 +192,9 @@ if [ "$1" = "configure" ]; then
     [ -d /run/systemd/system ] && systemctl daemon-reload >/dev/null 2>&1 || true
     systemctl enable greetd.service >/dev/null 2>&1 || true
     systemctl set-default graphical.target >/dev/null 2>&1 || true
+    # 스토어 앱 목록 — 없으면 이 업데이트가 끝난 뒤 뒤에서 받는다 (부팅 때도 없을 때만)
+    systemctl enable sekai-store-catalog.service >/dev/null 2>&1 || true
+    [ -d /run/systemd/system ] && systemctl start --no-block sekai-store-catalog.service >/dev/null 2>&1 || true
     # 관리자(sudo)는 시스템 기록(이벤트 뷰어)·프린터 관리(CUPS)도 — 새 계정은 sekai-users 가 넣는다,
     #   이미 있는 관리자는 여기서 (다음 로그인부터)
     for g in systemd-journal lpadmin; do
@@ -308,7 +311,7 @@ Maintainer: SekaiOS <sekai@localhost>
 Section: x11
 Priority: optional
 Depends: sekai-shell (= ${FULL}),
- sekaicomp (>= 0.50.1-sekai18), hyprbars (>= 0.50.0-sekai15), hyprexpo, xwayland,
+ worldlink (>= 0.50.1-sekai24), hyprbars (>= 0.50.0-sekai21), hyprexpo, xwayland,
  xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr,
  swaybg, swayidle, swaylock, grim, slurp, wl-clipboard, cliphist, libnotify-bin,
  brightnessctl, playerctl, wtype, pkexec,
@@ -324,9 +327,9 @@ Replaces: sekai-desktop (<< ${FULL})
 Breaks: sekai-desktop (<< ${FULL})
 Description: SekaiDE - the SekaiOS desktop environment
  The desktop session of SekaiOS: login screen, lock screen, first-boot
- setup, compositor configuration for SekaiCompose, GTK themes, icons,
+ setup, compositor configuration for WorldLink, GTK themes, icons,
  wallpapers, menus and the helpers behind them. Pulls in sekai-shell
- (taskbar, start menu, settings and apps) and the SekaiCompose compositor.
+ (taskbar, start menu, settings and apps) and the WorldLink compositor.
  Works on its own on Debian 13; SekaiOS adds sekaios-base on top.
 CTRL
 
@@ -510,7 +513,7 @@ Recommends: htop, tmux, tree, ncdu, vim, nano, git, curl, wget,
 Conflicts: fnott
 Description: SekaiOS desktop (metapackage)
  Everything that makes up SekaiOS: the SekaiDE desktop environment
- (sekai-de, sekai-shell, SekaiCompose), the SekaiOS base system
+ (sekai-de, sekai-shell, WorldLink), the SekaiOS base system
  (sekaios-base) and the default set of drivers, firmware, printing,
  sound, network and applications.
 CTRL

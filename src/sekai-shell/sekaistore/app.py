@@ -274,11 +274,12 @@ class StoreWindow(Gtk.ApplicationWindow):
             old = self.stack.get_child_by_name(name)
             if old is not None:
                 old.destroy()
+        self._flathub_refresh()
         if not self.cat.apps:
             self.stack.add_named(self._empty_page(), "empty")
             self.stack.set_visible_child_name("empty")
+            self._wait_catalog()
             return False
-        self._flathub_refresh()
         self.stack.add_named(self._home_page(), "home")
         self.apps_page = ListPage(self, "apps")
         self.games_page = ListPage(self, "games")
@@ -316,6 +317,24 @@ class StoreWindow(Gtk.ApplicationWindow):
         v.pack_start(self.empty_status, False, False, 0)
         v.show_all()
         return v
+
+    def _wait_catalog(self):
+        """빈 목록 — 뒤에서 받는 중일 수 있다 (sekai-store-catalog·Flathub 받기). 목록 파일이 생기면 다시 읽는다"""
+        import glob
+
+        def have():
+            return bool(glob.glob("/var/lib/apt/lists/*_dep11_Components-*")) or os.path.exists(self.FLATHUB_AS)
+        before = have()
+
+        def tick():
+            if self.cat.apps or self.stack.get_visible_child_name() != "empty":
+                return False
+            if have() and not before and not getattr(self, "_refreshing", False):
+                self._load()
+                return False
+            return True
+        if not before:
+            GLib.timeout_add_seconds(5, tick)
 
     def refresh_catalog(self, status=None):
         """apt update (관리자) → 목록 다시 읽기"""
