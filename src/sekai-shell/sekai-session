@@ -88,6 +88,9 @@ if [ ! -e "$UP" ] && [ $rc -ne 0 ] && [ $(( $(date +%s) - started )) -lt 10 ]; t
     export SEKAI_BASIC=1 SEKAI_BASIC_REASON=crash
     exec /usr/lib/sekai/x11/start /usr/lib/sekai/x11/session
 fi
+# 그래픽 세션 서비스(포털·gvfs …)를 내린다 — 사용자 systemd 는 다른 로그인(SSH 등)이 있으면 살아 남아,
+#   그대로 두면 다음 세션에 옛 화면을 붙든 포털이 남는다 (sekai-session.target)
+systemctl --user stop sekai-session.target graphical-session.target 2>/dev/null
 # 로그아웃: 이 세션에서 띄운 것(패널·트레이 앱·입력기…)을 모두 정리해야 세션이 닫힌다.
 #   데비안 기본값(KillUserProcesses=no)에선 남은 프로세스 때문에 세션이 "closing" 으로 남고,
 #   로그인 화면이 그 사용자를 이미 로그인한 것으로 본다. (이 스크립트도 함께 끝난다)

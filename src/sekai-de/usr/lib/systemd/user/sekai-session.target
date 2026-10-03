@@ -1,0 +1,10 @@
+# SekaiOS 그래픽 세션 — 합성기(WorldLink)가 뜨면 hyprland.conf 가 켜고, 끝나면 sekai-session 이 끈다.
+#   graphical-session.target 을 함께 올리고 내린다 (GNOME·KDE 처럼). 포털·gvfs·키링 같은 사용자 서비스가 그것에
+#   묶여(PartOf) 있어 로그아웃 때 같이 내려가고, 다음 로그인 때 새 세션의 환경으로 다시 뜬다 — 예전엔 사용자 systemd 가
+#   로그아웃 뒤에도 살아 있으면 포털이 옛 세션의 화면을 붙든 채 남아, 다시 로그인한 직후 Flatpak 앱이 25초씩 늦게 떴다
+[Unit]
+Description=SekaiOS 그래픽 세션
+Documentation=man:systemd.special(7)
+BindsTo=graphical-session.target
+Wants=graphical-session-pre.target
+After=graphical-session-pre.target

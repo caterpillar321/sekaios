@@ -8,7 +8,7 @@ OUT=/build/deb
 #   예전엔 여기서 원본에 patch-*.py 를 적용했다. 이제 그 고친 것들은 포크의 커밋이다 (git log v0.50.1..sekai).
 #   재현할 수 있게 커밋을 고정한다 — 합성기를 고치면 포크에 커밋·푸시하고 여기 REF 와 rev_for 를 올린다.
 SEKAICOMP_URL="https://github.com/caterpillar321/worldlink.git"
-SEKAICOMP_REF="9c98341d8a80a400f5d410599a2b6559460f7f2f"
+SEKAICOMP_REF="741537222247862abc13ab78ba902561536df5c4"
 MAINT="SekaiOS <sekai@localhost>"
 REV="sekai2"
 # 패키지별 리비전 (고친 패키지만 올린다 → apt 가 그 패키지만 업그레이드)
@@ -64,7 +64,7 @@ REV="sekai2"
 #      sekai25: 앱이 고른 장식 모드를 따른다 — 제목줄을 스스로 그리는 앱엔 막대 없음, hyprctl 에 sekaiCSD (포크 5dfee56) — hyprbars sekai22 · hyprexpo sekai10
 #      sekai26: 장식 모드 답은 늘 server (client 로 답하자 GTK 대화상자 단추 누름이 빠짐), 대화상자는 막대 유지 (포크 f2a43d5) — hyprbars sekai23 · hyprexpo sekai11
 #      sekai27: 최소·최대 크기에 창 영역 시작점을 더하지 않는다 — 그림자 둔 대화상자의 크기·누름 (포크 007e06b) — hyprbars sekai24 · hyprexpo sekai12
-#      sekai28: 장식 규약을 안 쓰는 창(GTK4·libadwaita)은 창 영역이 안쪽에서 시작했는지로 제목줄을 앱이 그리는지 안다 (포크 9c98341) — hyprbars sekai25 · hyprexpo sekai13
+#      sekai28: 장식 규약을 안 쓰는 창(GTK4·libadwaita)은 창 영역이 안쪽에서 시작했는지로 제목줄을 앱이 그리는지 안다 (포크 9c98341), 최소화를 할 수 있다고 알림 — GTK4 최소화 단추 (포크 7415372) — hyprbars sekai25 · hyprexpo sekai13
 rev_for() { case "$1" in hyprbars) echo sekai25 ;; hyprexpo) echo sekai13 ;; worldlink|sekaicomp|hyprland) echo sekai28 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"

@@ -283,6 +283,9 @@ if [ "$1" = "configure" ]; then
     #   0928 설치본을 로그인한 채 업데이트해서 확인). 여기선 파일이 모두 제자리에 있다
     hypr_each reload
     rm -rf /usr/share/sekai/hypr/.sekai-keep   # preinst 가 걸어 둔 하드 링크 (HYPR_KEEP) — reload 로 감시를 옮긴 뒤
+    # foot 패키지가 graphical-session.target 에 걸어 둔 foot 서버 — SekaiOS 세션이 그 타깃을 켜면서부터
+    #   쓰지도 않는 서버가 떴다 (터미널은 Nenerobo, foot 은 예비로 그냥 켠다)
+    systemctl --global disable foot-server.service foot-server.socket >/dev/null 2>&1 || true
     # 기본 터미널 — "터미널에서 실행"하는 앱(x-terminal-emulator -e …)도 Nenerobo 로 (kitty 는 20 쯤이다)
     if [ -x /usr/bin/nenerobo ]; then
         update-alternatives --install /usr/bin/x-terminal-emulator x-terminal-emulator /usr/bin/nenerobo 60 \
