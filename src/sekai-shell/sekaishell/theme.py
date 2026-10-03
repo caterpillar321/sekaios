@@ -108,8 +108,48 @@ def apply_system(mode):
 #   다른 창과 달랐다 — libadwaita 는 시스템 GTK 테마를 무시하지만 사용자 CSS(~/.config/gtk-4.0/gtk.css)는 늘 맨 위에
 #   얹는다. Flatpak 앱은 sekaios-base 가 이 폴더를 읽게 해 둔다(flatpak override xdg-config/gtk-4.0:ro).
 #   앱의 아이콘은 숨기고 단추 바탕에 WorldLink 막대와 같은 10px 선 그림을 놓는다 (이름 붙은 아이콘은 CSS 로 못 바꾼다)
-CONTROLS_CSS = "sekai-window-controls.css"
-_CONTROLS_MARK = ".sekai-window-controls"       # @import 를 한 번 넣었다 — 사용자가 지우면 다시 넣지 않는다
+CONTROLS_CSS = "sekai-gtk4.css"
+_CONTROLS_MARK = ".sekai-gtk4"                  # @import 를 한 번 넣었다 — 사용자가 지우면 다시 넣지 않는다
+# libadwaita 의 이름 붙은 색 → Sekai 테마(Sekai-Dark·Light GTK 테마와 같은 값). libadwaita 는 시스템 테마는 무시하지만
+#   이 색들은 바꿔도 된다고 정해 두었다 — 1.6 이상은 CSS 변수(--이름), 그 전은 @define-color(이름) 를 읽는다
+_ADW = {
+    "dark": {
+        "window_bg_color": "#2C2C30", "window_fg_color": "#ffffff",
+        "view_bg_color": "#26262A", "view_fg_color": "#ffffff",
+        "headerbar_bg_color": "#2C2C30", "headerbar_fg_color": "#ffffff", "headerbar_backdrop_color": "#2C2C30",
+        "headerbar_border_color": "#ffffff", "headerbar_shade_color": "rgba(0, 0, 0, 0.36)",
+        "sidebar_bg_color": "#26262A", "sidebar_fg_color": "#ffffff", "sidebar_backdrop_color": "#26262A",
+        "secondary_sidebar_bg_color": "#2C2C30", "secondary_sidebar_fg_color": "#ffffff",
+        "secondary_sidebar_backdrop_color": "#2C2C30",
+        "card_bg_color": "rgba(255, 255, 255, 0.06)", "card_fg_color": "#ffffff",
+        "dialog_bg_color": "#37373C", "dialog_fg_color": "#ffffff",
+        "popover_bg_color": "#37373C", "popover_fg_color": "#ffffff",
+        "thumbnail_bg_color": "#37373C", "thumbnail_fg_color": "#ffffff",
+        "accent_color": "ACCENT_TEXT", "accent_bg_color": "ACCENT", "accent_fg_color": "ACCENT_FG",
+        "destructive_bg_color": "#E53935", "destructive_fg_color": "#ffffff", "destructive_color": "#F28B82",
+        "success_bg_color": "#2E9E5B", "success_fg_color": "#ffffff", "success_color": "#81C995",
+        "warning_bg_color": "#C79A00", "warning_fg_color": "rgba(0, 0, 0, 0.87)", "warning_color": "#FDD633",
+        "error_bg_color": "#E53935", "error_fg_color": "#ffffff", "error_color": "#F28B82",
+    },
+    "light": {
+        "window_bg_color": "#F3F3F5", "window_fg_color": "rgba(0, 0, 0, 0.87)",
+        "view_bg_color": "#FFFFFF", "view_fg_color": "rgba(0, 0, 0, 0.87)",
+        "headerbar_bg_color": "#F3F3F5", "headerbar_fg_color": "rgba(0, 0, 0, 0.87)", "headerbar_backdrop_color": "#F3F3F5",
+        "headerbar_border_color": "rgba(0, 0, 0, 0.87)", "headerbar_shade_color": "rgba(0, 0, 0, 0.07)",
+        "sidebar_bg_color": "#FAFAFB", "sidebar_fg_color": "rgba(0, 0, 0, 0.87)", "sidebar_backdrop_color": "#FAFAFB",
+        "secondary_sidebar_bg_color": "#F3F3F5", "secondary_sidebar_fg_color": "rgba(0, 0, 0, 0.87)",
+        "secondary_sidebar_backdrop_color": "#F3F3F5",
+        "card_bg_color": "#FFFFFF", "card_fg_color": "rgba(0, 0, 0, 0.87)",
+        "dialog_bg_color": "#FFFFFF", "dialog_fg_color": "rgba(0, 0, 0, 0.87)",
+        "popover_bg_color": "#FFFFFF", "popover_fg_color": "rgba(0, 0, 0, 0.87)",
+        "thumbnail_bg_color": "#FFFFFF", "thumbnail_fg_color": "rgba(0, 0, 0, 0.87)",
+        "accent_color": "ACCENT_TEXT", "accent_bg_color": "ACCENT", "accent_fg_color": "ACCENT_FG",
+        "destructive_bg_color": "#D93025", "destructive_fg_color": "#ffffff", "destructive_color": "#D93025",
+        "success_bg_color": "#0F9D58", "success_fg_color": "#ffffff", "success_color": "#0F9D58",
+        "warning_bg_color": "#F4B400", "warning_fg_color": "rgba(0, 0, 0, 0.87)", "warning_color": "#B06F00",
+        "error_bg_color": "#D93025", "error_fg_color": "#ffffff", "error_color": "#D93025",
+    },
+}
 _SHAPES = {
     "min": '<path d="M0 5.5H10"/>',
     "max": '<rect x="0.5" y="0.5" width="9" height="9"/>',
@@ -151,6 +191,40 @@ def _write_if_changed(path, text):
     os.replace(tmp, path)
 
 
+def _accent():
+    """설정 › 개인 설정의 강조색 (없으면 SekaiOS 청록)"""
+    try:
+        from . import config
+        a = (config.settings("appearance") or {}).get("accent")
+    except Exception:
+        a = None
+    return a if isinstance(a, str) and len(a) == 7 and a.startswith("#") else "#3CC8BE"
+
+
+def _mix(hex_, other, t):
+    a = [int(hex_[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(other[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x + (y - x) * t):02x}" for x, y in zip(a, b))
+
+
+def _adw_colors(mode):
+    acc = _accent()
+    r, g, b = (int(acc[i:i + 2], 16) / 255 for i in (1, 3, 5))
+    light_acc = 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5
+    sub = {"ACCENT": acc, "ACCENT_FG": "rgba(0, 0, 0, 0.87)" if light_acc else "#ffffff",
+           # 글자로 쓰는 강조색 — 다크 바탕엔 조금 밝게, 라이트 바탕엔 어둡게 (읽히게)
+           "ACCENT_TEXT": _mix(acc, "#ffffff", 0.2) if mode == "dark" else _mix(acc, "#000000", 0.45)}
+    return {k: sub.get(v, v) for k, v in _ADW["dark" if mode == "dark" else "light"].items()}
+
+
+def _adw_css(mode):
+    cols = _adw_colors(mode)
+    old = "".join(f"@define-color {k} {v};\n" for k, v in cols.items())
+    new = "".join(f"  --{k.replace('_', '-')}: {v};\n" for k, v in cols.items())
+    return ("/* SekaiOS — libadwaita 앱의 색을 Sekai 테마로 (창·헤더바·사이드바·카드·강조색). 로그인 때마다 다시 쓴다 */\n"
+            + old + ":root {\n" + new + "}\n\n")
+
+
 def write_window_controls(mode, home=None):
     d = os.path.join(home or os.path.expanduser("~"), ".config", "gtk-4.0")
     os.makedirs(d, exist_ok=True)
@@ -159,7 +233,13 @@ def write_window_controls(mode, home=None):
             _write_if_changed(os.path.join(d, f"sekai-{k}-{tone}.svg"),
                               f'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10">'
                               f'<g fill="none" stroke="{col}" stroke-width="1">{body}</g></svg>\n')
-    _write_if_changed(os.path.join(d, CONTROLS_CSS), _CONTROLS.replace("TONE", "dark" if mode == "dark" else "light"))
+    _write_if_changed(os.path.join(d, CONTROLS_CSS),
+                      _adw_css(mode) + _CONTROLS.replace("TONE", "dark" if mode == "dark" else "light"))
+    for old in ("sekai-window-controls.css", ".sekai-window-controls"):     # 이 판을 만들며 잠깐 쓴 이름
+        try:
+            os.remove(os.path.join(d, old))
+        except OSError:
+            pass
     # 사용자 gtk.css 맨 위에 @import 한 줄 (CSS 규칙상 @import 는 맨 위) — 처음 한 번만
     css, mark = os.path.join(d, "gtk.css"), os.path.join(d, _CONTROLS_MARK)
     if os.path.exists(mark):
@@ -169,6 +249,7 @@ def write_window_controls(mode, home=None):
             old = f.read()
     except OSError:
         old = ""
+    old = old.replace('@import url("sekai-window-controls.css");\n', "")   # 이 판을 만들며 잠깐 쓴 이름
     if CONTROLS_CSS not in old:
         _write_if_changed(css, f'@import url("{CONTROLS_CSS}");\n' + old)
     open(mark, "w").close()
