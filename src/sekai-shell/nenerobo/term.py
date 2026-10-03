@@ -5,15 +5,16 @@
 지금 무엇이 도는지는 pty 의 포그라운드 프로세스 그룹으로 안다 (셸이 아니면 닫기 전에 묻는다).
 """
 import os
-import pwd
 import signal
 
 import gi
 gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
 gi.require_version("Vte", "3.91")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango, Vte  # noqa: E402
 
 from . import style  # noqa: E402
+from .config import profile_argv, user_shell  # noqa: E402
 
 PCRE2_CASELESS = 0x00000008
 PCRE2_MULTILINE = 0x00000400
@@ -24,14 +25,7 @@ DROP_ENV = ("TERM", "COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "VTE_VE
             "KITTY_PID", "KITTY_PUBLIC_KEY", "KITTY_INSTALLATION_DIR", "WINDOWID", "GIO_LAUNCHED_DESKTOP_FILE",
             "GIO_LAUNCHED_DESKTOP_FILE_PID", "DESKTOP_STARTUP_ID", "XDG_ACTIVATION_TOKEN")
 ZOOM_MIN, ZOOM_MAX = 0.5, 3.0
-
-
-def user_shell():
-    try:
-        sh = pwd.getpwuid(os.getuid()).pw_shell
-    except KeyError:
-        sh = ""
-    return sh if sh and os.access(sh, os.X_OK) else "/bin/bash"
+WORD_CHARS = "-,./?%&#:_=+@~"          # 두 번 눌러 고를 때 단어에 넣는 기호 (경로·주소가 한 번에)
 
 
 def rgba(hex_):
@@ -40,12 +34,22 @@ def rgba(hex_):
     return c
 
 
+CURSOR = {"ibeam": Vte.CursorShape.IBEAM, "block": Vte.CursorShape.BLOCK, "underline": Vte.CursorShape.UNDERLINE}
+
+
 class TermTab(Gtk.Overlay):
-    def __init__(self, win, argv=None, cwd=None, env=None, title=None, hold=False):
+    def __init__(self, win, argv=None, cwd=None, env=None, title=None, hold=False, profile=None):
         super().__init__()
         self.win = win
+        self.profile = profile or {"id": "shell", "kind": "shell"}
+        if argv is None:
+            argv = profile_argv(self.profile)
+        if not cwd and self.profile.get("cwd"):
+            cwd = os.path.expanduser(self.profile["cwd"])
+        self.admin = self.profile.get("kind") == "admin"
+        self.scheme_override = self.profile.get("scheme") or None    # 프로필마다 다른 색 (없으면 전체 설정)
         self.argv = list(argv) if argv else [user_shell()]
-        self.cmd_mode = bool(argv)          # -e 로 받은 명령 (셸이 아니다)
+        self.cmd_mode = bool(argv)          # 셸이 아닌 명령 (-e · 프로필의 명령 · SSH · 관리자)
         self.hold = hold
         self.fixed_title = title            # -T · 탭 이름 바꾸기 (없으면 프로그램이 알린 제목)
         self.pid = -1
@@ -57,12 +61,9 @@ class TermTab(Gtk.Overlay):
         t = self.term = Vte.Terminal()
         t.set_hexpand(True)
         t.set_vexpand(True)
-        self.apply_style(win.scheme)
-        t.set_scrollback_lines(style.SCROLLBACK)
-        t.set_cursor_shape(Vte.CursorShape.IBEAM)
-        t.set_cursor_blink_mode(Vte.CursorBlinkMode.ON)
+        self.apply_config()
         t.set_audible_bell(False)
-        t.set_word_char_exceptions(style.WORD_CHARS)
+        t.set_word_char_exceptions(WORD_CHARS)
         t.set_scroll_on_keystroke(True)
         t.set_scroll_on_output(False)
         t.set_allow_hyperlink(True)
@@ -77,6 +78,7 @@ class TermTab(Gtk.Overlay):
         t.connect("child-exited", self._exited)
         t.connect("notify::window-title", lambda *_: self.win.tab_changed(self))
         t.connect("bell", lambda *_: self.win.tab_bell(self))
+        t.connect("selection-changed", self._selection_changed)
 
         # Ctrl+클릭 = 링크 열기, 오른쪽 클릭 = 메뉴 (VTE 보다 먼저 받는다)
         click = Gtk.GestureClick(button=0)
@@ -92,16 +94,31 @@ class TermTab(Gtk.Overlay):
         self._build_search()
         self._spawn()
 
-    # ── 모양 ──
-    def apply_style(self, sc):
-        t = self.term
-        t.set_font(Pango.FontDescription.from_string(style.FONT))
+    # ── 모양 (설정이 바뀌면 다시 부른다) ──
+    @property
+    def scheme_id(self):
+        return style.scheme_id(self.scheme_override or self.win.cfg["scheme"], self.win.ap)
+
+    def apply_config(self):
+        cfg, t = self.win.cfg, self.term
+        sc = style.SCHEMES[self.scheme_id]
+        t.set_font(Pango.FontDescription.from_string(cfg.font()))
         t.set_colors(rgba(sc["fg"]), rgba(sc["bg"]), [rgba(c) for c in sc["palette"]])
         t.set_color_cursor(rgba(sc["cursor"]))
         t.set_color_cursor_foreground(rgba(sc["cursor_fg"]))
-        t.set_color_highlight(rgba(sc["sel_bg"]))
-        t.set_color_highlight_foreground(rgba(sc["sel_fg"]))
-        t.set_bold_is_bright(False)
+        t.set_color_highlight(rgba(sc["sel_bg"]) if sc.get("sel_bg") else None)
+        t.set_color_highlight_foreground(rgba(sc["sel_fg"]) if sc.get("sel_fg") else None)
+        t.set_bold_is_bright(bool(cfg["bold_bright"]))
+        t.set_cursor_shape(CURSOR.get(cfg["cursor_shape"], Vte.CursorShape.IBEAM))
+        t.set_cursor_blink_mode(Vte.CursorBlinkMode.ON if cfg["cursor_blink"] else Vte.CursorBlinkMode.OFF)
+        try:
+            t.set_scrollback_lines(max(0, min(1000000, int(cfg["scrollback"]))))
+        except (TypeError, ValueError):
+            t.set_scrollback_lines(10000)
+
+    def _selection_changed(self, *_):
+        if self.win.cfg["copy_on_select"] and self.term.get_has_selection():
+            self.term.copy_clipboard_format(Vte.Format.TEXT)
 
     # ── 실행 ──
     def _spawn(self):
@@ -128,7 +145,8 @@ class TermTab(Gtk.Overlay):
             code = status
         if self.hold or (self.cmd_mode and code != 0):
             self.wait_close = True
-            self.term.feed(f"\r\n\x1b[2m[프로세스가 끝났습니다 (코드 {code}) — 아무 키나 누르면 닫습니다]\x1b[0m"
+            why = f"중단됨 (신호 {-code})" if code < 0 else f"코드 {code}"
+            self.term.feed(f"\r\n\x1b[2m[프로세스가 끝났습니다 ({why}) — 아무 키나 누르면 닫습니다]\x1b[0m"
                            .encode())
             self.win.tab_changed(self)
             return
@@ -177,6 +195,8 @@ class TermTab(Gtk.Overlay):
         t = self.term.get_property("window-title")
         if t:
             return t
+        if self.profile.get("name") and self.profile.get("kind") != "shell":
+            return self.profile["name"]
         return os.path.basename(self.argv[0])
 
     # ── 글자 크기 ──

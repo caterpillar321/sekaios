@@ -6,6 +6,7 @@
   Ctrl+Shift+T 새 탭 · Ctrl+Shift+W 탭 닫기 · Ctrl+Shift+D 탭 복제 · Ctrl+Shift+N 새 창
   Ctrl+Tab · Ctrl+Shift+Tab · Ctrl+PgDn/PgUp 탭 옮겨 가기 · Ctrl+Alt+1~9 그 탭으로
   Ctrl+Shift+F 찾기 · Ctrl+= / Ctrl+- / Ctrl+0 글자 크기 (Ctrl+휠도) · F11 · Alt+Enter 전체 화면
+  Ctrl+Shift+1~9 N번째 프로필로 새 탭 · Ctrl+, 설정
 닫을 때 탭이 둘 이상이거나 셸 말고 도는 프로그램이 있으면 묻는다.
 """
 import os
@@ -25,7 +26,9 @@ A = Gdk.ModifierType.ALT_MASK
 
 ACCELS = {"Ctrl+Shift+T": "<Control><Shift>t", "Ctrl+Shift+N": "<Control><Shift>n", "Ctrl+Shift+F": "<Control><Shift>f",
           "F11": "F11", "Ctrl+Shift+D": "<Control><Shift>d", "Ctrl+Shift+W": "<Control><Shift>w",
-          "Ctrl+C": "<Control>c", "Ctrl+V": "<Control>v"}
+          "Ctrl+C": "<Control>c", "Ctrl+V": "<Control>v", "Ctrl+,": "<Control>comma"}
+for _n in range(1, 10):
+    ACCELS[f"Ctrl+Shift+{_n}"] = f"<Control><Shift>{_n}"
 
 
 def mitem(menu, label, action):
@@ -125,11 +128,25 @@ class WinButton(Gtk.Button):
         cr.stroke()
 
 
+def window_buttons(win, bar, kinds=("min", "max", "close")):
+    """제목줄 끝에 창 조작 단추 — 최대화 상태가 바뀌면 그림도 바꾼다"""
+    cbs = {"min": ("최소화", win.minimize),
+           "max": ("최대화", lambda: win.unmaximize() if win.is_maximized() else win.maximize()),
+           "close": ("닫기", win.close)}
+    btns = []
+    for k in kinds:
+        tip, cb = cbs[k]
+        b = WinButton(win, k, tip, cb)
+        btns.append(b)
+        bar.append(b)
+    for prop in ("notify::maximized", "notify::fullscreened"):
+        win.connect(prop, lambda *_: [b.area.queue_draw() for b in btns])
+    return btns
+
+
 class TermWindow(Gtk.ApplicationWindow):
-    def __init__(self, app, ap):
+    def __init__(self, app):
         super().__init__(application=app, title="터미널")
-        self.ap = ap
-        self.scheme = style.SCHEMES[ap["mode"]]
         self.tabs = []
         self.buttons = {}
         self._closing = False
@@ -167,36 +184,17 @@ class TermWindow(Gtk.ApplicationWindow):
         plus.set_valign(Gtk.Align.CENTER)
         plus.connect("clicked", lambda *_: self.new_tab())
         bar.append(plus)
-        menu = Gio.Menu()
-        sec = Gio.Menu()
-        mitem(sec, "새 탭\tCtrl+Shift+T", "win.new-tab")
-        mitem(sec, "새 창\tCtrl+Shift+N", "win.new-window")
-        menu.append_section(None, sec)
-        sec = Gio.Menu()
-        mitem(sec, "찾기\tCtrl+Shift+F", "win.find")
-        mitem(sec, "전체 화면\tF11", "win.fullscreen")
-        menu.append_section(None, sec)
-        sec = Gio.Menu()
-        mitem(sec, "Nenerobo 정보", "win.about")
-        menu.append_section(None, sec)
-        mb = Gtk.MenuButton(icon_name="pan-down-symbolic", tooltip_text="메뉴", menu_model=menu)
+        self.menu_btn = mb = Gtk.MenuButton(icon_name="pan-down-symbolic", tooltip_text="새 탭 · 프로필 · 설정")
         mb.set_has_frame(False)
         mb.add_css_class("flat")
         mb.add_css_class("nr-flat")
         mb.set_valign(Gtk.Align.CENTER)
         bar.append(mb)
+        self.refresh_menu()
         space = Gtk.Box()
         space.set_hexpand(True)
         bar.append(space)
-        self.winbtns = []
-        for kind, tip, cb in (("min", "최소화", self.minimize),
-                              ("max", "최대화", self.toggle_maximize),
-                              ("close", "닫기", self.close)):
-            b = WinButton(self, kind, tip, cb)
-            self.winbtns.append(b)
-            bar.append(b)
-        self.connect("notify::maximized", lambda *_: [b.area.queue_draw() for b in self.winbtns])
-        self.connect("notify::fullscreened", lambda *_: [b.area.queue_draw() for b in self.winbtns])
+        window_buttons(self, bar)
         handle = Gtk.WindowHandle()
         handle.set_child(bar)
         self.set_titlebar(handle)
@@ -207,6 +205,8 @@ class TermWindow(Gtk.ApplicationWindow):
             a.connect("activate", lambda _a, p: cb(p) if param else cb())
             self.add_action(a)
         act("new-tab", lambda: self.new_tab())
+        act("open-profile", lambda p: self.new_tab(profile=self.cfg.profile(p.get_string())), GLib.VariantType("s"))
+        act("settings", lambda: self.get_application().open_settings(self))
         act("new-window", self.new_window)
         act("find", lambda: self.current() and self.current().show_search())
         act("fullscreen", self.toggle_fullscreen)
@@ -222,23 +222,81 @@ class TermWindow(Gtk.ApplicationWindow):
         act("close-menu-tab", lambda: self._menu_tab and self.close_tab(self._menu_tab))
         act("close-others", lambda: self._menu_tab and self.close_others(self._menu_tab))
 
+    @property
+    def cfg(self):
+        return self.get_application().cfg
+
+    @property
+    def ap(self):
+        return self.get_application().ap
+
+    def refresh_menu(self):
+        """▾ 메뉴 — 위에 프로필들 (윈도우 터미널처럼), 아래에 창·설정"""
+        menu = Gio.Menu()
+        sec = Gio.Menu()
+        for i, p in enumerate(self.cfg.profiles()):
+            label = p["name"] + (f"\tCtrl+Shift+{i + 1}" if i < 9 else "")
+            text, _t, key = label.partition("\t")
+            it = Gio.MenuItem.new(text, None)
+            it.set_action_and_target_value("win.open-profile", GLib.Variant("s", p["id"]))
+            if key in ACCELS:
+                it.set_attribute_value("accel", GLib.Variant("s", ACCELS[key]))
+            sec.append_item(it)
+        menu.append_section(None, sec)
+        sec = Gio.Menu()
+        mitem(sec, "새 창\tCtrl+Shift+N", "win.new-window")
+        mitem(sec, "찾기\tCtrl+Shift+F", "win.find")
+        mitem(sec, "전체 화면\tF11", "win.fullscreen")
+        menu.append_section(None, sec)
+        sec = Gio.Menu()
+        mitem(sec, "설정\tCtrl+,", "win.settings")
+        mitem(sec, "Nenerobo 정보", "win.about")
+        menu.append_section(None, sec)
+        self.menu_btn.set_menu_model(menu)
+
+    def apply_config(self):
+        """설정이 바뀌었다 — 모든 탭의 모양, 탭 색, 메뉴의 프로필"""
+        for t in self.tabs:
+            t.apply_config()
+            self._style_button(t)
+        self.refresh_menu()
+
+    def _style_button(self, tab):
+        b = self.buttons.get(tab)
+        if b is None:
+            return
+        for c in list(b.get_css_classes()):
+            if c.startswith("sc-"):
+                b.remove_css_class(c)
+        b.add_css_class(f"sc-{tab.scheme_id}")
+        (b.add_css_class if tab.admin else b.remove_css_class)("admin")
+        for c in list(self.stack.get_css_classes()):
+            if c.startswith("sc-"):
+                self.stack.remove_css_class(c)
+        cur = self.current()
+        if cur is not None:
+            self.stack.add_css_class(f"sc-{cur.scheme_id}")
+
     # ── 탭 ──
     def current(self):
         w = self.stack.get_visible_child()
         return w if isinstance(w, TermTab) else None
 
-    def new_tab(self, argv=None, cwd=None, env=None, title=None, hold=False):
+    def new_tab(self, argv=None, cwd=None, env=None, title=None, hold=False, profile=None):
         cur = self.current()
-        if cwd is None and cur is not None:
+        if argv is None and profile is None:
+            profile = self.cfg.default_profile()
+        if cwd is None and cur is not None and self.cfg["new_tab_same_dir"] and not (profile or {}).get("cwd"):
             cwd = cur.cwd()                    # 새 탭은 지금 탭의 폴더에서 (GNOME 터미널처럼)
         if env is None and cur is not None:
             env = cur.env
-        tab = TermTab(self, argv=argv, cwd=cwd, env=env, title=title, hold=hold)
+        tab = TermTab(self, argv=argv, cwd=cwd, env=env, title=title, hold=hold, profile=profile)
         self.tabs.append(tab)
         self.stack.add_child(tab)
         btn = TabButton(self, tab)
         self.buttons[tab] = btn
         self.strip.append(btn)
+        self._style_button(tab)
         self.select_tab(tab)
         self.tab_changed(tab)
         return tab
@@ -249,6 +307,7 @@ class TermWindow(Gtk.ApplicationWindow):
         self.stack.set_visible_child(tab)
         for t, b in self.buttons.items():
             (b.add_css_class if t is tab else b.remove_css_class)("active")
+        self._style_button(tab)
         self.set_title(tab.title())
         GLib.idle_add(lambda: (tab.term.grab_focus(), False)[1])
         btn = self.buttons[tab]
@@ -321,8 +380,10 @@ class TermWindow(Gtk.ApplicationWindow):
             go()
 
     def duplicate_tab(self, tab):
-        self.new_tab(argv=tab.argv if tab.cmd_mode else None, cwd=tab.cwd(), env=tab.env,
-                     title=tab.fixed_title)
+        if tab.cmd_mode and tab.profile.get("kind") == "shell":
+            self.new_tab(argv=tab.argv, cwd=tab.cwd(), env=tab.env, title=tab.fixed_title)   # -e 로 연 명령
+        else:
+            self.new_tab(cwd=tab.cwd(), env=tab.env, title=tab.fixed_title, profile=tab.profile)
 
     def rename_tab(self, tab):
         btn = self.buttons.get(tab)
@@ -399,15 +460,9 @@ class TermWindow(Gtk.ApplicationWindow):
     def new_window(self):
         app = self.get_application()
         cur = self.current()
-        w = TermWindow(app, self.ap)
-        w.new_tab(cwd=cur.cwd() if cur else None, env=cur.env if cur else None)
+        w = TermWindow(app)
+        w.new_tab(cwd=cur.cwd() if cur and self.cfg["new_tab_same_dir"] else None, env=cur.env if cur else None)
         w.present()
-
-    def toggle_maximize(self):
-        if self.is_maximized():
-            self.unmaximize()
-        else:
-            self.maximize()
 
     def toggle_fullscreen(self):
         if self.is_fullscreen():
@@ -446,7 +501,7 @@ class TermWindow(Gtk.ApplicationWindow):
         if self._closing or not self.tabs:
             return False
         busy = [n for n in (t.foreground() for t in self.tabs) if n]
-        if len(self.tabs) > 1 or busy:
+        if (len(self.tabs) > 1 and self.cfg["confirm_close"]) or busy:
             what = f"탭 {len(self.tabs)}개를 모두 닫을까요?" if len(self.tabs) > 1 else "창을 닫을까요?"
             more = f"실행 중인 프로그램({', '.join(busy)})도 끝납니다." if busy else "모든 탭의 셸이 끝납니다."
 
@@ -462,7 +517,7 @@ class TermWindow(Gtk.ApplicationWindow):
         return False
 
     # ── 키 ──
-    def _key(self, _ctrl, keyval, _code, state):
+    def _key(self, _ctrl, keyval, code, state):
         tab = self.current()
         if tab is not None and tab.wait_close and tab.term.has_focus():
             self.close_tab(tab, ask=False)
@@ -470,6 +525,9 @@ class TermWindow(Gtk.ApplicationWindow):
         mods = state & (C | S | A)
         k = Gdk.keyval_to_lower(keyval)
         if mods == C:
+            if k == Gdk.KEY_comma:
+                self.get_application().open_settings(self)
+                return True
             if k == Gdk.KEY_c:
                 return bool(tab and tab.term.has_focus() and tab.copy())   # 고른 글이 없으면 ^C 를 프로그램에
             if k == Gdk.KEY_v and tab and tab.term.has_focus():
@@ -491,6 +549,11 @@ class TermWindow(Gtk.ApplicationWindow):
                 self.step_tab(-1)
                 return True
         elif mods == C | S:
+            if 10 <= code <= 18:                       # 숫자 줄의 1~9 (Shift 를 누르면 글자가 ! @ # … 라 자판 자리로)
+                ps = self.cfg.profiles()
+                if code - 10 < len(ps):
+                    self.new_tab(profile=ps[code - 10])
+                return True
             if k == Gdk.KEY_c:
                 tab and tab.copy()
                 return True

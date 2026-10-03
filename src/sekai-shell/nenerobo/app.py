@@ -16,6 +16,7 @@ gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 
 from . import __version__, style  # noqa: E402
+from .config import Config  # noqa: E402
 
 APP_ID = "org.sekaios.Nenerobo"
 USAGE = """사용법: nenerobo [옵션] [-e|-x|-- 명령 인자…]
@@ -24,12 +25,13 @@ USAGE = """사용법: nenerobo [옵션] [-e|-x|-- 명령 인자…]
       --new-tab                 새 창 대신 떠 있는 창에 탭으로
       --hold                    명령이 끝나도 탭을 닫지 않는다
   -e, -x, --                    셸 대신 실행할 명령 (뒤의 것 모두)
+      --settings                설정 창을 연다
   -h, --help · --version"""
 
 
 def parse(args):
     """→ {"title", "cwd", "argv", "new_tab", "hold"} 또는 문자열(잘못된 인자 · 도움말)"""
-    o = {"title": None, "cwd": None, "argv": None, "new_tab": False, "hold": False}
+    o = {"title": None, "cwd": None, "argv": None, "new_tab": False, "hold": False, "settings": False}
     i = 0
     while i < len(args):
         a = args[i]
@@ -46,6 +48,10 @@ def parse(args):
             return USAGE
         if a == "--version":
             return f"Nenerobo {__version__}"
+        if a == "--settings":
+            o["settings"] = True
+            i += 1
+            continue
         if a in ("-T", "--title", "-t") and i + 1 < len(args):
             o["title"] = args[i + 1]
             i += 2
@@ -79,17 +85,33 @@ class App(Gtk.Application):
         super().__init__(application_id=APP_ID,
                          flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE | Gio.ApplicationFlags.SEND_ENVIRONMENT)
         self.ap = None
+        self.cfg = None
+        self.settings_win = None
 
     def do_startup(self):
         Gtk.Application.do_startup(self)
         self.ap = style.appearance()
-        s = Gtk.Settings.get_default()
-        s.set_property("gtk-application-prefer-dark-theme", self.ap["mode"] == "dark")
-        s.set_property("gtk-decoration-layout", ":minimize,maximize,close")   # 윈도우처럼 오른쪽에 세 단추
+        self.cfg = Config()
+        # 다크·라이트는 SekaiOS 가 고른 GTK 테마(Sekai-Dark · Sekai-Light)를 그대로 — "다크 선호"를 켜면 GTK4 가
+        #   Sekai-Dark 의 gtk-dark.css 를 찾다 없어서 기본 테마(Adwaita, 파란 강조색)로 넘어갔다
         css = Gtk.CssProvider()
-        css.load_from_string(style.css(self.ap, style.SCHEMES[self.ap["mode"]]))
+        css.load_from_string(style.css(self.ap))
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), css,
                                                   Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+    def apply_config(self):
+        """설정 창에서 바꿨다 — 열린 모든 창·탭에"""
+        from .window import TermWindow
+        for w in self.get_windows():
+            if isinstance(w, TermWindow):
+                w.apply_config()
+
+    def open_settings(self, parent=None):
+        if self.settings_win is None:
+            from .settings import SettingsWindow
+            self.settings_win = SettingsWindow(self, parent)
+            self.settings_win.connect("destroy", lambda *_: setattr(self, "settings_win", None))
+        self.settings_win.present()
 
     def do_command_line(self, cl):
         o = parse(cl.get_arguments()[1:])
@@ -111,10 +133,13 @@ class App(Gtk.Application):
             cwd = base
         from .window import TermWindow
         wins = [w for w in self.get_windows() if isinstance(w, TermWindow)]
+        if o["settings"]:
+            self.open_settings(wins[0] if wins else None)
+            return 0
         if o["new_tab"] and wins:
             w = wins[0]
         else:
-            w = TermWindow(self, self.ap)
+            w = TermWindow(self)
         w.new_tab(argv=o["argv"], cwd=cwd, env=env, title=o["title"], hold=o["hold"])
         w.present()
         return 0
