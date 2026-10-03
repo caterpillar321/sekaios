@@ -173,6 +173,7 @@ class Tab:
         self.scroll = None
         self.gone = False                       # 뒤쪽에 있는 동안 보던 폴더가 사라졌다 (돌아오면 윗폴더로)
         self.button = self.box = self.icon = self.label = None
+        self.gestures = None                    # 탭 단추의 누르기·끌기 제스처 (_tab_widget)
 
 
 def _tab_attr(name):
@@ -471,19 +472,48 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         box.pack_start(lbl, True, True, 0)
         box.pack_end(close, False, False, 0)
         eb.add(box)
-        eb.connect("button-press-event", lambda _w, ev: self._tab_press(t, ev))
+        # 제스처로 받는다 — 탭 줄은 제목줄 안이라 창의 끌기 제스처(캡처 단계)가 먼저 본다. 누름을 잡아야(claim)
+        #   창이 따라 움직이지 않고 탭을 옮길 수 있다 (button-press-event 로 True 를 돌려줘도 창은 움직였다)
+        press = Gtk.GestureMultiPress.new(eb)
+        press.set_button(0)
+        press.connect("pressed", lambda g, _n, _x, _y: self._tab_press(t, g))
+        drag = Gtk.GestureDrag.new(eb)
+        drag.set_button(1)
+        drag.connect("drag-update", lambda g, dx, _dy: self._tab_motion(t, g, dx))
+        drag.group(press)
+        t.gestures = (press, drag)              # GTK3 제스처는 파이썬이 들고 있어야 산다
         t.button, t.box, t.icon, t.label = eb, box, img, lbl
         eb.show_all()
         return eb
 
-    def _tab_press(self, t, ev):
-        if ev.type != Gdk.EventType.BUTTON_PRESS:
-            return True
-        if ev.button == 1:
+    def _tab_press(self, t, g):
+        g.set_state(Gtk.EventSequenceState.CLAIMED)
+        b = g.get_current_button()
+        if b == 1:
             self.switch_tab(t)
-        elif ev.button == 2:
-            self.close_tab(t)                   # 가운데 단추 — 닫기 (윈도우·브라우저처럼)
-        return True
+            self._tab_dragging = False          # 끌어서 순서 바꾸기 (_tab_motion)
+        elif b == 2:
+            GLib.idle_add(lambda: self.close_tab(t) and False)   # 가운데 단추 — 닫기 (윈도우·브라우저처럼)
+
+    def _tab_motion(self, t, g, dx):
+        """탭을 옆으로 끌면 순서를 바꾼다 (윈도우 탐색기·브라우저처럼) — 지나간 탭의 가운데를 넘으면 자리를 바꾼다"""
+        if t not in self.tabs or t.button is None:
+            return
+        if not getattr(self, "_tab_dragging", False):
+            if abs(dx) < 8:
+                return
+            self._tab_dragging = True
+        ok, sx, sy = g.get_start_point()
+        xy = t.button.translate_coordinates(self.tabbox, int(sx + dx), int(sy)) if ok else None
+        if not xy:
+            return
+        x = xy[0]
+        others = [o for o in self.tabs if o is not t and o.button is not None]
+        to = sum(1 for o in others if o.button.get_allocation().x + o.button.get_allocation().width / 2 < x)
+        if to != self.tabs.index(t):
+            self.tabs.remove(t)
+            self.tabs.insert(to, t)
+            self.tabbox.reorder_child(t.button, to)
 
     def _update_tab_button(self, t):
         if t.label is None:

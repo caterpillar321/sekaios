@@ -513,6 +513,8 @@ calendar:selected {
 .menu-item:hover { background: @hover; }
 .menu-item:disabled label { color: @text3; }
 .menu-check { color: @accent; font-weight: 700; }
+.menu-item .menu-accel { color: @text3; }                     /* 창 메뉴의 단축키 */
+.menu-bold label { font-weight: 700; }                 /* 창 메뉴의 닫기 (윈도우처럼 굵게) */
 .menu-note { color: @text2; padding: 7px 10px; }     /* 불러오는 중 · 못 읽음 */
 .menu-sep {
     background: @line;

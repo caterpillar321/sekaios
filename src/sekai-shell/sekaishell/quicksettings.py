@@ -133,6 +133,12 @@ def parse_wifi(text):
     return sorted(nets.values(), key=lambda n: (not n["active"], -n["signal"], n["ssid"].lower()))
 
 
+def conn_label(name):
+    """NetworkManager 가 스스로 만든 프로필 이름("Wired connection 1")은 우리 말로 보인다 (설정 앱과 같게)"""
+    m = re.fullmatch(r"Wired connection (\d+)", name or "")
+    return f"유선 연결 {m.group(1)}" if m else (name or "")
+
+
 def signal_level(strength):
     """신호 세기(0~100) → 아이콘 단계 (GNOME 과 같은 경계)"""
     s = strength or 0
@@ -533,7 +539,7 @@ def net_icon(ns, airplane, has_wifi):
             icons = ["network-vpn-symbolic", "network-wired-symbolic"]
         else:
             icons = (["network-wired-no-route-symbolic"] if limited else []) + ["network-wired-symbolic"]
-        name = ns.name or ("Wi-Fi" if ns.kind == "wifi" else "이더넷")
+        name = conn_label(ns.name) or ("Wi-Fi" if ns.kind == "wifi" else "이더넷")
         return icons, f"{name}\n" + ("인터넷에 연결되지 않음" if limited else "인터넷 액세스")
     if has_wifi and not ns.wifi_enabled:
         return (["network-wireless-disabled-symbolic", "network-wireless-offline-symbolic", "network-offline-symbolic"],
@@ -1352,7 +1358,9 @@ class QuickSettings(PanelPopup):
         return sys_has_wifi()
 
     def _wifi_dev(self):
-        return next((d for d in (self._devs or []) if d["type"] == "wifi"), None)
+        """무선 어댑터 — 여럿이면 (내장 + USB 동글 등) 연결된 것 먼저 (그 연결을 보이고 끊는다)"""
+        wifi = [d for d in (self._devs or []) if d["type"] == "wifi"]
+        return next((d for d in wifi if d["state"].startswith("connected")), None) or (wifi[0] if wifi else None)
 
     def _wifi_on(self):
         return self.net.wifi_enabled and not self.rf.blocked(RF_WLAN)
@@ -1420,7 +1428,7 @@ class QuickSettings(PanelPopup):
         self.t_wired.set_icon(["network-wired-symbolic"] if wired_up else
                               ["network-wired-disconnected-symbolic", "network-wired-symbolic"])
         self.t_wired.set_label("이더넷" if wired_up else "연결 안 됨",
-                               (f"이더넷 — {wconn['conn']}" if wconn else "이더넷") + "\n누르면 네트워크 설정"
+                               (f"이더넷 — {conn_label(wconn['conn'])}" if wconn else "이더넷") + "\n누르면 네트워크 설정"
                                if wired_up else "케이블이 연결되지 않았습니다\n누르면 네트워크 설정")
 
         st = self._bt_state()

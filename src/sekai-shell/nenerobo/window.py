@@ -14,7 +14,8 @@ import os
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
-from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
+gi.require_version("Graphene", "1.0")
+from gi.repository import Gdk, Gio, GLib, Graphene, Gtk, Pango  # noqa: E402
 
 from . import style  # noqa: E402
 from .term import TermTab, open_uri  # noqa: E402
@@ -63,6 +64,29 @@ class TabButton(Gtk.Box):
         g = Gtk.GestureClick(button=0)
         g.connect("pressed", self._pressed)
         self.add_controller(g)
+        # 옆으로 끌면 순서를 바꾼다 — 누르기가 잡은 입력을 같이 받게 한 무리로
+        d = Gtk.GestureDrag(button=1)
+        d.connect("drag-begin", self._drag_begin)
+        d.connect("drag-update", self._drag_update)
+        self.add_controller(d)
+        d.group(g)                             # (같은 위젯에 붙인 뒤에야 묶인다)
+        self._drag_x = None
+        self._dragging = False
+
+    def _drag_begin(self, _g, x, _y):
+        self._drag_x = x
+        self._dragging = False
+
+    def _drag_update(self, _g, dx, _dy):
+        if self._drag_x is None:
+            return
+        if not self._dragging:
+            if abs(dx) < 8:
+                return
+            self._dragging = True
+        ok, pt = self.compute_point(self.win.strip, Graphene.Point().init(self._drag_x + dx, 0))
+        if ok:
+            self.win.move_tab_to_x(self.tab, pt.x)
 
     def _pressed(self, g, n, x, y):
         b = g.get_current_button()
@@ -323,6 +347,23 @@ class TermWindow(Gtk.ApplicationWindow):
                 adj.set_value(x)
             elif x + w > adj.get_value() + adj.get_page_size():
                 adj.set_value(x + w - adj.get_page_size())
+
+    def move_tab_to_x(self, tab, x):
+        """탭을 끌어 옮기는 중 — 지나간 탭의 가운데를 넘으면 자리를 바꾼다 (브라우저처럼)"""
+        btn = self.buttons.get(tab)
+        if btn is None or tab not in self.tabs:
+            return
+        others = [t for t in self.tabs if t is not tab]
+        to = 0
+        for t in others:
+            ok, b = self.buttons[t].compute_bounds(self.strip)
+            if ok and b.get_x() + b.get_width() / 2 < x:
+                to += 1
+        if to == self.tabs.index(tab):
+            return
+        self.tabs.remove(tab)
+        self.tabs.insert(to, tab)
+        self.strip.reorder_child_after(btn, self.buttons[self.tabs[to - 1]] if to else None)
 
     def step_tab(self, d):
         cur = self.current()

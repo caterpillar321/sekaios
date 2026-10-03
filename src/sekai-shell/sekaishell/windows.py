@@ -49,6 +49,7 @@ class WindowManager:
         self.preview = None        # 끌어서 스냅 미리보기 (sekai-panel 이 넣어 준다)
         self.assist = None         # 스냅 도우미 (sekai-panel 이 넣어 준다)
         self.topbar = None         # 위쪽에서 내려오는 레이아웃 바 (sekai-panel 이 넣어 준다)
+        self.winmenu = None        # 제목줄 오른쪽 클릭 창 메뉴 (sekai-panel 이 넣어 준다)
         self._poll_src = 0         # 끄는 동안 커서 위치를 읽는 타이머
         self._bar_hit = None       # 바에서 가리킨 (영역, 나머지 칸들)
         self._drag_mons = []
@@ -518,6 +519,14 @@ class WindowManager:
             parts = arg.strip().split(",")
             if len(parts) == 3:
                 GLib.idle_add(self._drag_drop, parts[0], parts[1], "0x" + parts[2])
+        elif name == "sekaiwinmenu":
+            parts = arg.strip().split(",")
+            if len(parts) == 3 and self.winmenu is not None:
+                try:
+                    x, y = int(parts[1]), int(parts[2])
+                except ValueError:
+                    return
+                GLib.idle_add(self.winmenu.open_for, "0x" + parts[0], x, y)
         elif name == "openwindow":
             addr = "0x" + arg.split(",", 1)[0]
             GLib.timeout_add(60, self._opened, addr)

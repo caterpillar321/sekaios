@@ -1286,6 +1286,8 @@ class NetworkPage:
         self.dead = False
         self.st = None                 # read_state() 결과
         self.nets = None               # Wi-Fi 목록 (parse_wifi)
+        self.wifi_sel = None           # 무선 어댑터가 여럿일 때 고른 것 (장치 이름)
+        self.scan_again = False
         self.loading = self.again = self.scanning = False
         self.ops = {}                  # 키(UUID · "wifi:SSID" · "//radio") → 하고 있는 일 문구
         self.view = "main"             # main | known | props
@@ -1377,20 +1379,35 @@ class NetworkPage:
         return False
 
     def scan_wifi(self, rescan=False):
-        if self.scanning or self.dead:
+        if self.dead:
+            return
+        if self.scanning:
+            self.scan_again = True            # 찾는 중에 어댑터를 바꿨다 — 끝나면 바로 다시
             return
         self.scanning = True
+        # 무선 어댑터가 여럿이면 고른 어댑터가 찾은 것만 (다른 어댑터의 연결이 "연결됨" 으로 섞이지 않게)
+        wifi = [d for d in (self.st or {}).get("devs", []) if d["type"] == "wifi"]
+        dev = self._pick_wifi(wifi)["dev"] if len(wifi) > 1 else None
 
         def work():
             out = _nm("-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list",
+                      *(("ifname", dev) if dev else ()),
                       "--rescan", "yes" if rescan else "no", timeout=25 if rescan else 8)
-            GLib.idle_add(self._got_wifi, parse_wifi(out))
+            GLib.idle_add(self._got_wifi, parse_wifi(out), dev)
         threading.Thread(target=work, daemon=True).start()
 
-    def _got_wifi(self, nets):
+    def _got_wifi(self, nets, dev=None):
         self.scanning = False
         if self.dead:
             return False
+        wifi = [d for d in (self.st or {}).get("devs", []) if d["type"] == "wifi"]
+        again, self.scan_again = self.scan_again, False
+        if dev != (self._pick_wifi(wifi)["dev"] if len(wifi) > 1 else None):
+            # 찾는 사이 다른 어댑터를 골랐거나, 어댑터가 여럿인 것을 찾은 뒤에 알았다 (처음 찾기는 상태를 읽기 전)
+            self.scan_wifi()
+            return False
+        if again:
+            self.scan_wifi()
         self.nets = nets
         self._draw()
         return False
@@ -1503,7 +1520,7 @@ class NetworkPage:
 
         # ── Wi-Fi ──
         if wifi:
-            self._draw_wifi(wifi[0], st["radio"])
+            self._draw_wifi(self._pick_wifi(wifi), st["radio"], wifi)
 
         # ── VPN ──
         s = _sect(self.main, "VPN")
@@ -1531,7 +1548,7 @@ class NetworkPage:
             for d in other:
                 sub = f"{DEV_TYPES.get(d['type'], d['type'])} · {_dev_state(d['state'])}"
                 if d["conn"]:
-                    sub += f" · {d['conn']}"
+                    sub += f" · {conn_label(d['conn'])}"
                 row(s, d["dev"], sub, icon=["network-workgroup", "network-wired"],
                     control=info(d["ip"].split("/")[0]) if d["ip"] else None)
 
@@ -1553,8 +1570,39 @@ class NetworkPage:
                 return c["uuid"]
         return ""
 
-    def _draw_wifi(self, wd, radio):
+    def _pick_wifi(self, wifi):
+        """무선 어댑터가 여럿이면 (내장 + USB 동글 등) 하나를 골라 보인다 — 고른 것, 없으면 연결된 것,
+        그다음 쓸 수 있는 것. 목록·연결·끊기는 그 어댑터로"""
+        names = [d["dev"] for d in wifi]
+        if self.wifi_sel not in names:
+            pick = (next((d for d in wifi if d["state"].startswith("connected")), None)
+                    or next((d for d in wifi if d["state"] not in ("unavailable", "unmanaged")), None) or wifi[0])
+            self.wifi_sel = pick["dev"]
+        return wifi[names.index(self.wifi_sel)]
+
+    def _choose_wifi(self, dev):
+        if not dev or dev == self.wifi_sel:
+            return
+        self.wifi_sel = dev
+        self.nets = None
+
+        def later():
+            # 콤보의 changed 안에서 다시 그리면 그 콤보를 지우게 된다 — 신호가 끝난 뒤에
+            self.drawn.pop("main", None)
+            self._draw()
+            self.scan_wifi()                  # 어댑터가 받아 둔 목록 (새로 찾기는 몇 초 — 주기 검사가 한다)
+            return False
+        GLib.idle_add(later)
+
+    def _draw_wifi(self, wd, radio, wifi=()):
         s = _sect(self.main, "Wi-Fi")
+        if len(wifi) > 1:
+            # 윈도우는 어댑터마다 "Wi-Fi", "Wi-Fi 2" 를 따로 보인다 — 여기선 하나를 골라 그 목록을
+            items = [(d["dev"], f"{d['dev']} — {_dev_state(d['state'], 'wifi')}"
+                      + (f" ({d['conn']})" if d["conn"] and d["state"].startswith("connected") else ""))
+                     for d in wifi]
+            row(s, "무선 어댑터", f"이 컴퓨터에 무선 어댑터가 {len(wifi)}개 있습니다", icon=WIFI_ICONS,
+                control=combo(items, wd["dev"], self._choose_wifi))
         cur = wd["conn"] if wd["state"].startswith("connected") else ""
         sub = "꺼짐" if not radio else (f"연결됨 — {cur}" + (f" · IPv4 {wd['ip'].split('/')[0]}" if wd["ip"] else "")
                                        if cur else _dev_state(wd["state"], "wifi"))

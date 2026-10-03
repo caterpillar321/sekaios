@@ -62,11 +62,12 @@ STORED_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".avif", ".mp3
                ".gz", ".bz2", ".xz", ".zst", ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".jar", ".apk"}
 CHUNK = 1 << 20
 BSDTAR_OPTS = ["--no-same-owner", "--no-acls", "--no-xattrs", "--no-fflags"]
-# bsdtar 는 암호가 필요한데 --passphrase 가 없으면 터미널에서 묻는다 — 터미널이 없으면 "Enter passphrase:" 를
-#   끝없이 되풀이하며 멈춘다. 그래서 늘 주고(모르면 이 값), 새 세션에서 돌려 터미널에 닿지 않게 한다
-#   (암호가 명령줄에 실리므로 도는 동안 같은 컴퓨터의 다른 계정이 ps 로 볼 수 있다. 표준 입력으로 주면 틀린 암호일 때
-#    줄바꿈 없는 "Enter passphrase:" 를 끝없이 내며 멈춘다 — 혼자 쓰는 데스크톱이라 명령줄 쪽을 택했다)
-NO_PASS = "\x01sekai-no-passphrase"
+# bsdtar 는 암호가 필요한데 --passphrase 가 없으면 묻는다 — 새 세션에서 돌려 터미널이 없으니 표준 오류에
+#   "Enter passphrase:" 를 내고 표준 입력에서 한 줄 읽는다. --passphrase 는 명령줄에 실려 도는 동안 같은 컴퓨터의
+#   다른 계정이 ps 로 볼 수 있어서 쓰지 않는다: 첫 물음에 표준 입력으로 답하고(암호를 모르면 멈추고 묻는다),
+#   다시 물으면 틀린 암호다 — 그대로 두면 빈 줄을 암호로 끝없이 되물으며 멈추니 그때 멈춘다 (_run)
+PASS_PROMPT = b"Enter passphrase:"
+PASS_NEEDED = "passphrase needed"      # 암호를 물어서 멈췄다 (_needs_pass 가 알아본다)
 _UMASK = os.umask(0)
 os.umask(_UMASK)
 
@@ -710,14 +711,57 @@ class _Unsupported(Exception):
     """풀 수 없는 것 (이유는 글로)"""
 
 
-def _run(job, argv, on_line=None):
-    """명령을 돌리며 취소를 본다 — (반환 코드, 표준 오류 줄들). on_line(줄) 은 표준 오류의 줄마다"""
+def _run(job, argv, on_line=None, passphrase=False):
+    """명령을 돌리며 취소를 본다 — (반환 코드, 표준 출력 줄들, 표준 오류 줄들). on_line(줄) 은 표준 오류의 줄마다.
+    passphrase 가 False 가 아니면 bsdtar 의 암호 물음(PASS_PROMPT)에 표준 입력으로 답한다 — None(모름)이거나 두 번째로
+    물으면(틀린 암호) 멈추고 표준 오류 줄에 PASS_NEEDED 를 넣는다"""
+    asks = passphrase is not False
     try:
-        p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE if on_line is None else
-                             subprocess.DEVNULL, stderr=subprocess.PIPE, start_new_session=True)
+        p = subprocess.Popen(argv, stdin=subprocess.PIPE if asks else subprocess.DEVNULL,
+                             stdout=subprocess.PIPE if on_line is None else subprocess.DEVNULL,
+                             stderr=subprocess.PIPE, start_new_session=True)
     except OSError as e:
         raise _Unsupported(str(e))
     out_lines, err_lines = [], []
+    asked = [0]
+
+    def prompt():
+        asked[0] += 1
+        if passphrase is None or asked[0] > 1:
+            err_lines.append(PASS_NEEDED)
+            p.kill()
+            return
+        try:
+            p.stdin.write(passphrase.encode("utf-8") + b"\n")
+            p.stdin.flush()
+        except OSError:
+            pass
+
+    def err_line(raw):
+        s = raw.decode("utf-8", "replace").rstrip("\n")
+        if on_line is not None and s.startswith("x "):
+            on_line(s[2:])
+        err_lines.append(s)
+
+    def read_err():
+        # 물음 뒤엔 줄바꿈이 없다 ("x 이름Enter passphrase:") — 줄이 아니라 덩어리로 읽어 물음을 찾는다
+        buf = b""
+        fd = p.stderr.fileno()
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            buf += chunk
+            if asks:
+                while PASS_PROMPT in buf:
+                    buf = buf.replace(PASS_PROMPT, b"", 1)
+                    prompt()
+            *lines, buf = buf.split(b"\n")
+            for line in lines:
+                err_line(line)               # 남은 buf 는 다음 덩어리와 이어 본다 (물음이 반쯤 왔을 수 있다)
+        if buf:
+            for line in buf.split(b"\n"):
+                err_line(line)
 
     def cancel_watch():
         while p.poll() is None:
@@ -727,20 +771,20 @@ def _run(job, argv, on_line=None):
             time.sleep(0.15)
     threading.Thread(target=cancel_watch, daemon=True).start()
     if on_line is None:
-        t = threading.Thread(target=lambda: err_lines.extend(p.stderr.read().decode("utf-8", "replace")
-                                                             .splitlines()), daemon=True)
+        t = threading.Thread(target=read_err, daemon=True)
         t.start()
         for line in p.stdout:
             out_lines.append(line.decode("utf-8", "surrogateescape").rstrip("\n"))
         t.join()
     else:
         # bsdtar -v 는 "x 이름" 을 쓰고, 그 항목에서 오류가 나면 같은 줄에 ": 이유" 를 붙인다 — 줄은 모두 남긴다
-        for line in p.stderr:
-            s = line.decode("utf-8", "replace").rstrip("\n")
-            if s.startswith("x "):
-                on_line(s[2:])
-            err_lines.append(s)
+        read_err()
     rc = p.wait()
+    if p.stdin:
+        try:
+            p.stdin.close()
+        except OSError:
+            pass
     if job.cancellable.is_cancelled():
         raise Cancelled()
     return rc, out_lines, err_lines
@@ -760,8 +804,7 @@ def _x_bsdtar(job, arc, dest, arc_name):
     pw = None
     wrong = False
     while True:
-        extra = ["--passphrase", pw if pw is not None else NO_PASS]
-        rc, listing, err = _run(job, [bsdtar, "-t", "-f", arc] + extra)
+        rc, listing, err = _run(job, [bsdtar, "-t", "-f", arc], passphrase=pw)
         if rc == 0:
             break
         if _needs_pass(err):
@@ -790,8 +833,7 @@ def _x_bsdtar(job, arc, dest, arc_name):
         while True:
             # 임시 폴더에 풀고 검사한 뒤 옮긴다 — 대상 폴더와 같은 드라이브 (옮기기가 이름 바꾸기로 끝나게)
             staging = tempfile.mkdtemp(prefix=".sekai-extract-", dir=home)
-            extra = ["--passphrase", pw if pw is not None else NO_PASS]
-            rc, _o, err = _run(job, [bsdtar, "-x", "-v", "-f", arc, "-C", staging] + BSDTAR_OPTS + extra, seen)
+            rc, _o, err = _run(job, [bsdtar, "-x", "-v", "-f", arc, "-C", staging] + BSDTAR_OPTS, seen, passphrase=pw)
             if rc != 0 and _needs_pass(err):
                 low = " ".join(err).lower()
                 if "unsupported" in low or "not supported" in low:
