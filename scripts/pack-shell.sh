@@ -210,7 +210,7 @@ echo "==> sekai-de 스테이징"
 stage_tree "$P/src/sekai-de" "$STAGE_DE"
 # 번역 원본(.po) → .mo (msgfmt 없이) — 데비안에 한국어가 없는 것을 SekaiOS 가 채운다 (postinst 가 이어 붙인다)
 find "$STAGE_DE/usr/share/sekai/locale" -name '*.po' 2>/dev/null | while read -r po; do
-    python3 "$SELF/po2mo.py" "$po" "${po%.po}.mo" && rm -f "$po"
+    python3 "$SELF/po2mo.py" "$po" "${po%.po}.mo" && chmod 644 "${po%.po}.mo" && rm -f "$po"
 done
 cat > "$STAGE_DE/DEBIAN/preinst" <<PRI
 #!/bin/sh
