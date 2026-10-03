@@ -97,6 +97,81 @@ def apply_system(mode):
             _write_ini(os.path.join(home, ".config", d, "settings.ini"), vals)
         except OSError:
             pass
+    try:
+        write_window_controls(mode, home)
+    except OSError:
+        pass
+
+
+# ── 앱이 스스로 그리는 제목줄(GTK4·libadwaita)의 창 단추 — 윈도우 11 식 ──
+#   GTK4 앱은 제목줄을 스스로 그려 WorldLink 막대가 빠진다(SEKAI_GEOM_CSD). 그 단추는 앱의 테마(Adwaita 의 동그라미)라
+#   다른 창과 달랐다 — libadwaita 는 시스템 GTK 테마를 무시하지만 사용자 CSS(~/.config/gtk-4.0/gtk.css)는 늘 맨 위에
+#   얹는다. Flatpak 앱은 sekaios-base 가 이 폴더를 읽게 해 둔다(flatpak override xdg-config/gtk-4.0:ro).
+#   앱의 아이콘은 숨기고 단추 바탕에 WorldLink 막대와 같은 10px 선 그림을 놓는다 (이름 붙은 아이콘은 CSS 로 못 바꾼다)
+CONTROLS_CSS = "sekai-window-controls.css"
+_CONTROLS_MARK = ".sekai-window-controls"       # @import 를 한 번 넣었다 — 사용자가 지우면 다시 넣지 않는다
+_SHAPES = {
+    "min": '<path d="M0 5.5H10"/>',
+    "max": '<rect x="0.5" y="0.5" width="9" height="9"/>',
+    "restore": '<path d="M2.5 2.5V0.5H9.5V7.5H7.5"/><rect x="0.5" y="2.5" width="7" height="7"/>',
+    "close": '<path d="M0 0L10 10M10 0L0 10"/>',
+}
+_CONTROLS = """/* SekaiOS — 앱이 스스로 그리는 제목줄(GTK4·libadwaita)의 창 단추를 윈도우 11 식으로.
+   SekaiOS 가 로그인 때마다 다시 쓴다 (다크·라이트). 쓰지 않으려면 gtk.css 의 @import 줄을 지우면 된다 */
+windowcontrols { border-spacing: 0; }
+windowcontrols > button {
+  min-width: 46px; min-height: 32px; margin: 0; padding: 0;
+  border-radius: 0; box-shadow: none; border: none;
+  background-color: transparent; background-repeat: no-repeat; background-position: center; background-size: 10px 10px;
+}
+windowcontrols > button > image { opacity: 0; background: none; box-shadow: none; }
+windowcontrols > button:hover { background-color: alpha(currentColor, 0.10); }
+windowcontrols > button:active { background-color: alpha(currentColor, 0.18); }
+windowcontrols > button.minimize { background-image: url("sekai-min-TONE.svg"); }
+windowcontrols > button.maximize { background-image: url("sekai-max-TONE.svg"); }
+window.maximized windowcontrols > button.maximize,
+window.fullscreen windowcontrols > button.maximize { background-image: url("sekai-restore-TONE.svg"); }
+windowcontrols > button.close { background-image: url("sekai-close-TONE.svg"); }
+windowcontrols > button.close:hover, windowcontrols > button.close:active {
+  background-color: #c42b1c; background-image: url("sekai-close-white.svg");
+}
+"""
+
+
+def _write_if_changed(path, text):
+    try:
+        with open(path, encoding="utf-8") as f:
+            if f.read() == text:
+                return
+    except OSError:
+        pass
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def write_window_controls(mode, home=None):
+    d = os.path.join(home or os.path.expanduser("~"), ".config", "gtk-4.0")
+    os.makedirs(d, exist_ok=True)
+    for tone, col in (("dark", PALETTES["dark"]["fg"]), ("light", PALETTES["light"]["fg"]), ("white", "#ffffff")):
+        for k, body in _SHAPES.items():
+            _write_if_changed(os.path.join(d, f"sekai-{k}-{tone}.svg"),
+                              f'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10">'
+                              f'<g fill="none" stroke="{col}" stroke-width="1">{body}</g></svg>\n')
+    _write_if_changed(os.path.join(d, CONTROLS_CSS), _CONTROLS.replace("TONE", "dark" if mode == "dark" else "light"))
+    # 사용자 gtk.css 맨 위에 @import 한 줄 (CSS 규칙상 @import 는 맨 위) — 처음 한 번만
+    css, mark = os.path.join(d, "gtk.css"), os.path.join(d, _CONTROLS_MARK)
+    if os.path.exists(mark):
+        return
+    try:
+        with open(css, encoding="utf-8") as f:
+            old = f.read()
+    except OSError:
+        old = ""
+    if CONTROLS_CSS not in old:
+        _write_if_changed(css, f'@import url("{CONTROLS_CSS}");\n' + old)
+    open(mark, "w").close()
 
 
 # ── 글꼴 다듬기 (윈도우의 ClearType) ──

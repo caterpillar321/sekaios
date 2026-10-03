@@ -208,6 +208,10 @@ divert_takeover() {
 # ─────────────────────────────────────────────────────────
 echo "==> sekai-de 스테이징"
 stage_tree "$P/src/sekai-de" "$STAGE_DE"
+# 번역 원본(.po) → .mo (msgfmt 없이) — 데비안에 한국어가 없는 것을 SekaiOS 가 채운다 (postinst 가 이어 붙인다)
+find "$STAGE_DE/usr/share/sekai/locale" -name '*.po' 2>/dev/null | while read -r po; do
+    python3 "$SELF/po2mo.py" "$po" "${po%.po}.mo" && rm -f "$po"
+done
 cat > "$STAGE_DE/DEBIAN/preinst" <<PRI
 #!/bin/sh
 set -e
@@ -283,6 +287,15 @@ if [ "$1" = "configure" ]; then
     #   0928 설치본을 로그인한 채 업데이트해서 확인). 여기선 파일이 모두 제자리에 있다
     hypr_each reload
     rm -rf /usr/share/sekai/hypr/.sekai-keep   # preinst 가 걸어 둔 하드 링크 (HYPR_KEEP) — reload 로 감시를 옮긴 뒤
+    # 데비안에 한국어가 없는 번역을 시스템 자리에 잇는다 (/usr/share/sekai/locale/<언어>/<도메인>.mo) — 그 자리를
+    #   다른 패키지가 가지면(데비안이 나중에 넣으면) 건드리지 않는다. 포털 파일 고르기 창이 영어로 보이던 것
+    for mo in /usr/share/sekai/locale/*/*.mo; do
+        [ -e "$mo" ] || continue
+        lang=$(basename "$(dirname "$mo")"); t="/usr/share/locale/$lang/LC_MESSAGES/$(basename "$mo")"
+        if [ -L "$t" ] || { [ ! -e "$t" ] && ! dpkg-query -S "$t" >/dev/null 2>&1; }; then
+            mkdir -p "$(dirname "$t")" && ln -sfn "$mo" "$t"
+        fi
+    done
     # foot 패키지가 graphical-session.target 에 걸어 둔 foot 서버 — SekaiOS 세션이 그 타깃을 켜면서부터
     #   쓰지도 않는 서버가 떴다 (터미널은 Nenerobo, foot 은 예비로 그냥 켠다)
     systemctl --global disable foot-server.service foot-server.socket >/dev/null 2>&1 || true
@@ -307,6 +320,10 @@ cat > "$STAGE_DE/DEBIAN/postrm" <<'PO'
 #!/bin/sh
 set -e
 if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+    # postinst 가 이은 번역 링크 (우리 것을 가리키는 것만)
+    for t in /usr/share/locale/*/LC_MESSAGES/*.mo; do
+        [ -L "$t" ] && case "$(readlink "$t")" in /usr/share/sekai/locale/*) rm -f "$t" ;; esac
+    done
     dpkg-divert --package sekai-de --rename --quiet \
         --remove /usr/share/dbus-1/services/org.xfce.Thunar.FileManager1.service 2>/dev/null || true
     for n in SystemPrompter PrivatePrompter; do
@@ -448,6 +465,11 @@ if [ "$1" = "configure" ]; then
     #   처음 한 번만 등록한다 (사용자가 지웠으면 업데이트 때 되살리지 않는다). 저장소 파일(서명 키 포함)을
     #   패키지에 실어 두어 인터넷 없이(이미지 만드는 중) 등록된다. 앱 목록은 첫 새로 고침 때 받는다.
     #   번역은 SekaiOS 가 고를 수 있는 언어로 — flatpak 은 시스템 기본 언어(en)만 받아서 앱이 영어로 떴다
+    # Flatpak 앱이 사용자 GTK4 CSS(~/.config/gtk-4.0 — SekaiOS 의 윈도우 11 식 창 단추)를 읽게 (읽기만, 한 번만)
+    if command -v flatpak >/dev/null && [ ! -e /var/lib/sekai/flatpak-gtk4-css ]; then
+        flatpak override --system --filesystem=xdg-config/gtk-4.0:ro >/dev/null 2>&1 \
+            && mkdir -p /var/lib/sekai && touch /var/lib/sekai/flatpak-gtk4-css || true
+    fi
     if command -v flatpak >/dev/null && [ ! -e /var/lib/sekai/flathub-added ]; then
         flatpak remote-add --system --if-not-exists --from flathub /usr/share/sekaios/flathub.flatpakrepo \
             >/dev/null 2>&1 && mkdir -p /var/lib/sekai && touch /var/lib/sekai/flathub-added || true

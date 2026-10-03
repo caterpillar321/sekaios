@@ -1,0 +1,117 @@
+# xdg-desktop-portal-gtk 한국어 번역 — SekaiOS
+#   데비안의 xdg-desktop-portal-gtk(1.15.3)엔 한국어가 없다. 그러면 GLib 이 "앱 번역이 없으면 GTK 문구도 번역하지
+#   않는다"(섞인 말 막기) 규칙으로 파일 고르기 창의 GTK 문구(취소·최근·다른 위치 …)까지 영어로 보였다.
+#   sekai-de postinst 가 /usr/share/locale/ko/LC_MESSAGES 에 이 번역(.mo)을 잇는다 — 다른 패키지가 그 파일을
+#   가지면(데비안이 나중에 넣으면) 그쪽을 쓴다. 원문: https://github.com/flatpak/xdg-desktop-portal-gtk (LGPL-2.1+)
+msgid ""
+msgstr ""
+"Project-Id-Version: xdg-desktop-portal-gtk 1.15.3\n"
+"Language: ko\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "Portal"
+msgstr "포털"
+
+msgid "Deny Access"
+msgstr "거부"
+
+msgid "Grant Access"
+msgstr "허용"
+
+msgid "Select an Image"
+msgstr "그림 선택"
+
+msgid "Cancel"
+msgstr "취소"
+
+msgid "Select"
+msgstr "선택"
+
+msgid "Clear"
+msgstr "지우기"
+
+msgid "Images"
+msgstr "그림"
+
+msgid "Share your personal information with %s?"
+msgstr "%s 에 개인 정보를 공유할까요?"
+
+msgid "Share your personal information with the requesting application?"
+msgstr "요청한 앱에 개인 정보를 공유할까요?"
+
+msgid "Share Details"
+msgstr "공유할 정보"
+
+msgid "_Cancel"
+msgstr "취소(_C)"
+
+msgid "_Share"
+msgstr "공유(_S)"
+
+msgid "Make changes before sharing the information"
+msgstr "공유하기 전에 정보를 고칠 수 있습니다"
+
+msgid "Failed to start Software"
+msgstr "앱 설치 프로그램을 열지 못했습니다"
+
+msgid "Choose an application to open the file “%s”."
+msgstr "“%s” 파일을 열 앱을 고르세요."
+
+msgid "Choose an application."
+msgstr "앱을 고르세요."
+
+msgid ""
+"No apps installed that can open “%s”. You can find more applications in "
+"Software"
+msgstr "“%s” 을(를) 열 수 있는 앱이 없습니다. 스토어에서 앱을 더 찾을 수 있습니다"
+
+msgid "No suitable app installed. You can find more applications in Software."
+msgstr "알맞은 앱이 없습니다. 스토어에서 앱을 더 찾을 수 있습니다."
+
+msgid "Open With…"
+msgstr "연결 프로그램…"
+
+msgid "_Open"
+msgstr "열기(_O)"
+
+msgid "No Apps available"
+msgstr "쓸 수 있는 앱 없음"
+
+msgid "_Find More in Software"
+msgstr "스토어에서 더 찾기(_F)"
+
+msgid "Create Web Application"
+msgstr "웹 앱 만들기"
+
+msgid "Create Application"
+msgstr "앱 만들기"
+
+msgid "C_reate"
+msgstr "만들기(_R)"
+
+msgid "_Select"
+msgstr "선택(_S)"
+
+msgid "_Save"
+msgstr "저장(_S)"
+
+msgid "Open files read-only"
+msgstr "읽기 전용으로 열기"
+
+msgid "Requested setting not found"
+msgstr "요청한 설정이 없습니다"
+
+msgid "Set Background"
+msgstr "배경 설정"
+
+msgid "Set"
+msgstr "설정"
+
+msgid "Failed to load image file"
+msgstr "그림 파일을 불러오지 못했습니다"
+
+msgid "Activities"
+msgstr "활동"
