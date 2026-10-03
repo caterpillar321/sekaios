@@ -135,6 +135,7 @@ popover.menu modelbutton accelerator {{ margin-left: 28px; }}
 .nr-card > row, .nr-row {{ padding: 12px 16px; }}
 .nr-card > row:not(:last-child) {{ border-bottom: 1px solid {_rgba(fg, 0.07)}; }}
 .nr-sub {{ color: {_rgba(fg, 0.62)}; font-size: 12px; }}
+.nr-err {{ color: #e5484d; font-weight: 600; }}
 .nr-sec {{ font-weight: 600; margin: 18px 0 8px 2px; }}
 .nr-swatch {{ min-width: 18px; min-height: 18px; border-radius: 4px; }}
 .nr-preview {{ border-radius: 8px; padding: 10px 14px; font-family: monospace; }}

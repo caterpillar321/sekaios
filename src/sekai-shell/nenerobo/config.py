@@ -160,7 +160,10 @@ def profile_desc(p):
     if kind == "admin":
         return "관리자 권한(root)으로 — 열 때 암호를 묻습니다"
     argv = profile_argv(p)
-    return " ".join(shlex.quote(a) for a in argv) if argv else "(명령 없음)"
+    out = " ".join(shlex.quote(a) for a in argv) if argv else "(명령 없음)"
+    if p.get("cwd"):
+        out += f"  ·  시작 폴더 {p['cwd']}"
+    return out
 
 
 def ssh_hosts(path=None):

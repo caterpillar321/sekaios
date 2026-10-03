@@ -129,6 +129,8 @@ class SettingsWindow(Gtk.Window):
     def _changed(self, key, val):
         self.cfg.set(key, val)
         self.app.apply_config()
+        if key == "default_profile":             # 프로필 목록의 "· 기본" 표시도
+            GLib.idle_add(lambda: (self._rebuild("profiles"), False)[1])
 
     def _switch(self, key):
         sw = Gtk.Switch(active=bool(self.cfg[key]))
@@ -366,7 +368,7 @@ class ProfileEditor(Gtk.Window):
         lab("색 구성표", 6)
         g.attach(self.scheme, 1, 6, 2, 1)
         self.err = Gtk.Label(xalign=0)
-        self.err.add_css_class("error")
+        self.err.add_css_class("nr-err")
         self.err.set_visible(False)
         box.append(self.err)
         btns = Gtk.Box(spacing=8, halign=Gtk.Align.END)
@@ -386,6 +388,7 @@ class ProfileEditor(Gtk.Window):
 
     def _kind_changed(self):
         ssh = self.kind.get_selected() == 1
+        self.err.set_visible(False)
         for w in (self.cmd, self.l_cmd):
             w.set_visible(not ssh)
         for w in (self.host, self.l_host, self.user, self.port, self.l_user):

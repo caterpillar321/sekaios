@@ -152,7 +152,7 @@ stage_tree() {
     ( cd "$src" && find . -type f ) | while read -r f; do
         f="${f#./}"
         mode=644
-        case "$f" in usr/bin/*|usr/sbin/*|usr/libexec/*|etc/kernel/postinst.d/*|etc/initramfs/post-update.d/*|etc/grub.d/*|usr/share/initramfs-tools/hooks/*) mode=755 ;; esac
+        case "$f" in usr/bin/*|usr/sbin/*|usr/libexec/*|etc/kernel/postinst.d/*|etc/initramfs/post-update.d/*|etc/grub.d/*|etc/update-motd.d/*|usr/share/initramfs-tools/hooks/*) mode=755 ;; esac
         install -Dm$mode "$src/$f" "$stage/$f"
     done
     mkdir -p "$stage/DEBIAN"
@@ -393,6 +393,11 @@ cat > "$STAGE_B/DEBIAN/postinst" <<'PI'
 #!/bin/sh
 set -e
 if [ "$1" = "configure" ]; then
+    # 설치본의 /etc/motd 에 남은 설치 USB 안내("sudo sekai-install")를 머리글만으로 — 안내는 이제
+    #   /etc/update-motd.d/20-sekai-live 가 라이브로 켰을 때만 보인다
+    if [ ! -d /run/live/medium ] && [ -f /etc/motd ] && grep -q "sudo sekai-install" /etc/motd; then
+        printf '  SekaiOS 1.0 (Hatsune)  -  based on Debian 13 (trixie)\n\n' > /etc/motd
+    fi
     [ -d /run/systemd/system ] && systemctl daemon-reload >/dev/null 2>&1 || true
     # 부팅 화면·콘솔을 바탕화면과 같은 모니터 모드로 (sekai-bootmode — 모드가 바뀔 때마다 신호가 끊긴다)
     systemctl enable sekai-bootmode.path >/dev/null 2>&1 || true

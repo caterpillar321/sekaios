@@ -1,0 +1,10 @@
+#!/bin/sh
+# 설치 USB(라이브)로 켰을 때만 설치 안내 — 설치된 SekaiOS 에서는 아무것도 보이지 않는다
+#   (예전엔 이 안내가 /etc/motd 에 박혀 있어 설치본에서도 SSH 로그인마다 "디스크에 설치"를 권했다)
+[ -d /run/live/medium ] || exit 0
+cat <<'TXT'
+    Install to disk    sudo sekai-install
+    Network status     ip a
+    Installer log      /var/log/sekai-install.log
+
+TXT
