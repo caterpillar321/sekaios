@@ -1,0 +1,26 @@
+[Desktop Entry]
+Type=Application
+Name=Terminal
+Name[ko]=터미널
+GenericName=Terminal emulator
+GenericName[ko]=터미널
+Comment=Command line — tabs, Ctrl+C/V to copy and paste (Nenerobo)
+Comment[ko]=명령줄 — 탭, Ctrl+C·V 로 복사·붙여넣기 (Nenerobo)
+Exec=nenerobo
+TryExec=nenerobo
+Icon=utilities-terminal
+Terminal=false
+Categories=System;TerminalEmulator;GTK;
+Keywords=shell;prompt;command;commandline;cmd;terminal;console;nenerobo;터미널;명령;명령 프롬프트;셸;콘솔;네네로보;
+StartupNotify=true
+StartupWMClass=org.sekaios.Nenerobo
+X-TerminalArgExec=--
+X-TerminalArgTitle=--title
+X-TerminalArgDir=--working-directory
+X-TerminalArgHold=--hold
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=New Window
+Name[ko]=새 창
+Exec=nenerobo

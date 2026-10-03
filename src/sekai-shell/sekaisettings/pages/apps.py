@@ -16,7 +16,8 @@ from sekaishell import appmgr  # noqa: E402
 from ..util import LOCK_NOW, run, spawn
 from ..widgets import Page, button, combo, entry, icon_image, info, row
 
-TERMINALS = [("sekai-terminal", "SekaiOS 터미널 (자동)"), ("kitty", "Kitty"), ("foot", "Foot"), ("xterm", "XTerm")]
+TERMINALS = [("sekai-terminal", "SekaiOS 터미널 (자동)"), ("nenerobo", "Nenerobo"), ("kitty", "Kitty"),
+             ("foot", "Foot"), ("xterm", "XTerm")]
 BROWSERS = [("chromium", "Chromium"), ("google-chrome", "Google Chrome"),
             ("firefox-esr", "Firefox ESR")]
 FILERS = [("sekai-files", "파일 탐색기"), ("thunar", "Thunar"), ("pcmanfm", "PCManFM")]

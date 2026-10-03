@@ -49,6 +49,7 @@ install -Dm755 "$SRC/lib/polkit-agent" "$STAGE/usr/lib/sekai/polkit-agent"
 install -Dm755 "$SRC/lib/nm-agent"     "$STAGE/usr/lib/sekai/nm-agent"
 install -Dm755 "$SRC/lib/keyring-prompter" "$STAGE/usr/lib/sekai/keyring-prompter"
 install -Dm755 "$SRC/sekai-terminal"  "$STAGE/usr/bin/sekai-terminal"
+install -Dm755 "$SRC/nenerobo-bin"    "$STAGE/usr/bin/nenerobo"
 # 기본 화면 모드 (X11) — 그래픽 드라이버가 없을 때
 for f in "$SRC"/lib/x11/*; do
     case "$(basename "$f")" in sxhkdrc) m=644 ;; *) m=755 ;; esac
@@ -70,7 +71,7 @@ mkdir -p "$DIST/sekaiadmin/pages"
 for f in "$SRC/sekaiadmin"/*.py;        do install -Dm644 "$f" "$DIST/sekaiadmin/$(basename "$f")"; done
 for f in "$SRC/sekaiadmin/pages"/*.py;  do install -Dm644 "$f" "$DIST/sekaiadmin/pages/$(basename "$f")"; done
 # 파일 탐색기 (sekai-files) · 메모장 (sekai-notepad) · 계산기 (sekai-calc) · 사진 (sekai-photos) · 앱 설치 관리자 (sekai-appinstall) · 스토어 (sekai-store)
-for pkg in sekaifiles sekainotepad sekaicalc sekaiphotos sekaiappinstall sekaistore; do
+for pkg in sekaifiles sekainotepad sekaicalc sekaiphotos sekaiappinstall sekaistore nenerobo; do
     mkdir -p "$DIST/$pkg"
     for f in "$SRC/$pkg"/*.py; do install -Dm644 "$f" "$DIST/$pkg/$(basename "$f")"; done
 done
@@ -121,7 +122,8 @@ Depends: python3, python3-gi, python3-gi-cairo, gir1.2-gtk-3.0,
  gir1.2-gtksessionlock-0.1, libgtk-session-lock0, python3-pampy,
  libglib2.0-bin, sekai-winshot, gir1.2-gudev-1.0, pulseaudio-utils,
  gir1.2-gtksource-4, gir1.2-polkit-1.0, gir1.2-gcr-4,
- appstream, gir1.2-appstream-1.0
+ appstream, gir1.2-appstream-1.0, gir1.2-gtk-4.0, gir1.2-vte-3.91,
+ fonts-jetbrains-mono, fonts-nanum
 Recommends: wireplumber, swaylock, gir1.2-flatpak-1.0
 Provides: polkit-1-auth-agent, notification-daemon
 Description: SekaiOS desktop shell
@@ -281,6 +283,11 @@ if [ "$1" = "configure" ]; then
     #   0928 설치본을 로그인한 채 업데이트해서 확인). 여기선 파일이 모두 제자리에 있다
     hypr_each reload
     rm -rf /usr/share/sekai/hypr/.sekai-keep   # preinst 가 걸어 둔 하드 링크 (HYPR_KEEP) — reload 로 감시를 옮긴 뒤
+    # 기본 터미널 — "터미널에서 실행"하는 앱(x-terminal-emulator -e …)도 Nenerobo 로 (kitty 는 20 쯤이다)
+    if [ -x /usr/bin/nenerobo ]; then
+        update-alternatives --install /usr/bin/x-terminal-emulator x-terminal-emulator /usr/bin/nenerobo 60 \
+            >/dev/null 2>&1 || true
+    fi
 fi
 PI
 cat > "$STAGE_DE/DEBIAN/prerm" <<'PR'
@@ -288,6 +295,9 @@ cat > "$STAGE_DE/DEBIAN/prerm" <<'PR'
 set -e
 if [ "$1" = "remove" ] && command -v pam-auth-update >/dev/null; then
     pam-auth-update --package --remove sekai-gnome-keyring
+fi
+if [ "$1" = "remove" ]; then
+    update-alternatives --remove x-terminal-emulator /usr/bin/nenerobo >/dev/null 2>&1 || true
 fi
 PR
 cat > "$STAGE_DE/DEBIAN/postrm" <<'PO'

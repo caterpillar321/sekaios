@@ -483,7 +483,7 @@ def icon_image(names, size):
 DEFAULT_PINS = [
     ("파일",     ["sekai-files", "thunar"],                                 ["system-file-manager", "folder"]),
     ("웹",       ["google-chrome", "chromium", "firefox-esr"],             ["chromium", "web-browser"]),
-    ("터미널",   ["kitty", "foot", "footclient"],                           ["utilities-terminal"]),
+    ("터미널",   ["org.sekaios.Nenerobo", "kitty", "foot", "footclient"],   ["utilities-terminal"]),
     ("메모장",   ["sekai-notepad", "org.xfce.mousepad"],                    ["accessories-text-editor"]),
     ("계산기",   ["sekai-calc", "galculator"],                              ["accessories-calculator"]),
     ("설정",     ["sekai-settings"],                                        ["preferences-system"]),

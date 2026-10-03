@@ -17,7 +17,7 @@ from .popup import PanelPopup
 
 E = GtkLayerShell.Edge
 LIMIT = 60
-TERMINALS = ("foot", "footclient", "kitty", "alacritty", "org.wezfurlong.wezterm",
+TERMINALS = ("org.sekaios.Nenerobo", "foot", "footclient", "kitty", "alacritty", "org.wezfurlong.wezterm",
              "xfce4-terminal", "gnome-terminal-server", "org.gnome.console", "konsole",
              "xterm", "urxvt", "terminator", "tilix")
 

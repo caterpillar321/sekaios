@@ -352,7 +352,9 @@ APP_ALIASES = {
     "sekai-calc": ("계산기", "calculator"),
     "sekai-photos": ("사진", "이미지 뷰어", "그림 보기", "사진 보기", "photos"),
     "sekai-taskmgr": ("작업 관리자", "task manager", "프로세스"),
-    "kitty": ("명령 프롬프트", "파워셸", "powershell"),
+    "org.sekaios.Nenerobo": ("명령 프롬프트", "파워셸", "powershell", "cmd", "windows terminal", "콘솔", "셸",
+                             "nenerobo", "네네로보"),
+    "kitty": ("다른 터미널",),
     "sekai-settings": ("제어판", "control panel", "환경 설정"),
     # 컴퓨터 관리 — 윈도우에서 각각 따로 찾던 도구 이름으로도
     "sekai-admin": ("컴퓨터 관리", "이벤트 뷰어", "서비스", "관리 도구", "로그 보기",

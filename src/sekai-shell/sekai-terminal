@@ -1,5 +1,12 @@
 #!/bin/sh
-# SekaiOS 터미널 — Wayland 에선 kitty (윈도우 터미널처럼 Ctrl+C·V, 탭 — /etc/xdg/sekai/kitty/kitty.conf),
+# SekaiOS 터미널 — Nenerobo (GTK4 + VTE, /usr/bin/nenerobo) 가 있으면 그것 (Wayland · 기본 화면 모드 모두).
+#   SEKAI_TERMINAL=kitty 면 예전처럼 kitty (아래). 인자는 그대로 넘긴다 (-T 제목, -e 명령 … — Nenerobo 가 같은 꼴을 받는다)
+if [ "${SEKAI_TERMINAL:-}" != kitty ] && [ -x /usr/bin/nenerobo ]; then
+    for t in /usr/lib/*/girepository-1.0/Vte-3.91.typelib; do
+        [ -e "$t" ] && exec /usr/bin/nenerobo "$@"
+    done
+fi
+# 예전 방식 (Nenerobo 가 없거나 SEKAI_TERMINAL=kitty) — Wayland 에선 kitty (Ctrl+C·V, 탭 — /etc/xdg/sekai/kitty/kitty.conf),
 #   kitty 가 없으면 foot. 기본 화면 모드(X11)에선 xterm 을 비슷한 모양으로 (kitty 는 OpenGL 이 필요하다).
 #   인자는 foot·xterm 식으로 받는다:  sekai-terminal [-T 제목] [-e 명령 인자…]
 if [ -n "${WAYLAND_DISPLAY:-}" ] && [ "${XDG_SESSION_TYPE:-}" != x11 ]; then
