@@ -34,7 +34,7 @@ SKIP_CLASSES = {"", "lxpolkit", "polkit-gnome-authentication-agent-1", "polkit-a
 
 
 # 제목 표시줄(hyprbars)을 빼는 창 — hyprland.conf 의 nobar 규칙과 같게
-NOBAR = re.compile(r"^(chromium|google-chrome.*|org\.gnome\..*)$")
+NOBAR = re.compile(r"^(chromium|google-chrome.*)$")      # 그 밖의 앱은 WorldLink 가 알려 주는 sekaiCSD 로
 #   클래스 → 처음 제목. 파일 탐색기는 본 창만 제목 표시줄을 스스로 그린다 (대화상자는 hyprbars)
 NOBAR_TITLED = {"org.sekaios.Files": re.compile(r"^org\.sekaios\.Files$")}
 
