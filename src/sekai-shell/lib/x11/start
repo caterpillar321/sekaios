@@ -8,4 +8,11 @@ while [ -e "/tmp/.X11-unix/X$n" ] || [ -e "/tmp/.X$n-lock" ]; do n=$((n + 1)); d
 # 펌웨어 화면(fb0)을 쓰게 고정 — /etc/X11/sekai-basic.conf 참고
 cfg=""
 [ -e /dev/fb0 ] && [ -e /etc/X11/sekai-basic.conf ] && cfg="-config sekai-basic.conf"
-exec xinit "$@" -- ":$n" "vt${XDG_VTNR:-7}" $cfg -nolisten tcp -keeptty -quiet -background none
+# 인증 쿠키 — 없으면 X 가 이 컴퓨터의 아무 연결이나 받아, 다른 계정·Flatpak 앱이 이 화면을 엿보고 입력을 넣을 수 있었다
+#   (startx 와 같게: 쿠키를 0600 파일에 두고 X 에는 -auth, 클라이언트에는 XAUTHORITY). 추상 소켓(-nolisten local)도 닫는다
+umask 077
+auth=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/sekai-xauth.XXXXXX") || exit 1
+xauth -q -f "$auth" add ":$n" . "$(mcookie)" || exit 1
+export XAUTHORITY="$auth"
+umask 022
+exec xinit "$@" -- ":$n" "vt${XDG_VTNR:-7}" $cfg -auth "$auth" -nolisten tcp -nolisten local -keeptty -quiet -background none

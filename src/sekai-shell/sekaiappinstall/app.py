@@ -7,6 +7,7 @@
       → [실행]. 파일은 도우미의 표준 입력으로 넘긴다 (경로를 넘기면 인증 뒤에 바꿔치기할 수 있다).
 SekaiOS 부품을 지우게 되는 꾸러미는 설치 단추를 주지 않는다 (도우미도 다시 막는다).
 """
+import hashlib
 import os
 import shutil
 import sys
@@ -105,7 +106,9 @@ def _boxed(cls, icon, text):
 class InstallWindow(Gtk.ApplicationWindow):
     def __init__(self, app, path):
         super().__init__(application=app, title=APP_NAME)
-        self.path = path
+        self.path = path                # 사용자가 연 파일 — 이름을 보여 줄 때만
+        self.snap = None                # 한 번 읽어 둔 사본 — 확인·아이콘·설치는 모두 이것으로 (_snapshot)
+        self.sha = None
         self.busy = False               # 설치 중 — 닫기를 막는다
         self.plan = None
         self.apps = []
@@ -187,14 +190,37 @@ class InstallWindow(Gtk.ApplicationWindow):
         self._inspect()
 
     # ── 확인 ──
+    def _snapshot(self):
+        """설치 파일을 한 번만 읽어 이 창만 쓰는 임시 폴더(0700)에 복사하며 SHA-256 을 잰다.
+        확인한 파일과 설치하는 파일이 같아야 한다 — 경로를 다시 열면, 다운로드 폴더에 쓸 수 있는 다른 프로그램
+        (Flatpak 브라우저 등)이 확인과 인증 사이에 같은 이름의 다른 .deb 로 바꿔치기할 수 있었다. root 쪽도 해시를 맞춰 본다"""
+        d = os.path.join(self.tmp, "deb")
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        dst = os.path.join(d, os.path.basename(self.path) or "package.deb")
+        h = hashlib.sha256()
+        with open(self.path, "rb") as src, open(dst, "wb") as out:
+            while True:
+                b = src.read(1 << 20)
+                if not b:
+                    break
+                h.update(b)
+                out.write(b)
+        return dst, h.hexdigest()
+
     def _inspect(self):
         self.plan = appmgr.Plan()
-        appmgr.run_helper(["inspect", self.path], self.plan.feed, self._inspected)
-        # 앱 이름·아이콘은 따로 (큰 꾸러미는 몇 초 걸린다 — 정보가 먼저 보이게)
-        def look():
-            name, icon = appmgr.deb_appinfo(self.path, self.tmp)
+
+        def work():
+            try:
+                self.snap, self.sha = self._snapshot()
+            except OSError as e:
+                GLib.idle_add(self._fail, f"설치 파일을 읽지 못했습니다: {e}", True)
+                return
+            GLib.idle_add(lambda: appmgr.run_helper(["inspect", self.snap], self.plan.feed, self._inspected) and False)
+            # 앱 이름·아이콘은 따로 (큰 꾸러미는 몇 초 걸린다 — 정보가 먼저 보이게)
+            name, icon = appmgr.deb_appinfo(self.snap, self.tmp)
             GLib.idle_add(self._got_appinfo, name, icon)
-        threading.Thread(target=look, daemon=True).start()
+        threading.Thread(target=work, daemon=True).start()
 
     def _got_appinfo(self, name, icon):
         if name:
@@ -294,7 +320,7 @@ class InstallWindow(Gtk.ApplicationWindow):
     def _on_install(self, *_):
         if self.busy or not self.main_btn.get_sensitive():
             return                      # 연타 — 이미 시작했다
-        if not os.path.isfile(self.path):
+        if not self.snap or not os.path.isfile(self.snap):
             self._fail("설치 파일을 찾을 수 없습니다 — 옮겨졌거나 지워졌을 수 있습니다", final=True)
             return
         self.busy = True
@@ -306,8 +332,8 @@ class InstallWindow(Gtk.ApplicationWindow):
         self.progress_text.show()
         self.spinner.start()
         self._result = {"error": None, "apps": []}
-        appmgr.run_helper(["install-deb", os.path.basename(self.path)], self._line, self._installed,
-                          root=True, stdin_path=self.path)
+        appmgr.run_helper(["install-deb", os.path.basename(self.path), self.sha], self._line, self._installed,
+                          root=True, stdin_path=self.snap)
 
     def _line(self, kind, rest):
         if kind == "PROGRESS":

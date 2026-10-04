@@ -381,12 +381,12 @@ Maintainer: SekaiOS <sekai@localhost>
 Section: x11
 Priority: optional
 Depends: sekai-shell (= ${FULL}),
- worldlink (>= 0.50.1-sekai31), hyprbars (>= 0.50.0-sekai28), hyprexpo, xwayland,
+ worldlink (>= 0.50.1-sekai32), hyprbars (>= 0.50.0-sekai29), hyprexpo, xwayland,
  xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr,
  swaybg, swayidle, swaylock, grim, slurp, wl-clipboard, cliphist, libnotify-bin,
  brightnessctl, playerctl, wtype, pkexec,
  xserver-xorg-core, xserver-xorg-video-fbdev, xserver-xorg-input-libinput, xserver-xorg-legacy,
- xinit, x11-xserver-utils, xfwm4, xfconf, sxhkd, xcape, xsecurelock, xss-lock, maim, slop, xclip,
+ xinit, xauth, x11-xserver-utils, xfwm4, xfconf, sxhkd, xcape, xsecurelock, xss-lock, maim, slop, xclip,
  xdotool, gir1.2-wnck-3.0,
  greetd, gnome-keyring, libpam-gnome-keyring, libpam-runtime, dbus-user-session,
  ibus, ibus-wayland, ibus-hangul, gir1.2-ibus-1.0, ibus-gtk3, ibus-gtk4,

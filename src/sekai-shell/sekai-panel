@@ -163,7 +163,8 @@ class Hypr:
     def query(self, what: str):
         """clients / workspaces / activewindow / monitors …"""
         try:
-            return json.loads(self._request(f"j/{what}"))
+            # 창 제목은 UTF-8 이 아닐 수 있다 — 엄격히 풀면 제목 하나로 모든 창이 사라졌다(빈 목록)
+            return json.loads(self._request(f"j/{what}").decode("utf-8", "replace"))
         except Exception:
             return []
 

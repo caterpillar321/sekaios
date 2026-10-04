@@ -42,6 +42,7 @@
 import datetime
 import json
 import os
+os.umask(0o022)  # pkexec 은 부른 사람의 umask 를 그대로 넘긴다 — root 가 만드는 파일이 남에게 쓰기로 열리지 않게
 import re
 import shutil
 import subprocess
@@ -55,7 +56,8 @@ CONFIG = "root"
 CONF_FILE = "/etc/snapper/configs/root"
 DEFAULTS = "/etc/default/snapper"
 TEMPLATE = "/usr/share/snapper/config-templates/default"
-TOP = "/run/sekai-restore-top"            # 맨 위(subvolid=5)를 잠깐 연결하는 곳
+TOP_DIR = "/run/sekai-restore"            # root 만 들어가는 폴더(0700) — 그 안에 맨 위를 잠깐 연결한다
+TOP = TOP_DIR + "/top"                     # (연결하면 그 자리의 권한은 btrfs 맨 위의 0755 가 되므로 바깥 폴더로 막는다)
 REQUEST = ".sekai-restore-request"
 RLOG = ".sekai-restore-log"
 PRE_FILE = "/run/sekai-restore-apt-pre"
@@ -171,13 +173,17 @@ class Top:
 
     def __enter__(self):
         _, _, dev = root_info()
+        os.makedirs(TOP_DIR, mode=0o700, exist_ok=True)
+        os.chmod(TOP_DIR, 0o700)
         os.makedirs(TOP, exist_ok=True)
         if not os.path.ismount(TOP):
-            run(["mount", "-t", "btrfs", "-o", "subvolid=5", dev, TOP])
+            # 옛 루트(@before-restore-*)의 setuid 프로그램을 실행할 수 없게 — 읽고 옮기기만 한다
+            run(["mount", "-t", "btrfs", "-o", "subvolid=5,nosuid,nodev,noexec", dev, TOP])
         return TOP
 
     def __exit__(self, *a):
-        run(["umount", TOP], check=False)
+        if run(["umount", TOP], check=False).returncode != 0:
+            run(["umount", "-l", TOP], check=False)        # 누가 붙잡고 있어도 떼어 낸다
 
 
 def old_roots(top):

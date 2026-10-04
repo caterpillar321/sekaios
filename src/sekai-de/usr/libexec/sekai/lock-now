@@ -21,16 +21,27 @@ if [ -z "${WAYLAND_DISPLAY:-}" ] || [ "${XDG_SESSION_TYPE:-}" = x11 ]; then
     exec sekai-lock
 fi
 
+# 진짜 swaylock 의 pid (가장 최근 것) — 이름만 보면 안 된다: Flatpak 앱도 같은 사용자라 /proc 에 보이고 제 이름을
+#   swaylock 으로 바꿀 수 있어, 잠금을 통째로 건너뛰게 할 수 있었다. 실행 파일이 /usr/bin/swaylock 이고
+#   샌드박스 밖(루트가 / — Flatpak 은 bwrap 루트)인 것만
+real_swaylock() {
+    found=""
+    for p in $(pgrep -u "$(id -u)" -x swaylock 2>/dev/null); do
+        [ "$(readlink "/proc/$p/exe" 2>/dev/null)" = /usr/bin/swaylock ] && [ "/proc/$p/root" -ef / ] && found=$p
+    done
+    [ -n "$found" ] && echo "$found"
+}
+
 # 대체 잠금 — swaylock -f 도 잠긴 뒤 돌아온다. 사용자 전환(sekai-switch-user)이 잠긴 것을
 #   알아보게 표시를 남긴다 (swaylock 은 그 표시를 모른다)
 fallback() {
     swaylock -f -c 151517 || return 1
-    p=$(pgrep -n -u "$(id -u)" -x swaylock) && echo "$p" > "$MARK"
+    p=$(real_swaylock) && echo "$p" > "$MARK"
     return 0
 }
 
 # 이미 swaylock 으로 잠겨 있으면 그대로 (sekai-lock 은 컴포지터가 거부해 실패로 끝나고 표시만 지운다)
-pgrep -u "$(id -u)" -x swaylock >/dev/null 2>&1 && exit 0
+real_swaylock >/dev/null && exit 0
 
 # 9번 fd(감시자 잠금)가 sekai-lock 에 물려가지 않게 닫고 부른다
 sekai-lock 9>&- || { fallback; exit $?; }

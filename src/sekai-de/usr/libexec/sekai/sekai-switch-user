@@ -13,6 +13,7 @@
 # ═══════════════════════════════════════════════════════════════
 import json
 import os
+os.umask(0o022)  # pkexec 은 부른 사람의 umask 를 그대로 넘긴다 — root 가 만드는 파일이 남에게 쓰기로 열리지 않게
 import stat
 import subprocess
 import sys
@@ -47,7 +48,8 @@ def caller_locked(uid, timeout=5.0):
                 pid = int(os.read(fd, 32).decode().strip())
             finally:
                 os.close(fd)
-            if os.stat(f"/proc/{pid}").st_uid == uid:
+            # 샌드박스(Flatpak) 프로세스는 루트가 / 가 아니다 — 이름만 흉내 낸 것을 잠금으로 보지 않게
+            if os.stat(f"/proc/{pid}").st_uid == uid and os.path.samefile(f"/proc/{pid}/root", "/"):
                 with open(f"/proc/{pid}/cmdline", "rb") as f:
                     cmd = f.read()
                 # swaylock — lock-now 가 sekai-lock 대신 쓴 대체 잠금 (그때도 표시를 남긴다)

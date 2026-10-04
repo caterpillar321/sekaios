@@ -19,6 +19,7 @@ import datetime
 import fcntl
 import json
 import os
+os.umask(0o022)  # pkexec 은 부른 사람의 umask 를 그대로 넘긴다 — root 가 만드는 파일이 남에게 쓰기로 열리지 않게
 import re
 import shutil
 import stat
@@ -330,20 +331,54 @@ def scrub(dev, wait=False):
     return info
 
 
+def as_owner(path, fn):
+    """fn() 을 path 주인의 권한으로 (자식 프로세스에서) — 남의 폴더에서 root 가 이름으로 일하면, 그 폴더 주인이
+    중간에 이름을 링크로 바꿔치기해 root 의 chown·chmod 를 /etc/shadow 같은 데로 돌릴 수 있었다.
+    NOCOW 표시·다시 쓰기는 파일 주인이면 할 수 있다. 주인이 root 인데 폴더를 남이 쓸 수 있으면 하지 않는다"""
+    st = os.lstat(path)
+    parent = os.lstat(os.path.dirname(path) or "/")
+    if st.st_uid == 0 and (parent.st_uid != 0 or parent.st_mode & 0o022):
+        die("다른 사용자가 쓸 수 있는 폴더 안의 시스템 파일이라 하지 않습니다")
+    pid = os.fork()
+    if pid == 0:
+        code = 1
+        try:
+            if st.st_uid != 0:
+                os.setgroups([])
+                os.setresgid(st.st_gid, st.st_gid, st.st_gid)
+                os.setresuid(st.st_uid, st.st_uid, st.st_uid)
+            fn()
+            code = 0
+        except SystemExit as e:
+            code = e.code if isinstance(e.code, int) else 1
+        except BaseException as e:
+            print(f"ERROR {e}", flush=True)
+        finally:
+            sys.stdout.flush()
+            os._exit(code)
+    _, status = os.waitpid(pid, 0)
+    rc = os.waitstatus_to_exitcode(status)
+    if rc != 0:
+        sys.exit(rc)
+
+
 def set_nocow(path):
     path = os.path.realpath(path)
     if not os.path.isdir(path):
         die("폴더가 아닙니다")
     if run(["findmnt", "-no", "FSTYPE", "-T", path]).stdout.strip() != "btrfs":
         die("btrfs 드라이브의 폴더에서만 됩니다")
-    fd = os.open(path, os.O_RDONLY)
-    try:
-        buf = array.array("L", [0])
-        fcntl.ioctl(fd, FS_IOC_GETFLAGS, buf, True)
-        buf[0] |= FS_NOCOW_FL
-        fcntl.ioctl(fd, FS_IOC_SETFLAGS, buf, True)
-    finally:
-        os.close(fd)
+
+    def work():
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            buf = array.array("L", [0])
+            fcntl.ioctl(fd, FS_IOC_GETFLAGS, buf, True)
+            buf[0] |= FS_NOCOW_FL
+            fcntl.ioctl(fd, FS_IOC_SETFLAGS, buf, True)
+        finally:
+            os.close(fd)
+    as_owner(path, work)
 
 
 def in_use(path):
@@ -364,7 +399,8 @@ def in_use(path):
 
 
 def rewrite(path):
-    """CoW 없는 새 파일로 다시 쓴다 — 쓰는 프로그램이 없을 때만. 권한·주인·시각은 그대로"""
+    """CoW 없는 새 파일로 다시 쓴다 — 쓰는 프로그램이 없을 때만. 권한·시각은 그대로.
+    일은 파일 주인 권한으로, 연 fd 로만 (as_owner) — 이름으로 다시 열거나 chown 하지 않는다"""
     path = os.path.realpath(path)
     if not os.path.isfile(path):
         die("파일이 아닙니다")
@@ -372,27 +408,42 @@ def rewrite(path):
         die("btrfs 드라이브의 파일에서만 됩니다")
     if in_use(path):
         die("이 파일을 쓰고 있는 프로그램이 있습니다 — 그 프로그램(가상 머신 등)을 끈 뒤 다시 해 보세요")
-    st = os.stat(path)
-    if shutil.disk_usage(os.path.dirname(path)).free < st.st_size * 1.1:
-        die("디스크 여유 공간이 부족합니다 (파일 크기만큼 필요)")
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".sekai-rewrite.")
-    try:
-        buf = array.array("L", [FS_NOCOW_FL])
-        fcntl.ioctl(fd, FS_IOC_SETFLAGS, buf, True)       # 비어 있을 때 걸어야 듣는다
-        with open(path, "rb") as src, os.fdopen(fd, "wb") as dst:
-            shutil.copyfileobj(src, dst, 16 * 1024 * 1024)
-            dst.flush()
-            os.fsync(dst.fileno())
-        os.chown(tmp, st.st_uid, st.st_gid)
-        os.chmod(tmp, stat.S_IMODE(st.st_mode))
-        os.utime(tmp, ns=(st.st_atime_ns, st.st_mtime_ns))
-        os.replace(tmp, path)
-    except BaseException:
+    d, name = os.path.split(path)
+
+    def work():
+        dfd = os.open(d, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+            sfd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+            st = os.fstat(sfd)
+            if not stat.S_ISREG(st.st_mode):
+                die("파일이 아닙니다")
+            if shutil.disk_usage(d).free < st.st_size * 1.1:
+                die("디스크 여유 공간이 부족합니다 (파일 크기만큼 필요)")
+            tmp = f".sekai-rewrite.{os.getpid()}"
+            tfd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dfd)
+            try:
+                buf = array.array("L", [FS_NOCOW_FL])
+                fcntl.ioctl(tfd, FS_IOC_SETFLAGS, buf, True)       # 비어 있을 때 걸어야 듣는다
+                with os.fdopen(sfd, "rb") as src, os.fdopen(tfd, "wb") as dst:
+                    shutil.copyfileobj(src, dst, 16 * 1024 * 1024)
+                    dst.flush()
+                    os.fchmod(dst.fileno(), stat.S_IMODE(st.st_mode))
+                    try:
+                        os.fchown(dst.fileno(), -1, st.st_gid)     # 주인이 그 그룹에 들어 있을 때만 된다
+                    except PermissionError:
+                        pass
+                    os.utime(dst.fileno(), ns=(st.st_atime_ns, st.st_mtime_ns))
+                    os.fsync(dst.fileno())
+                os.replace(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+            except BaseException:
+                try:
+                    os.unlink(tmp, dir_fd=dfd)
+                except OSError:
+                    pass
+                raise
+        finally:
+            os.close(dfd)
+    as_owner(path, work)
 
 
 def main():

@@ -18,6 +18,7 @@
 #   표준 입력으로 받은 목록을 읽고 통과/거부만 한다)
 # ═══════════════════════════════════════════════════════════════
 import os
+os.umask(0o022)  # pkexec 은 부른 사람의 umask 를 그대로 넘긴다 — root 가 만드는 파일이 남에게 쓰기로 열리지 않게
 import re
 import shutil
 import subprocess

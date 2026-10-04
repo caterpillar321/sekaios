@@ -4,7 +4,7 @@
 #
 #    sekai-apps inspect <파일.deb>         (보통 권한) 꾸러미 정보와 설치 계획
 #    sekai-apps plan-remove <패키지>        (보통 권한) 지우면 함께 지워지는 것
-#    sekai-apps install-deb <이름.deb>      (관리자, pkexec) 표준 입력으로 받은 .deb 를 설치
+#    sekai-apps install-deb <이름.deb> <sha256>  (관리자, pkexec) 표준 입력으로 받은 .deb 를 설치 — 해시가 맞을 때만
 #    sekai-apps remove <패키지>             (관리자, pkexec) 앱을 지운다 (따라 들어온 구성 요소도)
 #    sekai-apps plan-install <패키지>       (보통 권한) 저장소의 앱을 설치하면 함께 들어오는 것·크기
 #    sekai-apps install <패키지>            (관리자, pkexec) 저장소에서 설치 (스토어)
@@ -31,7 +31,9 @@
 #  (guard 는 실제 설치에 거는 apt 훅이다 — sekai-update 의 것과 같다. sekaios-base 없이 SekaiDE 만
 #   깐 데비안에서도 돌아야 해서 이 파일 안에 따로 둔다)
 # ═══════════════════════════════════════════════════════════════
+import hashlib
 import os
+os.umask(0o022)  # pkexec 은 부른 사람의 umask 를 그대로 넘긴다 — root 가 만드는 파일이 남에게 쓰기로 열리지 않게
 import re
 import shutil
 import subprocess
@@ -51,7 +53,9 @@ WORK = "/var/cache/sekai-apps"
 # 이것들을 지우게 되면 설치·제거하지 않는다 (sekai-update 와 같은 목록)
 PROTECTED = re.compile(r"^(sekai-|sekaios-|worldlink|sekaicomp|hyprland|hyprbars|hyprexpo|greetd|linux-image-amd64$|shim-signed|"
                        r"grub-efi-amd64-signed|systemd$|network-manager$)")
-PKG_NAME = re.compile(r"^[a-z0-9][a-z0-9+.-]+(:[a-z0-9]+)?$")
+# 끝이 - 면 apt 가 "설치"를 제거 지시로 읽는다 (firefox- = firefox 지우기) — 끝의 - 는 받지 않는다.
+#   끝의 + 는 g++ 같은 진짜 이름이 있어 받되, 그 이름의 패키지가 정확히 있을 때만 (exact_pkg)
+PKG_NAME = re.compile(r"^[a-z0-9][a-z0-9+.-]*[a-z0-9+](:[a-z0-9]+)?$")
 
 SELF = os.path.abspath(__file__)
 GUARD_TAG = "SEKAI-BLOCKED:"
@@ -302,7 +306,7 @@ def package_apps(pkg):
             if re.match(r"^/usr/(local/)?share/applications/[^/]+\.desktop$", l)]
 
 
-def install_deb(name):
+def install_deb(name, sha):
     # 이름은 보여 주기·apt 용 (파일 자체는 표준 입력) — 경로·이상한 글자는 버린다
     base = os.path.basename(name or "")
     if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._+~-]*\.deb$", base):
@@ -313,11 +317,24 @@ def install_deb(name):
     try:
         path = os.path.join(tmp, base)
         out("PROGRESS", 1, "설치 파일을 읽는 중")
+        # 화면에 보인(사용자가 확인한) 파일과 같은지 — 설치 관리자가 읽어 둔 사본의 SHA-256 과 맞춰 본다
+        if not re.fullmatch(r"[0-9a-f]{64}", sha or ""):
+            out("ERROR", "설치 파일의 확인 값이 없습니다")
+            return 1
+        h = hashlib.sha256()
         try:
             with open(path, "wb") as dst:
-                shutil.copyfileobj(sys.stdin.buffer, dst, 1 << 20)
+                while True:
+                    b = sys.stdin.buffer.read(1 << 20)
+                    if not b:
+                        break
+                    h.update(b)
+                    dst.write(b)
         except OSError as e:
             out("ERROR", f"설치 파일을 읽지 못했습니다: {e}")
+            return 1
+        if h.hexdigest() != sha:
+            out("ERROR", "설치 파일이 확인한 뒤에 바뀌었습니다 — 설치하지 않았습니다")
             return 1
         if os.path.getsize(path) == 0:
             out("ERROR", "설치 파일이 비어 있습니다")
@@ -434,6 +451,10 @@ def remove(pkg):
 def candidate(pkg):
     """설치할 수 있는 버전 — 없으면 None"""
     res = subprocess.run(["apt-cache", "policy", pkg], env=ENV, capture_output=True, text=True)
+    # 정확히 그 이름의 패키지 하나여야 — 끝의 + 나 정규식 글자로 다른 패키지가 걸리지 않게
+    heads = [l for l in res.stdout.splitlines() if l and not l[0].isspace()]
+    if heads not in ([pkg + ":"], [pkg.split(":")[0] + ":"]):   # python3:amd64 → "python3:" (기본 아키텍처)
+        return None
     m = re.search(r"^\s*Candidate: (\S+)", res.stdout, re.M)
     return m.group(1) if m and m.group(1) != "(none)" else None
 
@@ -573,14 +594,16 @@ def main():
         return plan_remove(a[1])
     if len(a) == 2 and a[0] == "plan-install":
         return plan_install(a[1])
-    root = {"install-deb": install_deb, "remove": remove, "install": install}
-    if (len(a) == 2 and a[0] in root) or a == ["refresh"]:
+    root = {"remove": remove, "install": install}
+    if (len(a) == 2 and a[0] in root) or a == ["refresh"] or (len(a) == 3 and a[0] == "install-deb"):
         if os.geteuid() != 0:
             out("ERROR", "관리자 권한이 필요합니다")
             return 1
+        if a[0] == "install-deb":
+            return install_deb(a[1], a[2])
         return refresh() if a == ["refresh"] else root[a[0]](a[1])
     out("ERROR", "사용법: sekai-apps inspect <파일.deb> | plan-remove <패키지> | plan-install <패키지> | "
-        "install-deb <이름.deb> | install <패키지> | remove <패키지> | refresh")
+        "install-deb <이름.deb> <sha256> | install <패키지> | remove <패키지> | refresh")
     return 2
 
 

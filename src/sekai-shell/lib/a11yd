@@ -66,7 +66,20 @@ class Monitor:
         conn.register_object(PATH, info, self.on_call, None, None)
 
     # ── D-Bus ──
+    def sandboxed(self, sender):
+        """호출한 쪽이 샌드박스(Flatpak) 안이면 True — 앱 ID 가 org.gnome.Orca 인 Flatpak 은 그 이름을 가질 수 있어
+        이름만 보면 전역 키로거가 될 수 있었다. 프로세스의 루트가 / 가 아니면 샌드박스로 본다 (못 보면 거부)"""
+        try:
+            pid = self.conn.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+                                      "GetConnectionUnixProcessID", GLib.Variant("(s)", (sender,)),
+                                      GLib.VariantType("(u)"), Gio.DBusCallFlags.NONE, 1000, None).unpack()[0]
+            return not os.path.samefile(f"/proc/{pid}/root", "/")
+        except (GLib.Error, OSError):
+            return True
+
     def allowed(self, sender):
+        if self.sandboxed(sender):
+            return False
         for n in ALLOWED:
             try:
                 owner = self.conn.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",

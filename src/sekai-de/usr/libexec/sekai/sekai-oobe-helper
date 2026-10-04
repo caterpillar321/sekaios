@@ -184,6 +184,11 @@ def apply(req):
             made = f.read().strip()
     except OSError:
         made = ""
+    # 이 OOBE 가 만든 계정 말고 사람 계정이 이미 있으면 하지 않는다 — 계정을 만든 뒤 마치기 전에 전원이 끊기면
+    #   다음 부팅에 OOBE 가 다시 떠, 화면 앞의 아무나 관리자 계정을 하나 더 만들 수 있었다
+    others = [e.pw_name for e in pwd.getpwall() if 1000 <= e.pw_uid < 60000 and e.pw_name != made]
+    if others:
+        return {"ok": False, "error": "이미 사용자 계정이 있어 처음 설정을 다시 할 수 없습니다"}
     reuse = False
     try:
         pwd.getpwnam(user)
@@ -268,8 +273,8 @@ def _user_setup(user, lang, accent, wall, kb):
         json.dump(settings, f, ensure_ascii=False, indent=2)
     for root, dirs, files in os.walk(os.path.join(p.pw_dir, ".config")):
         for n in dirs + files:
-            os.chown(os.path.join(root, n), p.pw_uid, p.pw_gid)
-    os.chown(os.path.join(p.pw_dir, ".config"), p.pw_uid, p.pw_gid)
+            os.chown(os.path.join(root, n), p.pw_uid, p.pw_gid, follow_symlinks=False)   # 링크는 링크 자체만
+    os.chown(os.path.join(p.pw_dir, ".config"), p.pw_uid, p.pw_gid, follow_symlinks=False)
     # 사진·문서 같은 기본 폴더 (한국어 이름)
     try:
         run(["runuser", "-u", user, "--", "env", f"LANG={lang}", "xdg-user-dirs-update", "--force"])

@@ -21,6 +21,7 @@ fi
 U=${SUDO_USER:-$(id -un)}
 H=$(getent passwd "$U" | cut -d: -f6)
 OUT=${1:-$H/sekai-bootdiag.txt}
+TMP=$(mktemp) || exit 1
 
 # 사용자가 바꿀 수 있는 파일을 root 로 읽는다 — 누구나 쓰는 displays 폴더, 각 사용자의 hyprland.log.
 #   그냥 cat 하면 FIFO 에서 영원히 멈추고, 1TB 성긴 파일이면 0 바이트를 보고서에 그대로 적어 디스크를 채운다.
@@ -125,6 +126,13 @@ if grep -qw "plymouth.debug" /proc/cmdline && [ -f "$P" ] && [ ! -L "$P" ]; then
 else
     echo "(없음 — 켜려면 sudo /usr/libexec/sekai/sekai-bootdiag --plymouth-debug on 뒤 다시 부팅)"
 fi
-} > "$OUT" 2>&1
-chown "$U" "$OUT" 2>/dev/null
+} > "$TMP" 2>&1
+# 보고서는 그 사용자의 권한으로 쓴다 — root 가 사용자 홈에 이름으로 쓰고 chown 하면, 그 이름을 /etc 의 파일을
+#   가리키는 링크로 바꿔 둔 경우 root 파일이 덮이고 주인이 바뀌었다
+if [ "$U" != root ]; then
+    runuser -u "$U" -- sh -c 'cat > "$1"' sh "$OUT" < "$TMP"
+else
+    cat "$TMP" > "$OUT"
+fi
+rm -f "$TMP"
 echo "저장했습니다: $OUT"
