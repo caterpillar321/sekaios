@@ -531,7 +531,7 @@ class Store:
         #   아이콘 sekai:* 는 SekaiOS 가 패치한 hyprbars 가 선으로 그린다 (크기 16 → 아이콘 10px)
         bb, bf = hex_to_rgba(a["titlebar_bg"]), hex_to_rgba(a["fg"])
         for icon, cmd in (("sekai:close", "hyprctl dispatch killactive"),
-                          ("sekai:max", "hyprctl dispatch fullscreen 1"),
+                          ("sekai:max", "hyprctl dispatch sekaimaximize toggle"),
                           ("sekai:min", "hyprctl dispatch sekaiminimize on")):
             lines.append(f"        hyprbars-button = {bb}, 16, {icon}, {cmd}, {bf}")
         lines.append("    }")

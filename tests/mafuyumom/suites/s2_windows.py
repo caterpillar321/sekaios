@@ -16,9 +16,8 @@ def fresh_notepad(t, x=400, y=200, w=900, h=640):
     # 패널이 새 창을 기억한 크기로 가운데에 놓는다 — 그보다 먼저 옮기면 되돌려진다. 자리가 맞을 때까지
     for _ in range(4):
         m = main_win(t)
-        if m and m.get("fullscreen"):                    # 메모장은 최대화한 채 닫으면 최대화로 다시 연다
-            t.sh(f"hyprctl dispatch focuswindow address:{m['address']} >/dev/null; "
-                 "hyprctl dispatch fullscreenstate 0 0 >/dev/null")
+        if m and is_max(m):                               # 메모장은 최대화한 채 닫으면 최대화로 다시 연다
+            t.sh(f"hyprctl dispatch sekaimaximize off,address:{m['address']} >/dev/null")
             time.sleep(0.5)
         t.sh(f"hyprctl dispatch resizewindowpixel exact {w} {h},class:{NP} >/dev/null; "
              f"hyprctl dispatch movewindowpixel exact {x} {y},class:{NP} >/dev/null")
@@ -43,13 +42,36 @@ def bar(c):
     return by, x + w - 19, x + w - 57, x + w - 95
 
 
+def is_max(c):
+    """최대화 — WorldLink sekai34 부터 창의 상태(sekaiMaximized), 옛 합성기는 fullscreen 1"""
+    return bool(c.get("sekaiMaximized")) if "sekaiMaximized" in c else c.get("fullscreen") == 1
+
+
 def state(t):
     c = main_win(t)
     if not c:
         return "없음"
     if c.get("sekaiMinimized") or c["workspace"]["name"].startswith("special"):
         return "최소화"
-    return "최대화" if c["fullscreen"] == 1 else "보통"
+    if c.get("fullscreen", 0) & 2:
+        return "전체 화면"
+    return "최대화" if is_max(c) else "보통"
+
+
+def work_box(t, c):
+    """최대화한 창이 있어야 할 자리 — 그 모니터의 작업 영역에서 제목줄 몫(sekaiTop)을 뺀 곳"""
+    m = next((m for m in (t.hypr("monitors") or []) if m["id"] == c["monitor"]), None)
+    if not m:
+        return None
+    sc = m.get("scale", 1) or 1
+    l, tp, r, b = (m.get("reserved") or [0, 0, 0, 0])[:4]
+    top = c.get("sekaiTop", 0) or 0
+    return (m["x"] + l, m["y"] + tp + top, round(m["width"] / sc) - l - r, round(m["height"] / sc) - tp - b - top)
+
+
+def fits_work(t, c):
+    w = work_box(t, c)
+    return w and all(abs(a - b) <= 2 for a, b in zip((*c["at"], *c["size"]), w)), w
 
 
 @test("창 단추를 누른 채 벗어나 떼면 아무 일도 없다", suite="windows")
@@ -76,7 +98,11 @@ def maximize(t):
     t.click(mx, by)
     t.expect(t.wait(lambda: state(t) == "최대화", 3), "최대화 단추 → 최대화")
     t.shot("최대화")
-    c = main_win(t)
+    c = t.wait(lambda: (lambda m: m if fits_work(t, m)[0] else None)(main_win(t)), 3) or main_win(t)
+    ok, box = fits_work(t, c)
+    t.expect(ok, f"작업 영역에 꼭 맞다 (창 {c['at']} {c['size']} · 작업 영역 {box})")
+    t.expect(c.get("fullscreen", 0) == 0, f"작업 공간 전체 화면을 쓰지 않는다 (fullscreen={c.get('fullscreen')})")
+    t.expect(not (t.hypr("activeworkspace") or {}).get("hasfullscreen"), "데스크톱이 전체 화면 상태가 아니다")
     t.click(c["at"][0] + 300, c["at"][1] - 17, n=2)
     t.expect(t.wait(lambda: state(t) == "보통", 3), "제목줄 두 번 → 복원")
     c = main_win(t)
@@ -191,7 +217,7 @@ def fuzz(t):
             time.sleep(0.6)
         elif r < 0.55:
             c = rnd.choice(cs)
-            t.sh(f"hyprctl dispatch focuswindow address:{c['address']} >/dev/null; hyprctl dispatch fullscreen 1 >/dev/null")
+            t.sh(f"hyprctl dispatch sekaimaximize toggle,address:{c['address']} >/dev/null")
             time.sleep(0.4)
         elif r < 0.8:
             c = rnd.choice(cs)
@@ -205,5 +231,103 @@ def fuzz(t):
         mine = [c for c in t.clients() if c["workspace"]["id"] == ws.get("id") and not c.get("hidden")]
         if bool(ws.get("hasfullscreen")) != any(c["fullscreen"] for c in mine):
             bad.append(f"{step}: hasfullscreen={ws.get('hasfullscreen')} 창={[c['fullscreen'] for c in mine]}")
+        time.sleep(0.3)                                    # 크기 애니메이션이 끝난 뒤
+        for c in t.clients():
+            if is_max(c) and not c.get("hidden") and not c.get("sekaiMinimized") and not fits_work(t, c)[0]:
+                bad.append(f"{step}: 최대화 창 {c['class']} 이 작업 영역에 안 맞다 {c['at']} {c['size']} ≠ {work_box(t, c)}")
     t.sh("pkill -x foot; pkill -x sekai-notepad; pkill -f sekai-cal[c]; true")
-    t.expect(not bad, f"작업 공간의 전체 화면 표시가 창 상태와 맞다 (어긋남 {len(bad)}: {bad[:3]})")
+    t.expect(not bad, f"작업 공간의 전체 화면 표시·최대화 창 자리가 맞다 (어긋남 {len(bad)}: {bad[:3]})")
+
+
+# ── sekai34: 최대화가 창의 상태 (작업 공간 전체 화면이 아니다) ──
+TERM = "org.sekaios.Nenerobo"
+
+
+def maximize_win(t, addr):
+    t.sh(f"hyprctl dispatch sekaimaximize on,address:{addr} >/dev/null")
+
+
+@test("최대화 창 여럿 — 둘 다 최대화된 채로 오가고, 데스크톱은 전체 화면 상태가 아니다", suite="windows", quick=True)
+def multimax(t):
+    n = fresh_notepad(t)
+    t.close(TERM)
+    t.after(lambda: t.close(TERM))
+    term = t.launch("sekai-terminal", TERM, timeout=15)
+    t.expect(term, "터미널")
+    maximize_win(t, n["address"])
+    maximize_win(t, term["address"])
+    time.sleep(0.8)
+    for cls in (NP, TERM):
+        c = t.window(cls)
+        ok, box = fits_work(t, c)
+        t.expect(is_max(c) and ok, f"{cls} 최대화 · 작업 영역에 맞다 ({c['at']} {c['size']} · {box})")
+    t.sh(f"hyprctl dispatch focuswindow address:{n['address']} >/dev/null")
+    time.sleep(0.5)
+    t.shot("메모장위")
+    t.expect(all(is_max(t.window(cls)) for cls in (NP, TERM)), "다른 최대화 창을 골라도 둘 다 최대화 그대로")
+    t.expect(not (t.hypr("activeworkspace") or {}).get("hasfullscreen"), "데스크톱이 전체 화면 상태가 아니다 (뒤 창도 그려진다)")
+    t.expect((t.hypr("activewindow") or {}).get("address") == n["address"], "고른 창이 맨 앞·초점")
+
+
+@test("최대화 창을 끌면 복원 — 커서는 제목줄 같은 자리, 끌다가 Esc 면 다시 최대화", suite="windows")
+def drag_restore(t):
+    c = fresh_notepad(t)
+    maximize_win(t, c["address"])
+    m = t.wait(lambda: (lambda w: w if is_max(w) and fits_work(t, w)[0] else None)(main_win(t)), 3)
+    t.expect(m, "최대화")
+    top = m.get("sekaiTop", 34) or 34
+    gx, gy = m["at"][0] + m["size"][0] * 0.3, m["at"][1] - top // 2      # 제목줄 왼쪽 30% 자리
+    t.drag(gx, gy, gx + 40, gy + 260, steps=25)
+    time.sleep(0.8)
+    r = main_win(t)
+    t.shot("끌어복원")
+    t.expect(state(t) == "보통", f"끌면 복원 ({state(t)})")
+    t.expect(abs(r["size"][0] - 900) <= 4 and abs(r["size"][1] - 640) <= 4, f"원래 크기 ({r['size']})")
+    cx, cy = gx + 40, gy + 260
+    rx = (cx - r["at"][0]) / r["size"][0]
+    t.expect(r["at"][1] - top <= cy <= r["at"][1] and abs(rx - 0.3) < 0.08,
+             f"커서가 제목줄의 같은 자리 (가로 {rx:.2f} · 창 {r['at']})")
+    # 끌다가 Esc
+    maximize_win(t, r["address"])
+    m = t.wait(lambda: (lambda w: w if is_max(w) and fits_work(t, w)[0] else None)(main_win(t)), 3)
+    t.q.move(gx, gy)
+    time.sleep(0.1)
+    t.q.button(True)
+    for i in range(1, 16):
+        t.q.move(gx + 3 * i, gy + 15 * i)
+        time.sleep(0.03)
+    time.sleep(0.2)
+    t.key("esc")
+    time.sleep(0.2)
+    t.q.button(False)
+    t.expect(t.wait(lambda: state(t) == "최대화" and fits_work(t, main_win(t))[0], 3), f"Esc → 다시 최대화 ({state(t)})")
+    t.sh(f"hyprctl dispatch sekaimaximize off,address:{r['address']} >/dev/null")
+    t.expect(t.wait(lambda: (lambda w: abs(w['size'][0] - 900) <= 4)(main_win(t)), 3), "그 뒤 복원하면 처음 크기 (Esc 가 복원할 자리를 지켰다)")
+
+
+@test("최대화 → F11 전체 화면 → F11 → 다시 최대화", suite="windows")
+def fullscreen_roundtrip(t):
+    c = fresh_notepad(t)
+    maximize_win(t, c["address"])
+    t.expect(t.wait(lambda: state(t) == "최대화", 3), "최대화")
+    t.sh(f"hyprctl dispatch focuswindow address:{c['address']} >/dev/null")
+    time.sleep(0.3)
+    t.key("f11")
+    t.expect(t.wait(lambda: state(t) == "전체 화면", 3), f"F11 → 전체 화면 ({state(t)})")
+    f = main_win(t)
+    t.expect(f["at"] == [0, 0] and f["size"] == [1920, 1080], f"화면 전체 ({f['at']} {f['size']})")
+    t.key("f11")
+    t.expect(t.wait(lambda: state(t) == "최대화" and fits_work(t, main_win(t))[0], 3), f"F11 → 최대화로 돌아왔다 ({state(t)})")
+
+
+@test("Win+↑ 최대화 · Win+↓ 복원", suite="windows")
+def win_keys(t):
+    c = fresh_notepad(t)
+    t.sh(f"hyprctl dispatch focuswindow address:{c['address']} >/dev/null")
+    time.sleep(0.3)
+    t.key("meta_l-up")
+    t.expect(t.wait(lambda: state(t) == "최대화" and fits_work(t, main_win(t))[0], 3), f"Win+↑ → 최대화 ({state(t)})")
+    t.key("meta_l-down")
+    t.expect(t.wait(lambda: state(t) == "보통", 3), f"Win+↓ → 복원 ({state(t)})")
+    r = main_win(t)
+    t.expect(abs(r["size"][0] - 900) <= 4 and abs(r["size"][1] - 640) <= 4, f"원래 크기 ({r['size']})")

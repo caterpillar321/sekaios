@@ -99,6 +99,8 @@ def desktops(t):
     t.wait(lambda: (t.hypr("activeworkspace") or {}).get("id") == ws1, 5)
     t.key("meta_l-ctrl-f4")
     t.expect(t.wait(lambda: (t.hypr("activeworkspace") or {}).get("id") == ws0, 5), "Win+Ctrl+F4 로 닫고 원래 데스크톱")
+    t.expect(t.wait(lambda: ws1 not in [w.get("id") for w in (t.hypr("workspaces") or [])], 3),
+             "닫은 데스크톱이 남지 않는다 (네 손가락 쓸기·Win+Ctrl+→ 로 다시 가지 않게)")
 
 
 @test("잠그고(Win+L) 암호로 풀기", suite="session", quick=True)
@@ -113,3 +115,23 @@ def lock_unlock(t):
     t.type("miku1234")
     t.key("ret")
     t.expect(t.wait(lambda: not t.sh(f"test -e {mark}").ok, 10), "암호로 풀렸다")
+
+
+@test("바탕 화면 보기(Win+D) — 창이 모두 내려가고, 다시 누르면 그대로 돌아온다", suite="session", quick=True)
+def show_desktop(t):
+    t.kill("sekai-notepad")
+    t.close("org.sekaios.Calculator")
+    t.after(lambda: (t.kill("sekai-notepad"), t.close("org.sekaios.Calculator")))
+    t.expect(t.launch("sekai-notepad", "org.sekaios.Notepad"), "메모장")
+    t.expect(t.launch("sekai-calc", "org.sekaios.Calculator"), "계산기")
+    t.wait(lambda: active(t) == "org.sekaios.Calculator", 5)
+
+    def mins():
+        return {c["class"]: bool(c.get("sekaiMinimized")) for c in t.clients()
+                if c["class"] in ("org.sekaios.Notepad", "org.sekaios.Calculator")}
+    t.key("meta_l-d")
+    t.expect(t.wait(lambda: mins() and all(mins().values()), 3), f"Win+D → 모두 최소화 ({mins()})")
+    t.shot("바탕화면")
+    t.key("meta_l-d")
+    t.expect(t.wait(lambda: mins() and not any(mins().values()), 3), f"Win+D 다시 → 모두 돌아왔다 ({mins()})")
+    t.expect(t.wait(lambda: active(t) == "org.sekaios.Calculator", 3), f"초점도 그대로 계산기 ({active(t)})")

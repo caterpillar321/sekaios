@@ -75,7 +75,8 @@ class X11Hypr:
         return {"address": hex(xid), "class": cls.lower() if cls else "", "initialClass": cls,
                 "title": w.get_name() or "", "workspace": wsd, "focusHistoryID": hist,
                 "mapped": True, "hidden": False, "floating": True,
-                "fullscreen": 1 if w.is_maximized() else 0, "at": [x, y], "size": [cw, ch],
+                "fullscreen": 1 if w.is_maximized() else 0, "sekaiMaximized": w.is_maximized(),
+                "at": [x, y], "size": [cw, ch],
                 "monitor": mon, "pid": w.get_pid()}
 
     # ── hyprctl 흉내 ──
@@ -147,6 +148,12 @@ class X11Hypr:
                 w = self.scr.get_active_window()
                 if w:
                     (w.unmaximize if w.is_maximized() else w.maximize)()
+            elif verb == "sekaimaximize":                 # WorldLink 의 창의 최대화 (on|off|toggle,<창>)
+                mode, _, addr = arg.partition(",")
+                w = self._find(addr) if addr else self.scr.get_active_window()
+                if w:
+                    on = {"on": True, "off": False}.get(mode.strip(), not w.is_maximized())
+                    (w.maximize if on else w.unmaximize)()
             elif verb == "workspace":
                 try:
                     n = int(arg) - 1

@@ -182,7 +182,7 @@ def build(store):
         mons_ = {m.get("id"): (m.get("x", 0), m.get("y", 0)) for m in (hyprctl("monitors", js=True) or [])}
         wins = [(c.get("address"), c.get("monitor"), tuple(c.get("at", [0, 0])))
                 for c in (hyprctl("clients", js=True) or [])
-                if c.get("floating") and not c.get("fullscreen")]
+                if c.get("floating") and not c.get("fullscreen") and not c.get("sekaiMaximized")]   # 최대화 창은 합성기가 맞춘다
         return mons_, wins
 
     def carry_windows(before):

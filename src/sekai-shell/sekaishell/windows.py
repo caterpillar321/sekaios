@@ -19,12 +19,25 @@ SekaiOS 는 모든 창을 떠 있는(floating) 창으로 쓴다 (윈도우처럼
 import json
 import os
 import re
+import time
 
 from gi.repository import GLib
 
 from . import dbg, desktops
 
 STATE = os.path.expanduser("~/.local/state/sekai/windows.json")
+
+
+def is_max(c):
+    """최대화했나 — WorldLink sekai34 부터 창의 상태(sekaiMaximized). 옛 합성기(업데이트 도중)는 fullscreen 1"""
+    if "sekaiMaximized" in c:
+        return bool(c.get("sekaiMaximized"))
+    return c.get("fullscreen", 0) == 1
+
+
+def is_fullscreen(c):
+    """진짜 전체 화면(F11·동영상·게임) — 최대화와 다르다"""
+    return bool(c.get("fullscreen", 0) & 2)
 MIN_W, MIN_H = 320, 200
 SNAP_GAP = 0               # 스냅한 창은 화면 끝과 서로에게 딱 붙인다 (윈도우 11)
 # 크기를 기억하지 않을 창 — 크기가 스스로 정해지는 것들
@@ -46,6 +59,7 @@ class WindowManager:
         self.snapped = {}          # 주소 → 영역 (left right tl tr bl br)
         self.known = {}            # 주소 → 마지막으로 본 창 정보 (닫힐 때 크기를 알려고)
         self.mains = set()         # 앱의 첫 창(본 창)으로 열린 주소 — 크기는 이 창만 기억한다
+        self._desk_shown = None    # 바탕 화면 보기로 최소화한 창들 — 다시 하면 되살린다 (show_desktop)
         self.drag_start = {}       # 주소 → 끌기 시작 때 ((x, y), (w, h))
         self.preview = None        # 끌어서 스냅 미리보기 (sekai-panel 이 넣어 준다)
         self.assist = None         # 스냅 도우미 (sekai-panel 이 넣어 준다)
@@ -89,9 +103,44 @@ class WindowManager:
         a = self.hypr.query("activewindow") or {}
         return a if isinstance(a, dict) and a.get("address") else None
 
+    # ── 바탕 화면 보기 (Win+D · 세 손가락 아래로 쓸기) ──
+    def show_desktop(self):
+        """윈도우처럼 — 이 데스크톱의 창을 모두 최소화하고, 다시 하면 그 창들을 그대로 되살린다.
+        그사이 창을 열거나 다른 창을 골랐으면 되살릴 목록은 버리고 새로 바탕 화면 보기"""
+        ws = (self.hypr.query("activeworkspace") or {}).get("id")
+        shown, self._desk_shown = self._desk_shown, None
+        if shown and shown["ws"] == ws:
+            for addr in shown["addrs"]:                   # 아래 창부터 — 맨 위였던 창이 다시 맨 위
+                self.hypr.dispatch(f"sekaiminimize off,address:{addr}")
+            if shown["focus"]:
+                self.hypr.dispatch(f"focuswindow address:{shown['focus']}")
+            return
+        act = self._active() or {}
+        cs = [c for c in (self.hypr.query("clients") or [])
+              if c.get("mapped", True) and (c.get("workspace") or {}).get("id") == ws
+              and not desktops.is_minimized(c) and int(c.get("sekaiParent", "0x0"), 16) == 0]  # 대화상자는 부모를 따라간다
+        if not cs:
+            return
+        cs.sort(key=lambda c: -(c.get("focusHistoryID") or 0))    # 오래전에 쓴 창(아래)부터
+        for c in cs:
+            desktops.minimize(self.hypr, c["address"])
+        self._desk_shown = {"ws": ws, "addrs": [c["address"] for c in cs], "focus": act.get("address"),
+                            "t": time.monotonic()}
+
     def _toggle_max(self, addr):
-        """이 창의 최대화를 켜고 끈다. fullscreen 1 은 "초점 창"에 걸리므로, 초점이 이 창에 왔을 때만
-        (스냅 도우미처럼 키보드를 쥔 레이어가 떠 있으면 Hyprland 가 초점을 거부해 엉뚱한 창이 최대화됐다)"""
+        return self._set_max(addr, None)
+
+    def _set_max(self, addr, on):
+        """이 창의 최대화를 켜고(on=True) 끄고(False) 뒤집는다(None). WorldLink sekai34 의 sekaimaximize 는 창을 집어 준다 —
+        옛 합성기는 fullscreen 1 이 "초점 창"에 걸려, 초점이 이 창에 왔을 때만 (스냅 도우미처럼 키보드를 쥔 레이어가
+        떠 있으면 Hyprland 가 초점을 거부해 엉뚱한 창이 최대화됐다)"""
+        mode = "toggle" if on is None else ("on" if on else "off")
+        r = self.hypr.dispatch(f"sekaimaximize {mode},address:{addr}")
+        if r is not None and "invalid dispatcher" not in r.lower():
+            return r.strip() == "ok"
+        c = self._client(addr)
+        if c is None or (on is not None and is_max(c) == on):
+            return c is not None
         self.hypr.dispatch(f"focuswindow address:{addr}")
         a = self._active()
         if not a or a.get("address") != addr:
@@ -172,19 +221,19 @@ class WindowManager:
         c = c or self._client(addr)
         if not c:
             return
-        if c.get("fullscreen", 0) == 2:
+        if is_fullscreen(c):
             return                                        # 전체 화면(F11·동영상)은 건드리지 않는다
         if c.get("sekaiFixed"):
             return                                        # 크기를 바꿀 수 없는 창 — 칸에 맞출 수 없다
-        maxed = c.get("fullscreen", 0) == 1
+        maxed = is_max(c)
         if not c.get("floating"):
             self.hypr.dispatch(f"setfloating address:{addr}")
         if zone == "max":
             if not maxed:
-                self._toggle_max(addr)                    # 1 = 최대화 (작업 표시줄은 남긴다)
+                self._set_max(addr, True)                 # 작업 표시줄은 남긴다
             return
         if maxed:
-            if not self._toggle_max(addr):
+            if not self._set_max(addr, False):
                 return
             c = self._client(addr) or c
         if addr not in self.saved:
@@ -208,7 +257,7 @@ class WindowManager:
         if self.snapped.get(addr) != zone:
             return False                                  # 그사이 다른 칸으로 옮겼거나 풀었다 (Win+← 두 번 등)
         c = self._client(addr)
-        if not c or c.get("fullscreen"):
+        if not c or c.get("fullscreen") or is_max(c):
             return False
         (cx, cy), (cw, ch) = c.get("at", [0, 0]), c.get("size", [0, 0])
         x, y, w, h = rect
@@ -246,9 +295,9 @@ class WindowManager:
         if not c or direction not in self.KEYS:
             return
         addr = c["address"]
-        if c.get("fullscreen", 0) == 2:
+        if is_fullscreen(c):
             return                                        # 전체 화면(F11·동영상) 중엔 스냅하지 않는다
-        cur = "max" if c.get("fullscreen", 0) == 1 else self.snapped.get(addr)
+        cur = "max" if is_max(c) else self.snapped.get(addr)
         if cur not in (None, "max") and not self._in_zone(c, cur):
             cur = None                                    # 다른 방법(Win+Shift+화살표·Super+끌기)으로 옮겨졌다
         to = self.KEYS[direction].get(cur, "restore")
@@ -257,7 +306,7 @@ class WindowManager:
         if to == "min":
             desktops.minimize(self.hypr, addr)
         elif to == "unmax":
-            self._toggle_max(addr)
+            self._set_max(addr, False)
         elif to == "restore":
             self._restore(addr)
         elif to != cur:
@@ -283,7 +332,7 @@ class WindowManager:
     def _keep_visible(self, addr):
         """제목줄이 작업 영역 밖으로 나가 있으면 안으로 들인다 (다시 잡을 수 있게)"""
         c = self._client(addr)
-        if not c or c.get("fullscreen"):
+        if not c or c.get("fullscreen") or is_max(c):
             return False
         (x, y), (w, h) = c.get("at", [0, 0]), c.get("size", [0, 0])
         ax, ay, aw, ah = self._work_area(c)
@@ -319,7 +368,7 @@ class WindowManager:
             elif not self._poll_src:
                 self._bar_hit = None
                 self._poll_src = GLib.timeout_add(33, self._drag_poll)
-        if c.get("fullscreen", 0) == 1:
+        if is_max(c):
             pass    # 최대화는 Hyprland 가 끌기 문턱(binds:drag_threshold)을 넘을 때 푼다 — 여기서 풀면 손이 조금만
                     #   떨려도 풀렸다. 커서가 제목줄 같은 자리에 오게 두는 것도 그쪽 (SEKAI_DRAG_RESTORE)
         elif addr not in self.snapped:
@@ -574,7 +623,7 @@ class WindowManager:
             if was_there and tws is not None:
                 self.hypr.dispatch(f"movetoworkspacesilent {tws},address:{addr}")
             zone = self.snapped.get(addr)
-            if zone and (not was_there or c.get("fullscreen")):
+            if zone and (not was_there or c.get("fullscreen") or is_max(c)):
                 continue                              # 남은 모니터의 창·최대화된 창은 그대로 둔다
             if zone:
                 GLib.timeout_add(150, lambda a=addr, z=zone: self.snap_to(a, z, mon_name=target.get("name"),
@@ -585,6 +634,11 @@ class WindowManager:
         return False
 
     def on_event(self, name, arg):
+        if name == "activewindowv2" and self._desk_shown:
+            a = "0x" + arg.strip()
+            # 바탕 화면 보기 뒤 다른 창을 골랐다 (최소화하며 오가는 초점은 빼고)
+            if a != "0x" and a not in self._desk_shown["addrs"] and time.monotonic() - self._desk_shown["t"] > 1:
+                self._desk_shown = None
         if name == "sekaidrag":
             p = arg.strip().split(",")
             try:
@@ -617,6 +671,7 @@ class WindowManager:
                 GLib.idle_add(self.winmenu.open_for, "0x" + parts[0], x, y)
         elif name == "openwindow":
             addr = "0x" + arg.split(",", 1)[0]
+            self._desk_shown = None                       # 바탕 화면 보기 뒤 새 창 — 되살릴 목록은 버린다
             GLib.timeout_add(60, self._opened, addr)
         elif name == "closewindow":
             addr = "0x" + arg.strip()
@@ -654,7 +709,7 @@ class WindowManager:
 
     def _closed(self, c):
         cls = c.get("class") or ""
-        if cls in SKIP_CLASSES or not c.get("floating") or c.get("fullscreen"):
+        if cls in SKIP_CLASSES or not c.get("floating") or c.get("fullscreen") or is_max(c):
             return
         if c["address"] not in self.mains:
             return                          # 대화상자 — 앱을 끄면 창이 한꺼번에 닫혀 대화상자가 "마지막 창"일 수 있다
@@ -683,7 +738,7 @@ class WindowManager:
         self.mains.add(addr)
         cls = c.get("class") or ""
         want = self.sizes.get(cls)
-        if not want or not c.get("floating") or c.get("fullscreen"):
+        if not want or not c.get("floating") or c.get("fullscreen") or is_max(c):
             return False
         ax, ay, aw, ah = self._work_area(c)
         bar = self._bar(c)

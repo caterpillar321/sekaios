@@ -8,7 +8,7 @@ OUT=/build/deb
 #   예전엔 여기서 원본에 patch-*.py 를 적용했다. 이제 그 고친 것들은 포크의 커밋이다 (git log v0.50.1..sekai).
 #   재현할 수 있게 커밋을 고정한다 — 합성기를 고치면 포크에 커밋·푸시하고 여기 REF 와 rev_for 를 올린다.
 SEKAICOMP_URL="https://github.com/caterpillar321/worldlink.git"
-SEKAICOMP_REF="0d5899b195ff0d41abd9cd8a6b228c8f89652978"
+SEKAICOMP_REF="91bb326d997745dc9adc6a6ed3e64c8964316ed7"
 MAINT="SekaiOS <sekai@localhost>"
 REV="sekai2"
 # 패키지별 리비전 (고친 패키지만 올린다 → apt 가 그 패키지만 업그레이드)
@@ -70,7 +70,9 @@ REV="sekai2"
 #      sekai31: 화면 읽기(Orca)용 키보드 감시 — a11y KeyboardMonitor 의 합성기 몫, 셸의 sekai-a11yd 와 소켓으로, 돋보기가 포커스·글자 커서를 따라감, 걸린 고정 키는 클릭에도 풀림, 느린 키가 기다리던 키를 버릴 때 그 뗌도 버림 (포크 093f11d) — hyprbars sekai28 · hyprexpo sekai16
 #      sekai32: 보안 감사 — 장식 객체의 해제된 창 쓰기(UAF), 샌드박스 앱에 입력기·가상 키보드·가상 포인터 안 줌, 부모 고리 거부, 잠긴 동안 제목줄 단추·Orca 명령 키 (포크 2d6e4f8) — hyprbars sekai29 · hyprexpo sekai17
 #      sekai33: 정리 — 장식 규약은 앱이 고른 대로, clients 의 sekaiTop(장식 높이), plugin = 을 장식 배치기 뒤에 로드, 끌기 이벤트 한 곳(sekaidrag) — 스냅 영역은 셸이, 최소화를 창의 상태로(sekaiminimize) (포크 0d5899b) — hyprbars sekai30 · hyprexpo sekai18
-rev_for() { case "$1" in hyprbars) echo sekai30 ;; hyprexpo) echo sekai18 ;; worldlink|sekaicomp|hyprland) echo sekai33 ;; *) echo "$REV" ;; esac; }
+#      sekai34: 최대화를 창의 상태로(sekaimaximize·sekaiMaximized) — 작업 공간 전체 화면을 쓰지 않는다, 모서리·테두리 없이,
+#               X11 최대화 상태, 제목줄 복원 단추, 세 손가락 제스처(sekaigesture), 끌어 복원은 누른 자리 기준, 닫은 데스크톱의 상주 풀기 (포크 91bb326) — hyprbars sekai31 · hyprexpo sekai19
+rev_for() { case "$1" in hyprbars) echo sekai31 ;; hyprexpo) echo sekai19 ;; worldlink|sekaicomp|hyprland) echo sekai34 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"

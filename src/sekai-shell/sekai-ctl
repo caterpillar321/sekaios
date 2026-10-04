@@ -6,6 +6,7 @@
 #    sekai-ctl volume up|down|mute|mic-mute  음량 + 화면 표시
 #    sekai-ctl brightness up|down           밝기 + 화면 표시
 #    sekai-ctl snap left|right|up|down      창 배치 (Win+화살표)
+#    sekai-ctl showdesktop                  바탕 화면 보기 (Win+D) — 다시 하면 창들을 되살린다
 #    sekai-ctl clipboard                    클립보드 기록 (Win+V)
 #    sekai-ctl menu | notifications         시작 메뉴 / 알림 센터
 #    sekai-ctl quicksettings                빠른 설정 (Win+A)
@@ -45,6 +46,7 @@ case "$1" in
             down) brightnessctl -q -n1 set 5%- ;;
         esac ;;
     snap)          call Snap "${2:-up}" ;;
+    showdesktop)   call ShowDesktop ;;                         # 바탕 화면 보기 (Win+D) — 다시 하면 되살린다
     clipboard)     call Clipboard ;;
     menu)          call StartMenu ;;
     notifications) call NotificationCenter ;;

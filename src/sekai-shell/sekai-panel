@@ -1912,7 +1912,7 @@ class Panel(Gtk.Window, TaskbarMixin):
             #   제목이 계속 바뀌는 창(터미널·웹 페이지)이 있으면 누르고 떼는 사이에 버튼이 새로 만들어져 클릭이 씹혔다
             self.queue_title_refresh()
         elif name in ("openwindow", "closewindow", "activewindowv2",
-                      "movewindow", "movewindowv2", "sekaiminimized",
+                      "movewindow", "movewindowv2", "sekaiminimized", "sekaimaximized",
                       "workspace", "activespecial", "fullscreen", "changefloatingmode",
                       "focusedmon", "moveworkspace", "monitoradded", "monitorremoved"):
             # 창 하나를 열거나 옮기면 이벤트가 여럿 한꺼번에 온다 — 모아서 한 번에.
@@ -2121,6 +2121,28 @@ def main():
         # (최대화 버튼에 마우스를 올리면 뜨던 배치 그림은 없앴다 — 위쪽 레이아웃 바와 겹쳐 방해됐다)
     panel.event_hooks.append(wm.on_event)
 
+    # 터치패드 세 손가락 쓸기 (WorldLink sekaigesture) — 윈도우 정밀 터치패드와 같게. 네 손가락 좌우는 합성기가 데스크톱을 넘긴다
+    def on_gesture(name, arg):
+        if name != "sekaigesture":
+            return
+        kind, _, rest = arg.strip().partition(",")
+        direction = rest.partition(",")[2]
+        if kind != "swipe":
+            return
+        if direction == "up" and wm._desk_shown:
+            GLib.idle_add(wm.show_desktop)                # 바탕 화면을 보던 중 — 창들을 되살린다 (윈도우처럼)
+        elif direction == "up":
+            hypr.dispatch("hyprexpo:expo toggle")        # 작업 보기 (Win+Tab)
+        elif direction == "down":
+            GLib.idle_add(wm.show_desktop)                # 바탕 화면 보기 (Win+D)
+        elif direction in ("left", "right"):
+            def switch(d=1 if direction == "right" else -1):
+                switcher.step(d)                          # 앞 / 뒤 창으로 (Alt+Tab 한 번)
+                switcher.commit()
+                return False
+            GLib.idle_add(switch)
+    panel.event_hooks.append(on_gesture)
+
     # 음량 키 — OSD 가 작업 스레드에서 바꾸고, 끝나면 작업 표시줄 아이콘도 새로
     osd.on_volume = lambda: panel.refresh_sys(0)
 
@@ -2154,6 +2176,7 @@ def main():
         "Volume": volume,
         "Brightness": osd.brightness,
         "Snap": wm.snap,
+        "ShowDesktop": wm.show_desktop,
         "Clipboard": clip.toggle,
         "StartMenu": panel.toggle_menu,
         "NotificationCenter": panel.toggle_center,

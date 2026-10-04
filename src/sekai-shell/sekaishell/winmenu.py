@@ -71,19 +71,20 @@ class WindowMenu(Gtk.Window):
         return row
 
     def open_for(self, addr, x, y):
+        from . import windows                             # windows 가 이 모듈을 가져온다 — 순환을 피해 여기서
         c = self.wm._client(addr)
-        if not c or c.get("fullscreen", 0) == 2:
+        if not c or windows.is_fullscreen(c):
             return False                                  # 이미 닫혔거나 전체 화면(F11·동영상)
         for ch in self.root.get_children():
             self.root.remove(ch)
-        maxed = c.get("fullscreen", 0) == 1
+        maxed = windows.is_max(c)
         snapped = addr in self.wm.snapped and addr in self.wm.saved
         fixed = bool(c.get("sekaiFixed"))
         wm = self.wm
 
         def restore():
             if maxed:
-                wm._toggle_max(addr)
+                wm._set_max(addr, False)
             else:
                 wm._restore(addr)
 

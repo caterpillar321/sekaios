@@ -8,7 +8,7 @@
 
   Hyprland 는 워크스페이스를 지울 수 없다 (비면 저절로 사라진다). 그래서 "제거"는 윈도우처럼
   그 안의 창을 옆 데스크톱으로 옮기고 뒤의 것을 한 칸씩 당긴다. 맨 뒤에 남는 빈 워크스페이스는
-  keyword 로 persistent 를 풀 수 없어 다시 로그인할 때까지 남지만, 창이 없어 목록·이동에서 빠진다.
+  keyword "N, persistent:false" 로 풀어 바로 사라지게 한다 (WorldLink sekai34 — 옛 합성기에선 다시 로그인할 때까지 남는다).
 
   "지금 데스크톱만" 보이기 (작업 표시줄 · Alt+Tab): WorldLink sekai33 부터 최소화는 창의 상태(sekaiMinimized)라
   창이 제 데스크톱에 그대로 있다. 옛 합성기에선 최소화한 창이 special:min 에 있어 원래 데스크톱을 몰라
@@ -331,6 +331,9 @@ def remove(k=None):
     names = _pad(names, n)
     del names[k - 1]
     names = save(names)
+    # 맨 뒤 데스크톱(n)은 이제 없다 — WorldLink sekai34 부터 persistent 를 풀 수 있어, 비면 바로 사라진다
+    #   (전엔 다시 로그인할 때까지 남아 네 손가락 쓸기·Win+Ctrl+→ 로 닫은 데스크톱에 갔다)
+    _ctl("keyword", "workspace", f"{n}, persistent:false")
     live = Live()
     for i in range(k, n):
         _name_live(names, i, live)

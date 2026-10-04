@@ -381,7 +381,7 @@ Maintainer: SekaiOS <sekai@localhost>
 Section: x11
 Priority: optional
 Depends: sekai-shell (= ${FULL}),
- worldlink (>= 0.50.1-sekai33), hyprbars (>= 0.50.0-sekai30), hyprexpo, xwayland,
+ worldlink (>= 0.50.1-sekai34), hyprbars (>= 0.50.0-sekai31), hyprexpo, xwayland,
  xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr,
  swaybg, swayidle, swaylock, grim, slurp, wl-clipboard, cliphist, libnotify-bin,
  brightnessctl, playerctl, wtype, pkexec,
