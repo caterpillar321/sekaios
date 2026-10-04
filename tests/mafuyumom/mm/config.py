@@ -10,6 +10,7 @@ RUN = os.path.join(ROOT, "run")              # 실행마다 새로 만드는 덧
 REPORTS = os.path.join(ROOT, "reports")      # 실행마다 reports/<시각>/ (report.html · results.json · shots/)
 
 SSH_PORT = int(os.environ.get("MM_SSH_PORT", "2340"))
+PROBE_PORT = SSH_PORT + 1            # 호스트 → VM 8765 (방화벽 시험: 밖에서 들어오는 연결이 막히나)
 VNC = int(os.environ.get("MM_VNC", "9"))     # 127.0.0.1:5909 — 서버에서 직접 볼 때
 KEY = os.environ.get("MM_KEY", os.path.expanduser("~/.ssh/sekaios-dev"))
 USER = os.environ.get("MM_USER", "miku")

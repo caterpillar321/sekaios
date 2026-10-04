@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- SekaiOS 방화벽 도우미 — 설정 앱의 "방화벽" 페이지가 pkexec 로 부른다.
+     방화벽 켜기·끄기 · 네트워크 프로필(공용/개인) · 허용 목록의 기능 · 직접 연 포트 · 원격 로그인(SSH).
+     인자는 도우미가 엄격히 검사한다 (허용 목록 밖의 서비스·이상한 포트·연결 이름은 받지 않는다) -->
+<policyconfig>
+  <vendor>SekaiOS</vendor>
+  <action id="org.sekaios.firewall">
+    <description>Manage the firewall</description>
+    <description xml:lang="ko">방화벽 관리</description>
+    <message>Authentication is required to change the firewall settings</message>
+    <message xml:lang="ko">방화벽 설정을 바꾸려면 인증이 필요합니다</message>
+    <icon_name>security-high</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <!-- 한 번 인증하면 잠시 동안(기능 여러 개 켜기) 다시 묻지 않는다 -->
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/sekai/sekai-firewall</annotate>
+  </action>
+</policyconfig>

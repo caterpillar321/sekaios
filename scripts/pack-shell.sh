@@ -463,6 +463,16 @@ if [ "$1" = "configure" ]; then
         /usr/libexec/sekai/sekai-restore grub >/dev/null 2>&1 || true
     fi
     [ -d /run/systemd/system ] && systemctl start sekai-bootmode.path >/dev/null 2>&1 || true
+    # 방화벽 (firewalld) — 처음 한 번 정책을 놓는다: 공용 네트워크는 들어오는 연결을 모두 막고, 개인 네트워크는
+    #   기기 찾기(mdns·llmnr)·공유 폴더 찾기만. 업데이트로 처음 받는 PC 는 지금 SSH 상태를 그대로(keep — 원격으로
+    #   다루던 PC 가 끊기지 않게). 설치 이미지는 finalize 가 dev(SSH 열기)·release(SSH 닫기)로 다시 놓는다
+    if [ ! -f /var/lib/sekai/firewall-v1 ] && [ -x /usr/libexec/sekai/sekai-firewall ]; then
+        if /usr/libexec/sekai/sekai-firewall setup keep >/dev/null 2>&1; then
+            mkdir -p /var/lib/sekai && touch /var/lib/sekai/firewall-v1
+        fi
+        systemctl enable firewalld.service >/dev/null 2>&1 || true
+        [ -d /run/systemd/system ] && systemctl start firewalld.service >/dev/null 2>&1 || true
+    fi
     # cups-browsed 는 cups 의 권장 패키지라 업데이트 때 같이 깔린다 — 실행 조건 조각(etc/systemd/system/
     #   cups-browsed.service.d)으로 막아 두고, 이미 떠 있으면 멈춘다. (Conflicts 로 막았더니 apt 가
     #   cups-browsed 대신 sekai-desktop 을 지우려 했다)
@@ -578,7 +588,7 @@ Priority: optional
 Depends: shim-signed, grub-efi-amd64-signed, grub-efi-amd64-bin, grub2-common, os-prober,
  efibootmgr, mokutil, pciutils, openssl,
  plymouth (>= 24.004.60-5+sekai1), plymouth-themes,
- network-manager, systemd-resolved, flatpak, btrfs-progs, snapper
+ network-manager, systemd-resolved, flatpak, btrfs-progs, snapper, firewalld
 Replaces: sekai-desktop (<< ${FULL})
 Breaks: sekai-desktop (<< ${FULL})
 Description: SekaiOS base system

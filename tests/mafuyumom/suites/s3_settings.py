@@ -5,7 +5,7 @@ from mm.runner import test
 
 SETTINGS = "sekai-settings"
 PAGES = ["about", "power", "display", "graphics", "sound", "wallpaper", "appearance", "multitasking", "input",
-         "shortcuts", "bluetooth", "printers", "network", "notifications", "locale", "defaults", "installed",
+         "shortcuts", "bluetooth", "printers", "network", "firewall", "notifications", "locale", "defaults", "installed",
          "account", "users", "a11y", "update", "recovery"]
 
 

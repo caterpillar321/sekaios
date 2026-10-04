@@ -94,6 +94,12 @@ inroot "systemctl disable systemd-networkd.socket systemd-networkd 2>/dev/null |
         systemctl disable ssh.service 2>/dev/null || true
         systemctl enable  ssh.socket  2>/dev/null || true
         rm -f /etc/systemd/network/10-dhcp.network"
+# 방화벽 정책 — 개발 ISO 는 SSH 를 모든 네트워크에 열고, 배포용은 SSH 를 끄고 닫는다 (설정 › 방화벽에서 켤 수 있다)
+FW_KIND="$(cat "$P/build/overlay.kind" 2>/dev/null || echo release)"
+[ "$FW_KIND" = dev ] || FW_KIND=release
+inroot "/usr/libexec/sekai/sekai-firewall setup $FW_KIND && mkdir -p /var/lib/sekai && touch /var/lib/sekai/firewall-v1
+        systemctl enable firewalld.service 2>/dev/null || true"
+ok "방화벽 정책: $FW_KIND"
 ok "NetworkManager 활성화, systemd-networkd 비활성화"
 
 say "언마운트"

@@ -1,0 +1,12 @@
+// SekaiOS — 방화벽 상태 보기(읽기 전용)는 이 PC 앞에 로그인한 사람에게 허용한다.
+//   데비안은 firewalld 의 "서버" polkit 정책을 고르는데, 그러면 일반 사용자는 상태조차 못 읽어 설정 › 방화벽이
+//   늘 "꺼짐"으로 보였다. 바꾸기(config)는 그대로 막혀 있고, 설정 앱은 sekai-firewall(pkexec·관리자 인증)로만 바꾼다.
+polkit.addRule(function(action, subject) {
+    if ((action.id == "org.fedoraproject.FirewallD1.info" ||
+         action.id == "org.fedoraproject.FirewallD1.config.info" ||
+         action.id == "org.fedoraproject.FirewallD1.policies.info" ||
+         action.id == "org.fedoraproject.FirewallD1.direct.info") &&
+        subject.local && subject.active) {
+        return polkit.Result.YES;
+    }
+});

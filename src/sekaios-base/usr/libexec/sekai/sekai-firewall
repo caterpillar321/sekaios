@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 방화벽 도우미 — 관리자 권한으로 실행된다 (pkexec)
+#
+#  윈도우 디펜더 방화벽처럼: 네트워크마다 "공용"(public 존 — 들어오는 연결을 모두 막는다)과
+#  "개인"(home 존 — 기기 찾기 같은 것만 연다). 나가는 연결은 막지 않는다. 엔진은 firewalld
+#  (NetworkManager 가 연결마다 존을 알려 준다 — connection.zone).
+#
+#    sekai-firewall on | off                      방화벽 켜기·끄기 (부팅 때도)
+#    sekai-firewall profile <연결 UUID> public|home
+#                                                 그 네트워크를 공용 / 개인 네트워크로
+#    sekai-firewall service <서비스> public|home on|off
+#                                                 허용 목록의 기능만 (아래 SERVICES)
+#    sekai-firewall port add|remove <포트>/<tcp|udp> public|home
+#                                                 직접 연 포트
+#    sekai-firewall remote-login on|off           원격 로그인(SSH) — 서비스와 개인 네트워크의 구멍을 함께
+#    sekai-firewall setup dev|release|keep        처음 정책 (패키지 설치·ISO 만들 때). keep = 지금 SSH 상태 그대로
+#
+#  설정 앱의 "방화벽" 페이지가 부른다. 보기(상태·목록)는 사용자 권한의 firewall-cmd 로 한다.
+#  관리자 권한으로 도는 프로그램이라 인자는 위 형식만 받고 엄격히 검사한다 (fullmatch).
+#  결과: 성공하면 종료 코드 0 과 "OK", 실패하면 표준 출력에 사람이 읽을 이유 한 줄.
+# ═══════════════════════════════════════════════════════════════
+import os
+os.umask(0o022)  # pkexec 은 부른 사람의 umask 를 그대로 넘긴다 — root 가 만드는 파일이 남에게 쓰기로 열리지 않게
+import re
+import subprocess
+import sys
+
+ENV = dict(os.environ, LANG="C.UTF-8", LC_ALL="C.UTF-8", PATH="/usr/sbin:/usr/bin:/sbin:/bin")
+ZONES = ("public", "home")
+# 설정 앱이 켜고 끌 수 있는 기능 — firewalld 의 서비스 정의 이름 (아무 서비스나 열 수 없게 이것만)
+SERVICES = {
+    "mdns",            # 네트워크에서 이 PC·프린터 찾기 (Avahi)
+    "llmnr",           # 이름으로 찾기 (systemd-resolved)
+    "samba-client",    # 네트워크의 공유 폴더 찾기
+    "samba",           # 이 PC 의 폴더 공유
+    "ssh",             # 원격 로그인
+    "kdeconnect",      # 휴대폰 연결
+    "steam-streaming", # Steam 리모트 플레이
+    "ipp",             # 이 PC 의 프린터 공유
+}
+UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+PORT_RE = re.compile(r"([1-9][0-9]{0,4})/(tcp|udp)")
+
+
+def fail(msg, code=1):
+    print(msg, flush=True)
+    sys.exit(code)
+
+
+def run(cmd, timeout=60):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, env=ENV, timeout=timeout)
+    except FileNotFoundError:
+        return 127, f"{cmd[0]} 이(가) 없습니다"
+    except subprocess.TimeoutExpired:
+        return 124, "시간이 초과되었습니다"
+    return r.returncode, (r.stderr.strip() or r.stdout.strip())
+
+
+def running():
+    return run(["firewall-cmd", "--state"], timeout=10)[0] == 0
+
+
+def fw(*args):
+    """영구 설정을 바꾼다 — 데몬이 떠 있으면 firewall-cmd --permanent 뒤 --reload, 아니면 firewall-offline-cmd
+    (ISO 를 만드는 chroot · 꺼 둔 방화벽에서도 다음 부팅의 정책이 맞게)"""
+    if running():
+        rc, out = run(["firewall-cmd", "--permanent", *args])
+        if rc == 0:
+            rc, out = run(["firewall-cmd", "--reload"])
+        return rc, out
+    return run(["firewall-offline-cmd", *args])
+
+
+def ok_or_fail(rc, out, what):
+    # firewalld 는 이미 그런 상태면(ALREADY_ENABLED · NOT_ENABLED) 경고만 하고 0 이 아닐 수 있다 — 같은 뜻으로 본다
+    if rc != 0 and not re.search(r"ALREADY_ENABLED|NOT_ENABLED|already|not enabled", out or ""):
+        fail(f"{what}: {out or rc}")
+
+
+def set_service(svc, zone, on):
+    rc, out = fw(f"--zone={zone}", f"--{'add' if on else 'remove'}-service={svc}")
+    ok_or_fail(rc, out, f"{svc} 을(를) {'열지' if on else '닫지'} 못했습니다")
+
+
+def ssh_units(on):
+    # 데비안 13 은 소켓 활성화(ssh.socket) — ssh.service 와 함께 켜면 충돌한다
+    if on:
+        run(["systemctl", "disable", "--now", "ssh.service"])
+        rc, out = run(["systemctl", "enable", "--now", "ssh.socket"])
+        if rc != 0:
+            fail(f"SSH 를 켜지 못했습니다: {out}")
+    else:
+        for u in ("ssh.socket", "ssh.service"):
+            run(["systemctl", "disable", "--now", u])
+
+
+def ssh_enabled():
+    return any(run(["systemctl", "is-enabled", u], timeout=10)[1] in ("enabled", "enabled-runtime")
+               for u in ("ssh.socket", "ssh.service"))
+
+
+def cmd_setup(kind):
+    """처음 정책. 공용: dhcpv6-client 만 / 개인: 기기 찾기(mdns·llmnr)·공유 폴더 찾기(samba-client).
+    dev = SSH 를 모든 네트워크에 (개발 ISO), release = SSH 닫기, keep = 지금 켜져 있으면 모든 네트워크에 그대로
+    (업데이트로 방화벽이 처음 깔리는 PC — 원격으로 다루던 PC 가 끊기지 않게)"""
+    keep_ssh = kind == "dev" or (kind == "keep" and ssh_enabled())
+    rc, out = fw("--set-default-zone=public") if not running() else run(["firewall-cmd", "--set-default-zone=public"])
+    ok_or_fail(rc, out, "기본 존을 정하지 못했습니다")
+    for svc in ("mdns", "llmnr", "samba-client", "ssh", "kdeconnect"):
+        set_service(svc, "public", False)
+    set_service("dhcpv6-client", "public", True)
+    for svc in ("mdns", "llmnr", "samba-client", "dhcpv6-client"):
+        set_service(svc, "home", True)
+    set_service("ssh", "home", keep_ssh)
+    set_service("ssh", "public", keep_ssh)
+    if kind == "release":
+        ssh_units(False)
+    elif kind == "dev":
+        ssh_units(True)
+
+
+def cmd_profile(uuid, zone):
+    rc, out = run(["nmcli", "connection", "modify", "uuid", uuid, "connection.zone", zone])
+    if rc != 0:
+        fail(f"네트워크 프로필을 바꾸지 못했습니다: {out}")
+    # 지금 연결돼 있으면 바로 적용 (NetworkManager 가 firewalld 에 새 존을 알린다)
+    rc, dev = run(["nmcli", "-g", "GENERAL.DEVICES", "connection", "show", "uuid", uuid], timeout=10)
+    dev = (dev or "").split(",")[0].strip()
+    if rc == 0 and re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", dev):
+        run(["nmcli", "device", "reapply", dev])
+
+
+def main():
+    a = sys.argv[1:]
+    if not a:
+        fail("사용법: sekai-firewall on|off|profile|service|port|remote-login|setup …", 2)
+    cmd = a[0]
+    if cmd in ("on", "off") and len(a) == 1:
+        if cmd == "on":
+            run(["systemctl", "unmask", "firewalld.service"])
+            rc, out = run(["systemctl", "enable", "--now", "firewalld.service"])
+        else:
+            rc, out = run(["systemctl", "disable", "--now", "firewalld.service"])
+        if rc != 0:
+            fail(f"방화벽을 {'켜지' if cmd == 'on' else '끄지'} 못했습니다: {out}")
+    elif cmd == "profile" and len(a) == 3 and UUID_RE.fullmatch(a[1]) and a[2] in ZONES:
+        cmd_profile(a[1], a[2])
+    elif cmd == "service" and len(a) == 4 and a[1] in SERVICES and a[2] in ZONES and a[3] in ("on", "off"):
+        set_service(a[1], a[2], a[3] == "on")
+    elif cmd == "port" and len(a) == 4 and a[1] in ("add", "remove") and PORT_RE.fullmatch(a[2]) and a[3] in ZONES:
+        if not 1 <= int(PORT_RE.fullmatch(a[2]).group(1)) <= 65535:
+            fail("포트 번호는 1~65535 입니다", 2)
+        rc, out = fw(f"--zone={a[3]}", f"--{a[1]}-port={a[2]}")
+        ok_or_fail(rc, out, "포트를 바꾸지 못했습니다")
+    elif cmd == "remote-login" and len(a) == 2 and a[1] in ("on", "off"):
+        on = a[1] == "on"
+        ssh_units(on)
+        set_service("ssh", "home", on)
+        if not on:
+            set_service("ssh", "public", False)
+    elif cmd == "setup" and len(a) == 2 and a[1] in ("dev", "release", "keep"):
+        cmd_setup(a[1])
+    else:
+        fail("잘못된 인자입니다", 2)
+    print("OK", flush=True)
+
+
+if __name__ == "__main__":
+    main()

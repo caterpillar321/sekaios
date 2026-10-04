@@ -1,7 +1,7 @@
 """찍을 화면 — 창(앱을 띄워)과 레이어(작업 표시줄의 팝업). dynamic 은 내용이 늘 바뀌어(시계·그래프) 기준 그림과 비교하지 않는다."""
 
 SETTINGS_PAGES = ["about", "power", "display", "graphics", "sound", "wallpaper", "appearance", "multitasking", "input",
-                  "shortcuts", "bluetooth", "printers", "network", "notifications", "locale", "defaults", "installed",
+                  "shortcuts", "bluetooth", "printers", "network", "firewall", "notifications", "locale", "defaults", "installed",
                   "account", "users", "a11y", "update", "recovery"]
 
 TARGETS = []
