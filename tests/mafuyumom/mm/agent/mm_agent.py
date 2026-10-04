@@ -207,6 +207,129 @@ def tree(req):
     return lines
 
 
+# ── 신에이(화면 깨짐): 창 안 위젯의 배치를 훑어 글자 잘림·겹침·창 밖 위젯을 찾는다 ──
+TEXTY = {"label", "button", "push button", "toggle button", "check box", "radio button", "menu item", "page tab",
+         "heading", "link", "list item", "table cell", "menu", "combo box", "text", "password text", "spin button"}
+SCROLLY = {"scroll pane", "viewport"}
+
+
+def _box(o):
+    try:
+        e = o.get_component_iface().get_extents(Atspi.CoordType.WINDOW)
+        return (e.x, e.y, e.width, e.height) if e.x != HIDDEN else None
+    except Exception:
+        return None
+
+
+def _clip(o, box, tol=2, by_width=False):
+    """글자가 위젯 상자 밖으로 나가나 — 마지막 글자의 자리로 잰다. "잘림" / "말줄임" / None.
+    tol: 넘쳐도 봐주는 화소 (표 칸은 GTK 가 칸 여백을 빼고 알려 몇 화소 넘친 것처럼 보인다)"""
+    try:
+        n = Atspi.Text.get_character_count(o)
+        if n <= 0:
+            return None
+        last = Atspi.Text.get_character_extents(o, n - 1, Atspi.CoordType.WINDOW)
+        first = Atspi.Text.get_character_extents(o, 0, Atspi.CoordType.WINDOW)
+    except Exception:
+        return None
+    x, y, w, h = box
+    if last.width <= 0 and last.height <= 0:
+        return "말줄임" if first.width > 0 else None       # 끝 글자 자리가 없다 — 말줄임(…)으로 잘렸다
+    if by_width:
+        # 표 칸: GTK 는 오른쪽 정렬 칸의 글자 자리를 길이와 상관없이 같은 데서 시작한다고 알린다 — 자리는 믿지 않고
+        #   글자 폭(처음~끝)이 칸보다 넓은지만 본다 (날짜가 "2026-10-01 오…"로 줄었으면 글자 폭이 칸보다 넓다)
+        return "잘림" if (last.x + last.width - first.x) > w + tol else None
+    if last.x + last.width > x + w + tol or last.y + last.height > y + h + tol or last.y < y - tol:
+        return "잘림"
+    return None
+
+
+def layout(req):
+    """요청: {"op": "layout", "app": "…", "frame": "<창 제목 정규식>"} → 창마다 {"frame", "box", "nodes", "issues"}"""
+    res = []
+    for a in apps(req.get("app")):
+        pid = a.get_process_id()
+        for i in range(a.get_child_count()):
+            frame = a.get_child_at_index(i)
+            if frame is None or "showing" not in states(frame):
+                continue
+            fname = frame.get_name() or ""
+            if "frame" in req and not re.search(req["frame"], fname):
+                continue
+            fbox = _box(frame)
+            if not fbox:
+                continue
+            nodes, issues = [], []
+
+            def isect(a, b):
+                if a is None:
+                    return b
+                x0, y0 = max(a[0], b[0]), max(a[1], b[1])
+                x1, y1 = min(a[0] + a[2], b[0] + b[2]), min(a[1] + a[3], b[1] + b[3])
+                return (x0, y0, max(0, x1 - x0), max(0, y1 - y0))
+
+            def rec(o, path, scrolled, d, clip=None):
+                if d > 40:
+                    return
+                st = states(o)
+                if "showing" not in st:
+                    return
+                role = o.get_role_name()
+                box = _box(o)
+                name = (o.get_name() or "")[:60]
+                vis = isect(clip, box) if box else None          # 스크롤 영역 밖(가려진 곳)은 빼고 보이는 부분만
+                if box and box[2] > 0 and box[3] > 0 and vis[2] > 0 and vis[3] > 0:
+                    try:
+                        kids = o.get_child_count()
+                    except Exception:
+                        kids = 0
+                    if role in TEXTY:
+                        # 표 칸은 겹침에서 뺀다 — 한 칸에 아이콘과 글자가 따로 잡혀 늘 겹쳐 보인다
+                        nodes.append({"role": role, "name": name, "box": vis, "path": path, "scrolled": scrolled,
+                                      "leaf": role != "table cell" and (kids == 0 or role in (
+                                          "button", "push button", "toggle button", "check box", "radio button",
+                                          "label", "heading", "link"))})
+                        c = _clip(o, box, 4, by_width=True) if role == "table cell" else _clip(o, box)
+                        if c and name:
+                            issues.append({"kind": c, "role": role, "name": name, "box": box})
+                    if not scrolled:
+                        fx, fy, fw, fh = 0, 0, fbox[2], fbox[3]
+                        x, y, w, h = box
+                        if x < fx - 2 or y < fy - 2 or x + w > fx + fw + 2 or y + h > fy + fh + 2:
+                            if role in TEXTY:
+                                issues.append({"kind": "창 밖", "role": role, "name": name, "box": box})
+                try:
+                    n = min(o.get_child_count(), 400)
+                except Exception:
+                    n = 0
+                for j in range(n):
+                    try:
+                        c = o.get_child_at_index(j)
+                    except Exception:
+                        continue
+                    if c is not None:
+                        rec(c, path + (j,), scrolled or role in SCROLLY, d + 1,
+                            isect(clip, box) if (role in SCROLLY and box) else clip)
+            rec(frame, (), False, 0)
+            # 겹침 — 위아래(조상·자손)가 아닌 위젯끼리, 작은 쪽 넓이의 25% 넘게
+            leaves = [n for n in nodes if n["leaf"]]
+            for ai in range(len(leaves)):
+                A = leaves[ai]
+                ax, ay, aw, ah = A["box"]
+                for B in leaves[ai + 1:]:
+                    if A["path"] == B["path"][:len(A["path"])] or B["path"] == A["path"][:len(B["path"])]:
+                        continue
+                    bx, by, bw, bh = B["box"]
+                    ix = min(ax + aw, bx + bw) - max(ax, bx)
+                    iy = min(ay + ah, by + bh) - max(ay, by)
+                    if ix > 2 and iy > 2 and ix * iy > 0.25 * min(aw * ah, bw * bh):
+                        issues.append({"kind": "겹침", "role": A["role"] + "/" + B["role"],
+                                       "name": f"{A['name']} ↔ {B['name']}", "box": A["box"], "box2": B["box"]})
+            res.append({"app": a.get_name(), "frame": fname, "box": fbox, "origin": origin(frame, pid),
+                        "count": len(nodes), "issues": issues[:80]})
+    return res
+
+
 def handle(req):
     global _places
     _places = None                                 # 창 자리는 요청마다 새로
@@ -217,6 +340,8 @@ def handle(req):
         return [dict(node(o, fxy), app=an) for o, fxy, an in find(req)]
     if op == "tree":
         return tree(req)
+    if op == "layout":
+        return layout(req)
     if op == "action":
         f = find(req)
         ok = False

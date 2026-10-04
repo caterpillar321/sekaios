@@ -202,3 +202,37 @@ def versions():
     r = remote.run("dpkg-query -W -f='${Package} ${Version}\\n' sekai-de sekai-shell sekaios-base worldlink 2>/dev/null",
                    session=False)
     return dict(l.split(" ", 1) for l in r.out.splitlines() if " " in l)
+
+
+# ── 최신 패키지 ──
+def newest(pattern):
+    """packages/ 에서 그 이름의 가장 새 판"""
+    files = glob.glob(os.path.join(config.REPO, "packages", pattern))
+    if not files:
+        return None
+    def ver(p):
+        return os.path.basename(p).split("_")[1]
+    best = files[0]
+    for f in files[1:]:
+        if subprocess.run(["dpkg", "--compare-versions", ver(f), "gt", ver(best)]).returncode == 0:
+            best = f
+    return best
+
+
+def install_latest(q):
+    """packages/ 의 최신 SekaiOS·WorldLink 패키지를 깔고 다시 부팅해 로그인 (mafuyumom · shinei 가 함께 쓴다)"""
+    pats = ["sekai-de_*_all.deb", "sekai-shell_*_all.deb", "sekaios-base_*_all.deb", "worldlink_*_amd64.deb",
+            "sekaicomp_*_all.deb", "hyprland_*_all.deb", "hyprbars_*_amd64.deb", "hyprexpo_*_amd64.deb"]
+    debs = [d for d in (newest(p) for p in pats) if d]
+    print("  · 최신 패키지:", ", ".join(os.path.basename(d) for d in debs), flush=True)
+    remote.run("mkdir -p /tmp/mm-debs; rm -f /tmp/mm-debs/*", session=False)
+    for d in debs:
+        remote.push(d, "/tmp/mm-debs/")
+    r = remote.root("DEBIAN_FRONTEND=noninteractive apt-get install -y -q --allow-downgrades /tmp/mm-debs/*.deb "
+                    "> /tmp/mm-debs/log 2>&1; echo rc=$?", timeout=900)
+    if "rc=0" not in r.out:
+        print(remote.root("tail -20 /tmp/mm-debs/log").out)
+        raise SystemExit("패키지 설치 실패")
+    print("  · 설치됨 — 다시 부팅", flush=True)
+    if not reboot_and_login(q):
+        raise SystemExit("다시 부팅한 뒤 로그인하지 못했습니다")

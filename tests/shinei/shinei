@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""신에이 — SekaiOS 화면 깨짐 하네스 (에나 아빠, 화가: 그림이 어긋나면 안다)
+
+  shinei list                                         환경·대상 목록
+  shinei run [-c 환경…] [-t 대상…] [--install-latest] [--keep] [--reuse]
+        환경(테마·대비 × 텍스트 크기 × 해상도·배율)마다 대상(설정 페이지·앱·팝업)을 띄워 찍고
+          · 글자 잘림·말줄임 (접근성 — 마지막 글자가 위젯 밖)  · 겹침 (위젯끼리)  · 창 밖 위젯 · 화면을 넘는 창
+          · 기준 그림과 비교 (달라진 곳)
+        보고서: ~/.cache/shinei/reports/<시각>/report.html
+  shinei approve [보고서 폴더]                         이번 그림을 기준으로 (사람이 보고 괜찮다고 했을 때)
+  shinei stop                                         시험 VM 끄기
+
+VM·입력·접근성 에이전트는 MafuyuMom(../mafuyumom/mm)의 것을 같이 쓴다.
+"""
+import argparse
+import os
+import shutil
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(HERE, "..", "mafuyumom"))
+
+from mm import vm  # noqa: E402
+from mm.ui import UI  # noqa: E402
+from sh import capture, configs, report, targets  # noqa: E402
+
+ROOT = os.environ.get("SHINEI_ROOT", os.path.expanduser("~/.cache/shinei"))
+REPORTS = os.path.join(ROOT, "reports")
+BASELINE = os.path.join(ROOT, "baseline")
+
+
+def cmd_run(a):
+    cfgs = configs.by_id(a.config)
+    tgts = targets.by_id(a.target)
+    t0 = time.time()
+    if not a.reuse or not vm.running():
+        print("■ 시험 VM 을 새로 띄웁니다 (골든 위 덧씌우기)", flush=True)
+        vm.fresh()
+        vm.start()
+    if not vm.wait_ssh():
+        raise SystemExit("VM 에 SSH 로 닿지 않습니다")
+    q = vm.qmp()
+    print("■ 로그인", flush=True)
+    if not vm.login(q):
+        raise SystemExit("로그인하지 못했습니다")
+    if a.install_latest:
+        vm.install_latest(q)
+    vm.close_all_windows()
+    versions = vm.versions()
+    print("■ 판:", " · ".join(f"{k} {v}" for k, v in versions.items()), flush=True)
+    outdir = os.path.join(REPORTS, time.strftime("%Y%m%d-%H%M%S"))
+    os.makedirs(outdir, exist_ok=True)
+    print(f"■ 환경 {len(cfgs)} × 대상 {len(tgts)} = {len(cfgs) * len(tgts)}장", flush=True)
+    ui = UI(q)
+    results = []
+    try:
+        for cfg in cfgs:
+            print(f"▶ 환경 {cfg['id']} — {cfg['desc']}", flush=True)
+            try:
+                m = capture.apply(cfg) or {}
+            except RuntimeError as e:
+                print(f"  ‼ {e}", flush=True)
+                for t in tgts:
+                    results.append({"target": t["id"], "config": cfg["id"], "shot": None,
+                                    "issues": [{"kind": "안 뜸", "name": f"환경을 만들지 못했다: {e}"}]})
+                continue
+            print(f"  · 화면 {m.get('width')}x{m.get('height')} 배율 {m.get('scale')}", flush=True)
+            for t in tgts:
+                try:
+                    r = capture.shoot(q, ui, t, cfg, outdir)
+                except Exception as e:
+                    r = {"target": t["id"], "config": cfg["id"], "issues": [{"kind": "오류", "name": f"{type(e).__name__}: {e}"}],
+                         "shot": None}
+                base = os.path.join(BASELINE, cfg["id"], f"{t['id']}.png")
+                if r.get("shot") and not t.get("dynamic"):
+                    if os.path.exists(base):
+                        r["baseline"] = True
+                        ratio, d = capture.compare(os.path.join(outdir, r["shot"]), base)
+                        if ratio is None:
+                            r["size_changed"] = True
+                            r["issues"].append({"kind": "크기 바뀜", "name": "기준 그림과 크기가 다르다"})
+                        else:
+                            r["diff"] = ratio
+                            if ratio > 0.003:
+                                dp = os.path.join(outdir, "shots", f"{cfg['id']}__{t['id']}.diff.png")
+                                d.save(dp)
+                                r["diffimg"] = os.path.relpath(dp, outdir)
+                    else:
+                        r["baseline"] = False
+                st = report.status(r)
+                mark = {"bad": "✗", "changed": "△", "new": "·", "ok": "✓"}[st]
+                kinds = ", ".join(sorted({i["kind"] for i in r["issues"]}))
+                print(f"  {mark} {t['id']}{' — ' + kinds if kinds else ''}", flush=True)
+                results.append(r)
+    finally:
+        ui.stop()
+        vm.close_all_windows()
+        try:
+            capture.apply(configs.DEFAULT)                # 다음 시험이 기본 환경에서 시작하게
+        except Exception:
+            if a.keep:
+                print("  ! 기본 해상도로 되돌리지 못했다 (virtio-gpu) — 이 VM 을 다시 쓰려면 다시 부팅", flush=True)
+    meta = {"when": time.strftime("%Y-%m-%d %H:%M"), "versions": versions, "secs": int(time.time() - t0)}
+    cnt = report.write(outdir, results, cfgs, tgts, meta)
+    print(f"■ 결과: 깨짐 {cnt['bad']} · 달라짐 {cnt['changed']} · 기준 없음 {cnt['new']} · 같음 {cnt['ok']}", flush=True)
+    print(f"■ 보고서: {outdir}/report.html", flush=True)
+    if not a.keep:
+        vm.stop(force=True)
+    return 0 if cnt["bad"] == 0 else 1
+
+
+def cmd_approve(a):
+    src = a.report or max((os.path.join(REPORTS, d) for d in os.listdir(REPORTS)), key=os.path.getmtime)
+    shots = os.path.join(src, "shots")
+    n = 0
+    for f in sorted(os.listdir(shots)):
+        if not f.endswith(".png") or f.endswith(".diff.png") or "__" not in f:
+            continue
+        cfg, tgt = f[:-4].split("__", 1)
+        os.makedirs(os.path.join(BASELINE, cfg), exist_ok=True)
+        shutil.copy2(os.path.join(shots, f), os.path.join(BASELINE, cfg, f"{tgt}.png"))
+        n += 1
+    print(f"기준 그림 {n}장을 {src} 에서 가져왔습니다 → {BASELINE}")
+
+
+def main():
+    p = argparse.ArgumentParser(prog="shinei", description=__doc__.split("\n")[0])
+    sp = p.add_subparsers(dest="cmd", required=True)
+    sp.add_parser("list")
+    sp.add_parser("stop")
+    r = sp.add_parser("run")
+    r.add_argument("-c", "--config", action="append")
+    r.add_argument("-t", "--target", action="append")
+    r.add_argument("--install-latest", action="store_true")
+    r.add_argument("--keep", action="store_true")
+    r.add_argument("--reuse", action="store_true")
+    ap = sp.add_parser("approve")
+    ap.add_argument("report", nargs="?")
+    a = p.parse_args()
+    if a.cmd == "list":
+        print("[환경]")
+        for c in configs.CONFIGS:
+            print(f"  {c['id']:12s} {c['desc']}")
+        print("[대상]")
+        for t in targets.TARGETS:
+            print(f"  {t['id']:24s} {t['kind']}{' (내용이 바뀌어 비교 안 함)' if t.get('dynamic') else ''}")
+    elif a.cmd == "stop":
+        vm.stop(force=True)
+    elif a.cmd == "run":
+        sys.exit(cmd_run(a))
+    elif a.cmd == "approve":
+        cmd_approve(a)
+
+
+if __name__ == "__main__":
+    main()

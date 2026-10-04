@@ -18,7 +18,6 @@ import glob
 import importlib
 import os
 import re
-import subprocess
 import sys
 import time
 
@@ -31,38 +30,6 @@ from mm import config, remote, report, runner, vm  # noqa: E402
 def load_suites():
     for f in sorted(glob.glob(os.path.join(HERE, "suites", "s*.py"))):
         importlib.import_module("suites." + os.path.basename(f)[:-3])
-
-
-def newest(pattern):
-    """packages/ 에서 그 이름의 가장 새 판"""
-    files = glob.glob(os.path.join(config.REPO, "packages", pattern))
-    if not files:
-        return None
-    def ver(p):
-        return os.path.basename(p).split("_")[1]
-    best = files[0]
-    for f in files[1:]:
-        if subprocess.run(["dpkg", "--compare-versions", ver(f), "gt", ver(best)]).returncode == 0:
-            best = f
-    return best
-
-
-def install_latest(q):
-    pats = ["sekai-de_*_all.deb", "sekai-shell_*_all.deb", "sekaios-base_*_all.deb", "worldlink_*_amd64.deb",
-            "sekaicomp_*_all.deb", "hyprland_*_all.deb", "hyprbars_*_amd64.deb", "hyprexpo_*_amd64.deb"]
-    debs = [d for d in (newest(p) for p in pats) if d]
-    print("  · 최신 패키지:", ", ".join(os.path.basename(d) for d in debs), flush=True)
-    remote.run("mkdir -p /tmp/mm-debs; rm -f /tmp/mm-debs/*", session=False)
-    for d in debs:
-        remote.push(d, "/tmp/mm-debs/")
-    r = remote.root("DEBIAN_FRONTEND=noninteractive apt-get install -y -q --allow-downgrades /tmp/mm-debs/*.deb "
-                    "> /tmp/mm-debs/log 2>&1; echo rc=$?", timeout=900)
-    if "rc=0" not in r.out:
-        print(remote.root("tail -20 /tmp/mm-debs/log").out)
-        raise SystemExit("패키지 설치 실패")
-    print("  · 설치됨 — 다시 부팅", flush=True)
-    if not vm.reboot_and_login(q):
-        raise SystemExit("다시 부팅한 뒤 로그인하지 못했습니다")
 
 
 def cmd_run(a):
@@ -87,7 +54,7 @@ def cmd_run(a):
     if not vm.close_all_windows():
         print("  ! 지난 판의 창이 남아 있다", flush=True)
     if a.install_latest:
-        install_latest(q)
+        vm.install_latest(q)
     versions = vm.versions()
     print("■ 판:", " · ".join(f"{k} {v}" for k, v in versions.items()), flush=True)
     outdir = os.path.join(config.REPORTS, time.strftime("%Y%m%d-%H%M%S"))

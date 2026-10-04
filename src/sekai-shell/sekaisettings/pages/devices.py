@@ -59,7 +59,7 @@ def build_input(store):
                                 width=14, placeholder="us,kr")
     row(s, "직접 입력", "위 목록에 없는 레이아웃", control=layout_entry)
     options_entry = edited_entry(i["kb_options"], lambda v: store.set("input", "kb_options", v),
-                                 width=22, placeholder="grp:alt_shift_toggle")
+                                 width=36, placeholder="grp:alt_shift_toggle")   # 기본값(한/영·한자 키)이 다 보이게
     row(s, "전환 단축키", "xkb options (예: grp:alt_shift_toggle)", control=options_entry)
 
     # 위 목록이나 "시간 및 언어"의 한/영 스위치가 같은 값을 바꾸면 칸도 따라간다

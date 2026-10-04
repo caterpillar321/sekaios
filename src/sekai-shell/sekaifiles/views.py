@@ -478,6 +478,16 @@ class IconsView(_Base):
         return self._rename is not None
 
 
+def _text_scale():
+    """GNOME 텍스트 크기 (text-scaling-factor) — 모르면 1"""
+    try:
+        from gi.repository import Gio
+        v = Gio.Settings.new("org.gnome.desktop.interface").get_double("text-scaling-factor")
+        return v if 0.5 <= v <= 3 else 1.0
+    except Exception:
+        return 1.0
+
+
 # 자세히 보기의 열 — (id, 머리글, 모델 열, 폭, 오른쪽 정렬, 정렬 항목)
 DETAIL_COLUMNS = [
     ("name", "이름", C_NAME, 320, False, "name"),
@@ -510,7 +520,11 @@ class DetailsView(_Base):
         v.connect("row-activated", lambda *_: self.host.view_activated())
         self.cols = {}
         widths = widths or {}
+        # 기본 폭은 100% 글자 기준 — 설정 › 접근성의 텍스트 크기만큼 넓힌다 (150% 면 날짜가 "2026-10-01 오…"로 잘렸다).
+        #   사용자가 끌어 맞춘 폭(widths)은 그대로
+        scale = _text_scale()
         for cid, title, col, width, right, field in DETAIL_COLUMNS:
+            width = int(round(width * scale))
             c = Gtk.TreeViewColumn()
             c.set_title(title)
             if cid == "name":

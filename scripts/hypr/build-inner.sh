@@ -72,6 +72,7 @@ REV="sekai2"
 #      sekai33: 정리 — 장식 규약은 앱이 고른 대로, clients 의 sekaiTop(장식 높이), plugin = 을 장식 배치기 뒤에 로드, 끌기 이벤트 한 곳(sekaidrag) — 스냅 영역은 셸이, 최소화를 창의 상태로(sekaiminimize) (포크 0d5899b) — hyprbars sekai30 · hyprexpo sekai18
 #      sekai34: 최대화를 창의 상태로(sekaimaximize·sekaiMaximized) — 작업 공간 전체 화면을 쓰지 않는다, 모서리·테두리 없이,
 #               X11 최대화 상태, 제목줄 복원 단추, 세 손가락 제스처(sekaigesture), 끌어 복원은 누른 자리 기준, 닫은 데스크톱의 상주 풀기 (포크 91bb326) — hyprbars sekai31 · hyprexpo sekai19
+#   ── 2026-10-04: WorldLink 기능 동결 (sekai34) — 1차 마일스톤까지 새 기능 없이 버그 수정·보안 백포트만
 rev_for() { case "$1" in hyprbars) echo sekai31 ;; hyprexpo) echo sekai19 ;; worldlink|sekaicomp|hyprland) echo sekai34 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
