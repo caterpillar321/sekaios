@@ -14,6 +14,7 @@
 나머지 조회(nmcli·wpctl·brightnessctl)는 팝업이 열려 있는 동안만, 기다리지 않고 —
 run 은 패널의 run_limited(argv, done, secs, capture).
 """
+import fcntl
 import os
 import re
 import shutil
@@ -201,6 +202,11 @@ def sys_has_wifi():
         return False
 
 
+def _power_dir():
+    from .power import supply_dir                       # 시험(가짜 배터리)이면 그쪽
+    return supply_dir()
+
+
 def read_battery(base="/sys/class/power_supply"):
     """노트북 배터리 → {"pct", "state", "secs"} 또는 None.
     state: charging · discharging · full · plugged(연결됐지만 충전 안 함). secs: 남은/완충까지 시간(모르면 0).
@@ -291,6 +297,7 @@ def battery_text(b):
 RF_ALL, RF_WLAN, RF_BT = 0, 1, 2
 RF_TYPES = {"wlan": 1, "bluetooth": 2, "uwb": 3, "wimax": 4, "wwan": 5, "gps": 6, "fm": 7, "nfc": 8}
 RF_ADD, RF_DEL, RF_CHANGE, RF_CHANGE_ALL = 0, 1, 2, 3
+RFKILL_IOCTL_NOINPUT = 0x5201          # _IO('R', 1)
 _RF_EV = struct.Struct("=IBBBB")        # struct rfkill_event 의 앞 8바이트: idx type op soft hard
 
 
@@ -309,6 +316,12 @@ class Rfkill:
         except OSError:
             self._read_sys()
             return
+        # 비행기 모드 키(KEY_RFKILL)는 우리가 처리한다 — 커널 rfkill-input 이 먼저 뒤집으면 우리 토글과 겹쳐
+        #   제자리로 돌아온다. 이 fd 가 열려 있는 동안만 (작업 표시줄이 죽으면 커널이 다시 맡는다 — GNOME 과 같다)
+        try:
+            fcntl.ioctl(self._fd, RFKILL_IOCTL_NOINPUT)
+        except OSError as e:
+            dbg("rfkill NOINPUT", e)
         self._drain()                   # 열자마자 모든 장치가 ADD 로 들어온다
         GLib.io_add_watch(GLib.IOChannel.unix_new(self._fd), GLib.PRIORITY_DEFAULT,
                           GLib.IOCondition.IN | GLib.IOCondition.HUP | GLib.IOCondition.ERR, self._io)
@@ -1070,7 +1083,7 @@ class QuickSettings(PanelPopup):
         self._wifi_scan_busy = False
         self._dark_busy = False
         self._air = bool(config.state("airplane", False))
-        self._battery = read_battery()
+        self._battery = read_battery(_power_dir())
         self._backlight = has_backlight()
         self._has_wpctl = shutil.which("wpctl") is not None
         self._can_dark = self._settings_available()
@@ -1254,7 +1267,7 @@ class QuickSettings(PanelPopup):
             self.t_dnd.set_on(self.noti.dnd)
 
     def _battery_tick(self):
-        self._battery = read_battery()
+        self._battery = read_battery(_power_dir())
         for b in self._buttons:
             b.show_battery(self._battery)
         return True

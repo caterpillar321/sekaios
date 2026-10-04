@@ -588,7 +588,7 @@ Priority: optional
 Depends: shim-signed, grub-efi-amd64-signed, grub-efi-amd64-bin, grub2-common, os-prober,
  efibootmgr, mokutil, pciutils, openssl,
  plymouth (>= 24.004.60-5+sekai1), plymouth-themes,
- network-manager, systemd-resolved, flatpak, btrfs-progs, snapper, firewalld
+ network-manager, systemd-resolved, flatpak, btrfs-progs, snapper, firewalld, power-profiles-daemon
 Replaces: sekai-desktop (<< ${FULL})
 Breaks: sekai-desktop (<< ${FULL})
 Description: SekaiOS base system

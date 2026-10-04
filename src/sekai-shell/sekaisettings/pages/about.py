@@ -96,25 +96,45 @@ def build_about(store):
 
 
 def build_power(store):
-    p = Page("전원 및 잠금", "화면을 끄고 잠그는 시간을 정합니다.")
+    from sekaishell import power
+    from sekaishell.quicksettings import battery_text
+    p = Page("전원 및 잠금", "전원 모드 · 배터리 · 화면을 끄고 잠그는 시간을 정합니다.")
     has_idle = bool(shutil.which("swayidle"))
+
+    # ── 배터리 (노트북) · 전원 모드 ──
+    bat = power.battery()
+    profs = power.profiles()
+    if bat or profs:
+        s = p.section("전원")
+        if bat:
+            _icons, text = battery_text(bat)
+            row(s, f"배터리 {bat['pct']}%", text, icon=_icons + ["battery"])
+        if profs:
+            cur = power.profile() or "balanced"
+            row(s, "전원 모드", "성능과 배터리 사용 시간 사이에서 고릅니다",
+                icon=["power-profile-balanced-symbolic", "preferences-system-power"],
+                control=combo(profs, cur, lambda v: v and power.set_profile(v)))
+        if bat:
+            opts = [(0, "켜지 않음"), (10, "10% 이하"), (20, "20% 이하"), (30, "30% 이하"), (50, "50% 이하")]
+            row(s, "배터리 절약 모드 저절로 켜기", "배터리를 쓰는 중 잔량이 이만큼 내려가면 최고 전원 효율로 바꿉니다 — "
+                "충전기를 꽂으면 되돌립니다",
+                icon=["battery-low-symbolic", "battery-caution"],
+                control=combo(opts, int(store.get("power", "saver_at") or 0),
+                              lambda v: store.set("power", "saver_at", int(v))))
 
     s = p.section("자동 동작")
     opts = [(0, "안 함"), (60, "1분"), (180, "3분"), (300, "5분"),
             (600, "10분"), (900, "15분"), (1800, "30분"), (3600, "1시간")]
 
-    row(s, "화면 끄기", "아무 입력이 없을 때 화면을 끕니다",
-        icon=["video-display", "preferences-desktop-screensaver"],
-        control=combo(opts, store.get("power", "screen_off"),
-                      lambda v: store.set("power", "screen_off", int(v))))
-    row(s, "화면 잠그기", "잠금 화면을 띄웁니다",
-        icon=["system-lock-screen", "changes-prevent"],
-        control=combo(opts, store.get("power", "lock"),
-                      lambda v: store.set("power", "lock", int(v))))
-    row(s, "절전 모드", "시스템을 대기 상태로 보냅니다",
-        icon=["system-suspend", "gnome-session-suspend"],
-        control=combo(opts, store.get("power", "suspend"),
-                      lambda v: store.set("power", "suspend", int(v))))
+    # 노트북은 배터리 사용 시 / 전원 연결 시 따로 (sekai-idle 이 충전기를 꽂고 뺄 때 바꿔 건다)
+    items = [("screen_off", "화면 끄기", "아무 입력이 없을 때 화면을 끕니다",
+              ["video-display", "preferences-desktop-screensaver"]),
+             ("lock", "화면 잠그기", "잠금 화면을 띄웁니다", ["system-lock-screen", "changes-prevent"]),
+             ("suspend", "절전 모드", "시스템을 대기 상태로 보냅니다", ["system-suspend", "gnome-session-suspend"])]
+    for key, title, sub, icon in items:
+        for k, label in ([(key + "_battery", " — 배터리 사용 시"), (key, " — 전원 연결 시")] if bat else [(key, "")]):
+            row(s, title + label, sub, icon=icon,
+                control=combo(opts, store.get("power", k), lambda v, k=k: store.set("power", k, int(v))))
 
     if not has_idle:
         w = Gtk.Label(
@@ -123,6 +143,19 @@ def build_power(store):
         w.get_style_context().add_class("notice")
         w.set_line_wrap(True)
         p.add_widget(w)
+
+    # ── 전원 단추와 덮개 (윈도우: 제어판 › 전원 옵션) — 노트북은 배터리 사용 시 / 전원 연결 시 따로 ──
+    s = p.section("전원 단추와 덮개")
+    kinds = [("button", "전원 단추를 누르면", ["system-shutdown-symbolic", "system-shutdown"])]
+    if power.lid_present():
+        kinds.append(("lid", "덮개를 닫으면", ["computer-laptop-symbolic", "computer-laptop", "computer"]))
+    for kind, title, icon in kinds:
+        acts = power.actions(kind)
+        for src, label in ([("battery", " — 배터리 사용 시"), ("ac", " — 전원 연결 시")] if bat else [("ac", "")]):
+            key = f"{kind}_{src}"
+            cur = store.get("power", key) or power.default_action(kind, bool(bat))
+            row(s, title + label, None, icon=icon,
+                control=combo(acts, cur, lambda v, k=key: v and store.set("power", k, v)))
 
     s = p.section("지금 실행")
     row(s, "화면 잠그기", control=button("잠그기", lambda: spawn(LOCK_NOW)))

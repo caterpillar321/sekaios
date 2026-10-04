@@ -19,6 +19,10 @@ XML = """
     <method name="Brightness"><arg type="s" name="action" direction="in"/></method>
     <method name="Snap"><arg type="s" name="direction" direction="in"/></method>
     <method name="ShowDesktop"/>
+    <method name="Power"><arg type="s" name="what" direction="in"/></method>
+    <method name="Touchpad"><arg type="s" name="action" direction="in"/></method>
+    <method name="KbdLight"><arg type="s" name="action" direction="in"/></method>
+    <method name="Airplane"/>
     <method name="Clipboard"/>
     <method name="StartMenu"/>
     <method name="NotificationCenter"/>

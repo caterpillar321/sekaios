@@ -2,6 +2,8 @@
 """가상 터치패드 — uinput 으로 멀티터치 터치패드를 만들어 여러 손가락 쓸기를 넣는다 (root 로).
 
   python3 vtouchpad.py swipe <손가락 수> <dx> <dy> [단계 수]
+  python3 vtouchpad.py serve <fifo>      장치를 만든 채 fifo 에서 "swipe 손가락 dx dy" · "quit" 을 받는다
+                                          (터치패드를 끄고 켜는 시험 — 장치가 그동안 있어야 한다)
 
 udev 가 이 장치를 ID_INPUT_TOUCHPAD 로 보고, libinput 이 진짜 터치패드처럼 제스처(쓸기)를 알아본다 —
 합성기는 실제 노트북과 같은 길(libinput → aquamarine → WorldLink)로 받는다. 단위는 장치 단위(30 = 1mm).
@@ -117,6 +119,23 @@ def main():
         finally:
             p.close()
         print("ok")
+    elif len(sys.argv) == 3 and sys.argv[1] == "serve":
+        fifo = sys.argv[2]
+        if not os.path.exists(fifo):
+            os.mkfifo(fifo, 0o600)
+        p = Pad()
+        try:
+            while True:
+                with open(fifo) as f:
+                    for line in f:
+                        a = line.split()
+                        if a[:1] == ["quit"]:
+                            return
+                        if len(a) == 4 and a[0] == "swipe":
+                            p.swipe(int(a[1]), float(a[2]), float(a[3]))
+        finally:
+            p.close()
+            os.unlink(fifo)
     else:
         print(__doc__)
         sys.exit(2)

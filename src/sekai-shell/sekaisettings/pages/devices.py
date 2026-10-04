@@ -91,12 +91,20 @@ def build_input(store):
                        lambda v: store.set("input", "follow_mouse", 1 if v else 2)))
 
     s = p.section("터치패드")
-    row(s, "스크롤 방향 반대로",
+    row(s, "터치패드", "노트북 키보드의 터치패드 켜기 키(Fn)로도 켜고 끕니다",
         icon=["input-touchpad", "input-mouse"],
+        control=switch(i.get("tp_enabled", True), lambda v: store.set("input", "tp_enabled", v)))
+    row(s, "입력하는 동안 터치패드 끄기", "손바닥이 닿아 커서가 튀지 않게",
+        control=switch(i.get("tp_dwt", True), lambda v: store.set("input", "tp_dwt", v)))
+    row(s, "스크롤 방향 반대로",
         control=switch(i["tp_natural_scroll"],
                        lambda v: store.set("input", "tp_natural_scroll", v)))
     row(s, "탭하여 클릭",
         control=switch(i["tp_tap"], lambda v: store.set("input", "tp_tap", v)))
+    row(s, "세 손가락 쓸기", "위 = 작업 보기, 아래 = 바탕 화면 보기, 좌우 = 앱 전환",
+        control=switch(i.get("gesture3", True), lambda v: store.set("input", "gesture3", v)))
+    row(s, "네 손가락 쓸기", "좌우 = 데스크톱 넘기기",
+        control=switch(i.get("gesture4", True), lambda v: store.set("input", "gesture4", v)))
 
     s = p.section("되돌리기")
     row(s, "입력 기본값으로",

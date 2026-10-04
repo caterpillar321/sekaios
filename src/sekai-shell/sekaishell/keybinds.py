@@ -201,8 +201,8 @@ def parse_conf(text):
         args = [a.strip() for a in rhs.split(",", n - 1)]
         args += [""] * (n - len(args))
         mods, key = mods_of(args[0]), args[1]
-        if not key:
-            continue
+        if not key or key.startswith("switch:") or key == "XF86PowerOff":
+            continue                        # 덮개·전원 단추는 단축키가 아니다 — 설정 › 전원 및 잠금 에서
         desc = args[2] if has_d else ""
         disp = args[2 + has_d]
         arg = "" if mouse else args[3 + has_d]

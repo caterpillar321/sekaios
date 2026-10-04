@@ -62,6 +62,10 @@ DEFAULTS = {
         "natural_scroll": False,
         "tp_natural_scroll": True,
         "tp_tap": True,
+        "tp_enabled": True,      # 터치패드 켜기 (장치마다 device[…]:enabled — sekaishell/touchpad.py)
+        "tp_dwt": True,          # 입력하는 동안 터치패드 끄기
+        "gesture3": True,        # 세 손가락 쓸기 (작업 보기 · 바탕 화면 · 앱 전환 — 작업 표시줄)
+        "gesture4": True,        # 네 손가락 좌우 쓸기 (데스크톱 넘기기 — 합성기 gestures:workspace_swipe)
         "follow_mouse": 2,       # 2 = 윈도우처럼 클릭해야 초점 이동 (1 = 마우스를 따라)
     },
     "display": {},               # {"desc:<모니터 설명>" 또는 "DP-1": {...}} — display_key
@@ -89,6 +93,11 @@ DEFAULTS = {
         "screen_off": 600,       # 초, 0 = 안 함
         "lock": 900,
         "suspend": 0,
+        # 노트북이 배터리로 돌 때 (sekai-idle) — 윈도우 균형 전원 계획의 배터리 값
+        "screen_off_battery": 300, "lock_battery": 600, "suspend_battery": 900,
+        "saver_at": 20,          # 배터리 절약 모드를 저절로 켜는 잔량 (%), 0 = 안 함
+        # 전원 단추 · 덮개 (sekaishell/power.py ACTIONS) — "" = 윈도우 기본 (덮개 절전, 전원 단추 노트북 절전 · 데스크톱 종료)
+        "button_ac": "", "button_battery": "", "lid_ac": "", "lid_battery": "",
     },
     # 단축키 — 기본값은 hyprland.conf 의 bind 줄 (sekaishell/keybinds.py). 여기엔 바꾼 것만
     # 접근성 (설정 › 접근성) — 윈도우 11 의 접근성과 같은 항목들
@@ -517,8 +526,13 @@ class Store:
         lines.append("    touchpad {")
         lines.append(f"        natural_scroll = {'true' if i['tp_natural_scroll'] else 'false'}")
         lines.append(f"        tap-to-click = {'true' if i['tp_tap'] else 'false'}")
+        lines.append(f"        disable_while_typing = {'true' if i.get('tp_dwt', True) else 'false'}")
         lines.append("    }")
         lines.append("}")
+        lines.append("")
+        lines.append(f"gestures:workspace_swipe = {'true' if i.get('gesture4', True) else 'false'}")
+        from sekaishell import touchpad
+        lines += touchpad.hypr_lines(i.get("tp_enabled", True))
         lines.append("")
 
         lines.append("plugin {")
@@ -611,6 +625,8 @@ class Store:
         ("input", "follow_mouse"):          ("input:follow_mouse", _int),
         ("input", "tp_natural_scroll"):     ("input:touchpad:natural_scroll", _bool),
         ("input", "tp_tap"):                ("input:touchpad:tap-to-click", _bool),
+        ("input", "tp_dwt"):                ("input:touchpad:disable_while_typing", _bool),
+        ("input", "gesture4"):              ("gestures:workspace_swipe", _bool),
     }
 
     def publish_display(self):
@@ -656,6 +672,9 @@ class Store:
                 keyword(kw, conv(value))
             except Exception as e:
                 dbg("변환 실패", section, key, value, e)
+        elif (section, key) == ("input", "tp_enabled"):
+            from sekaishell import touchpad
+            touchpad.apply(bool(value))
         elif section == "wallpaper":
             self.apply_wallpaper()
         elif section == "display":

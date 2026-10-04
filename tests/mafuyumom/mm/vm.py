@@ -174,8 +174,38 @@ def login(q, timeout=120):
     return False
 
 
+# ── S3 절전을 거친 VM ──
+#   QEMU 6.2 + OVMF 에서 S3 로 잠들었다 깬 VM 은 (1) 화면(virtio-vga)이 QEMU 쪽에서 되살아나지 않아 캡처가
+#   "Display output is not active" 로 까맣고 (2) 다시 부팅하면 펌웨어로 돌아가지 못하고 멈춘다 (system_reset 도
+#   듣지 않는다 — 제품이 아니라 시험 환경 문제). 절전 시험(s9_laptop)은 끝나면 곧바로 QEMU 를 같은 디스크로
+#   새로 띄운다(cold_restart). 그 사이에 멈춰도 표시(s3-used)가 남아 다시 부팅 대신 새로 띄운다.
+S3_MARK = os.path.join(config.RUN, "s3-used")
+
+
+def mark_s3():
+    open(S3_MARK, "w").close()
+
+
+def s3_used():
+    return os.path.exists(S3_MARK)
+
+
+def cold_restart(q):
+    """디스크를 비우고(sync) QEMU 를 끈 뒤 같은 디스크로 다시 띄워 로그인. q 는 새 QEMU 에 다시 붙는다"""
+    remote.root("sync", timeout=30)
+    q.close()
+    stop(force=True)
+    os.remove(S3_MARK)
+    start()
+    q.connect()
+    time.sleep(10)
+    return wait_ssh() and login(q)
+
+
 def reboot_and_login(q):
     """다시 부팅하고 로그인 — QMP 연결은 그대로 쓴다 (QEMU 는 한 번에 한 연결만 받아, 새로 열면 멈춘다)"""
+    if s3_used():
+        return cold_restart(q)
     remote.root("systemctl reboot", timeout=10)
     time.sleep(15)
     if not wait_ssh():
@@ -196,6 +226,8 @@ def wait_rebooted(q, old_boot, timeout=600):
         b = boot_id()
         if b and b != old_boot:
             return login(q)
+        if s3_used() and not b and time.time() > end - timeout + 60:
+            return cold_restart(q)               # 화면에서 누른 다시 시작이 S3 탓에 멈췄다
     return False
 
 

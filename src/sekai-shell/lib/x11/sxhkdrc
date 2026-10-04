@@ -54,6 +54,18 @@ XF86MonBrightnessUp
 	sekai-ctl brightness up
 XF86MonBrightnessDown
 	sekai-ctl brightness down
+XF86PowerOff
+	sekai-ctl power button
+XF86TouchpadToggle
+	sekai-ctl touchpad toggle
+XF86KbdBrightnessUp
+	sekai-ctl kbdlight up
+XF86KbdBrightnessDown
+	sekai-ctl kbdlight down
+XF86RFKill
+	sekai-ctl airplane
+XF86Calculator
+	sekai-calc
 {XF86AudioPlay, XF86AudioPause}
 	playerctl play-pause
 XF86AudioNext

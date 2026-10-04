@@ -6,6 +6,7 @@
 #    screen_off   화면 끄기
 #    lock         화면 잠그기
 #    suspend      절전
+#    노트북이 배터리로 돌 때는 screen_off_battery · lock_battery · suspend_battery — 5초마다 보고 바뀌면 다시 띄운다
 #  그리고 언제나: 절전 직전 잠그기, loginctl lock-session 이 오면 잠그기
 #
 #  SIGHUP 을 받으면 설정을 다시 읽어 swayidle 을 새로 띄운다
@@ -21,6 +22,7 @@ import time
 
 CFG = os.path.expanduser("~/.config/sekai/settings.json")
 DEFAULTS = {"screen_off": 600, "lock": 900, "suspend": 0}
+BATTERY_DEFAULTS = {"screen_off": 300, "lock": 600, "suspend": 900}     # 윈도우 균형 전원 계획의 배터리 값
 # 잠금은 lock-now 로 — 잠금이 실패하면(설정 파일이 깨졌다거나) 검증된 swaylock 으로 넘어가고,
 #   잠금 화면이 풀리지 않은 채 죽으면 다시 띄운다. swayidle 은 명령의 종료 코드를 보지 않아,
 #   before-sleep 에서 잠금이 실패해도 그대로 절전에 들어가 잠기지 않은 채 깨어났다.
@@ -31,18 +33,47 @@ DPMS_ON = "hyprctl dispatch dpms on"
 
 child = None
 reload_wanted = False
+battery = False
 
 
-def power():
+def _read(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def on_battery():
+    """노트북 배터리가 방전 중인가 — sekaishell/power.py 와 같은 곳(시험용 가짜 배터리 포함)을 본다"""
+    base = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/nonexistent"), "sekai-test", "power_supply")
+    if not os.path.isdir(base):
+        base = "/sys/class/power_supply"
+    try:
+        names = os.listdir(base)
+    except OSError:
+        return False
+    for n in names:
+        d = os.path.join(base, n)
+        if _read(os.path.join(d, "type")) == "Mains" and _read(os.path.join(d, "online")) == "1":
+            return False
+    return any(_read(os.path.join(base, n, "type")) == "Battery"
+               and _read(os.path.join(base, n, "scope")) != "Device"
+               and _read(os.path.join(base, n, "status")) == "Discharging" for n in names)
+
+
+def power(bat=None):
     try:
         with open(CFG, encoding="utf-8") as f:
             p = json.load(f).get("power", {}) or {}
     except Exception:
         p = {}
+    bat = on_battery() if bat is None else bat
     out = {}
     for k, d in DEFAULTS.items():
+        key, d = (k + "_battery", BATTERY_DEFAULTS[k]) if bat else (k, d)
         try:
-            out[k] = max(0, int(p.get(k, d)))
+            out[k] = max(0, int(p.get(key, d)))
         except (TypeError, ValueError):
             out[k] = d
     if os.path.isdir("/run/live/medium"):
@@ -74,8 +105,9 @@ def command(p):
 
 
 def start():
-    global child
-    cmd = command(power())
+    global child, battery
+    battery = on_battery()
+    cmd = command(power(battery))
     print("[idle]", " ".join(cmd), file=sys.stderr, flush=True)
     child = subprocess.Popen(cmd)
 
@@ -180,8 +212,12 @@ def main():
     signal.signal(signal.SIGINT, on_term)
     start()
     fails = 0
+    n = 0
     while True:
         time.sleep(0.5)
+        n += 1
+        if n % 10 == 0 and on_battery() != battery:
+            reload_wanted = True                # 충전기를 꽂거나 뺐다 — 그쪽 시간으로
         if comp is None:
             comp = compositor_pid()             # 막 떴을 땐 Hyprland 의 잠금 파일이 아직 없을 수 있다
         if (comp and not alive(comp)) or (wl and not os.path.exists(wl)):

@@ -5,7 +5,7 @@
 #  layer-shell 로 화면 하단에 고정되고, Hyprland IPC 로
 #  창 목록·포커스 상태를 실시간으로 받아온다.
 # ═══════════════════════════════════════════════════════════════
-import gi, os, json, socket, subprocess, shlex, time, sys, cairo
+import gi, os, json, socket, subprocess, shlex, threading, time, sys, cairo
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk, GLib, Gio, Pango
 
@@ -2123,7 +2123,7 @@ def main():
 
     # 터치패드 세 손가락 쓸기 (WorldLink sekaigesture) — 윈도우 정밀 터치패드와 같게. 네 손가락 좌우는 합성기가 데스크톱을 넘긴다
     def on_gesture(name, arg):
-        if name != "sekaigesture":
+        if name != "sekaigesture" or not sekai_conf("input", "gesture3", True):
             return
         kind, _, rest = arg.strip().partition(",")
         direction = rest.partition(",")[2]
@@ -2163,6 +2163,12 @@ def main():
             desk_osd.show_name(text, focused_gdk_monitor(hypr), note=isinstance(text, desktops.Note))
 
     panel.updates = UpdateNotifier()
+    # 배터리 — 절약 모드 저절로 켜고 끄기, 부족 알림 (sekaishell/power.py)
+    from sekaishell.power import BatteryGuard
+    panel.battery_guard = BatteryGuard(sekai_conf)
+    # 전원 단추 · 덮개 — logind 대신 설정(전원 및 잠금)대로 (sekai-ctl power button|lid)
+    from sekaishell.power import PowerKeys
+    panel.power_keys = PowerKeys(sekai_conf)
     # 방화벽 "허용할까요?" — 앱이 밖에서 들어오는 연결을 처음 기다리면 묻는다 (sekaishell/fwprompt.py)
     if os.path.exists("/usr/libexec/sekai/sekai-firewall"):
         from sekaishell.fwprompt import FirewallPrompt
@@ -2174,6 +2180,36 @@ def main():
     a11y = A11y(hypr, osd, int(sekai_conf("panel", "height", PANEL_HEIGHT)) + 12)
     panel.event_hooks.append(a11y.on_event)
 
+    # 노트북 Fn 키 — 터치패드 켜고 끄기 · 키보드 조명 · 비행기 모드 (화면에 잠깐 알린다)
+    def touchpad_ctl(action="toggle"):
+        on = {"on": True, "off": False}.get(action, not sekai_conf("input", "tp_enabled", True))
+        from sekaishell.a11y import _store
+        threading.Thread(target=lambda: _store().set("input", "tp_enabled", on), daemon=True).start()
+        osd.show_text("input-touchpad-symbolic" if on else "touchpad-disabled-symbolic",
+                      "터치패드 켬" if on else "터치패드 끔")
+
+    def kbd_light(action="up"):
+        def work():
+            dev = ["brightnessctl", "-d", "*::kbd_backlight"]
+            info = subprocess.run(dev + ["-m", "info"], capture_output=True, text=True).stdout.strip().split(",")
+            if len(info) < 5:
+                return
+            cur, mx = int(info[2]), int(info[4])
+            new = (0 if cur else mx) if action == "toggle" else max(0, min(mx, cur + (1 if action == "up" else -1)))
+            subprocess.run(dev + ["-q", "set", str(new)])
+            GLib.idle_add(lambda: (osd.show_text("keyboard-brightness-symbolic",
+                                                 f"키보드 조명 {round(100 * new / mx) if mx else 0}%"), False)[1])
+        threading.Thread(target=work, daemon=True).start()
+
+    def airplane():
+        qs = panel.qs
+        if not qs.rf.available:
+            return
+        qs._toggle_airplane()
+        on = qs._airplane()
+        osd.show_text("airplane-mode-symbolic" if on else "network-wireless-symbolic",
+                      "비행기 모드 켬" if on else "비행기 모드 끔")
+
     panel.shell = ShellService({
         "Switch": switcher.step,
         "SwitchCommit": switcher.commit,
@@ -2181,6 +2217,10 @@ def main():
         "Brightness": osd.brightness,
         "Snap": wm.snap,
         "ShowDesktop": wm.show_desktop,
+        "Power": panel.power_keys.handle,
+        "Touchpad": touchpad_ctl,
+        "KbdLight": kbd_light,
+        "Airplane": airplane,
         "Clipboard": clip.toggle,
         "StartMenu": panel.toggle_menu,
         "NotificationCenter": panel.toggle_center,
