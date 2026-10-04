@@ -620,6 +620,7 @@ SETTINGS_ITEMS = [
     ("a11y", "고정 키", ("sticky keys", "고정키", "한 손", "shift 다섯 번")),
     ("a11y", "필터 키", ("filter keys", "반복 입력", "느린 키", "bounce keys", "slow keys")),
     ("a11y", "화상 키보드", ("on-screen keyboard", "osk", "가상 키보드", "터치 키보드", "화면 키보드")),
+    ("a11y", "내레이터", ("narrator", "화면 읽기", "스크린 리더", "screen reader", "orca", "음성", "시각 장애")),
     ("a11y", "마우스 포인터 크기·색", ("커서 색", "커서 크기", "포인터", "cursor")),
     ("recovery", "복원 지점 만들기", ("복원 지점", "restore point", "시스템 보호", "system protection")),
     ("recovery", "시스템 복원", ("시스템 복원", "system restore", "이전 상태로", "되돌리기", "rollback")),

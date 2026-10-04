@@ -2151,6 +2151,7 @@ def main():
         "Magnify": a11y.magnify,
         "ColorFilter": a11y.color_filter,
         "Osk": a11y.osk_ctl,
+        "Narrator": a11y.narrator_ctl,
     })
 
     # SIGUSR1 = 시작 메뉴 토글

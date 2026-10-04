@@ -15,6 +15,7 @@
 #    sekai-ctl magnify in|out|off            돋보기 (Win + = · Win + - · Win + Esc)
 #    sekai-ctl colorfilter                   색 필터 켜고 끄기 (Win + Ctrl + C)
 #    sekai-ctl osk [on|off]                  화상 키보드 (Win + Ctrl + O)
+#    sekai-ctl narrator [on|off]             내레이터 — Orca 화면 읽기 (Win + Ctrl + Enter)
 #
 #  셸이 떠 있지 않으면 음량·밝기·데스크톱 이동은 그래도 한다 (표시만 없다).
 # ═══════════════════════════════════════════════════════════════
@@ -52,6 +53,7 @@ case "$1" in
     magnify)       call Magnify "${2:-in}" ;;                 # 돋보기 in · out · off · toggle
     colorfilter)   call ColorFilter "${2:-toggle}" ;;         # 색 필터 켜고 끄기
     osk)           call Osk "${2:-toggle}" ;;                 # 화상 키보드 on · off · toggle
+    narrator)      call Narrator "${2:-toggle}" ;;            # 내레이터 on · off · toggle
     desktop)
         call Desktop "${2:-show}" "${3:-}" || case "$2" in
             next) hyprctl dispatch workspace e+1 ;;
@@ -61,6 +63,6 @@ case "$1" in
             new)  hyprctl dispatch workspace emptym ;;
         esac >/dev/null 2>&1 ;;
     *)
-        sed -n '3,19p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'
         exit 2 ;;
 esac

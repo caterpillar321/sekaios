@@ -107,6 +107,7 @@ DEFAULTS = {
         "bounce_ms": 500,            #   반복 입력 무시
         "slow_ms": 0,                #   누르고 있어야 입력
         "osk": False,                # 화상 키보드 (wvkbd) — 로그인할 때 띄울지
+        "narrator": False,           # 내레이터 (Orca) — 로그인할 때 켤지
     },
     "keybinds": {
         "changed": {},           # 기본 키 조합 → 새 조합 ("" = 끔), 예: {"SUPER+E": "SUPER+w"}

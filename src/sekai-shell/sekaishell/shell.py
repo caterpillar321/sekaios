@@ -29,6 +29,7 @@ XML = """
     <method name="Magnify"><arg type="s" name="action" direction="in"/></method>
     <method name="ColorFilter"><arg type="s" name="action" direction="in"/></method>
     <method name="Osk"><arg type="s" name="action" direction="in"/></method>
+    <method name="Narrator"><arg type="s" name="action" direction="in"/></method>
     <method name="Desktop">
       <arg type="s" name="action" direction="in"/>
       <arg type="s" name="arg" direction="in"/>

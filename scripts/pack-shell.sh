@@ -45,6 +45,7 @@ install -Dm644 "$SRC/lib/hw-env.sh"   "$STAGE/usr/lib/sekai/hw-env.sh"
 install -Dm755 "$SRC/lib/keep-running" "$STAGE/usr/lib/sekai/keep-running"
 install -Dm755 "$SRC/lib/autostart"    "$STAGE/usr/lib/sekai/autostart"
 install -Dm755 "$SRC/lib/automount"    "$STAGE/usr/lib/sekai/automount"
+install -Dm755 "$SRC/lib/a11yd"        "$STAGE/usr/lib/sekai/a11yd"
 install -Dm755 "$SRC/lib/polkit-agent" "$STAGE/usr/lib/sekai/polkit-agent"
 install -Dm755 "$SRC/lib/nm-agent"     "$STAGE/usr/lib/sekai/nm-agent"
 install -Dm755 "$SRC/lib/keyring-prompter" "$STAGE/usr/lib/sekai/keyring-prompter"
@@ -380,7 +381,7 @@ Maintainer: SekaiOS <sekai@localhost>
 Section: x11
 Priority: optional
 Depends: sekai-shell (= ${FULL}),
- worldlink (>= 0.50.1-sekai30), hyprbars (>= 0.50.0-sekai27), hyprexpo, xwayland,
+ worldlink (>= 0.50.1-sekai31), hyprbars (>= 0.50.0-sekai28), hyprexpo, xwayland,
  xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr,
  swaybg, swayidle, swaylock, grim, slurp, wl-clipboard, cliphist, libnotify-bin,
  brightnessctl, playerctl, wtype, pkexec,
@@ -391,7 +392,8 @@ Depends: sekai-shell (= ${FULL}),
  ibus, ibus-wayland, ibus-hangul, gir1.2-ibus-1.0, ibus-gtk3, ibus-gtk4,
  fonts-pretendard, fonts-nanum, fonts-jetbrains-mono, fonts-noto-color-emoji,
  papirus-icon-theme, adwaita-icon-theme, dmz-cursor-theme,
- gvfs, gvfs-backends, udisks2, libarchive-tools, xdg-user-dirs, wvkbd
+ gvfs, gvfs-backends, udisks2, libarchive-tools, xdg-user-dirs, wvkbd,
+ orca, speech-dispatcher-espeak-ng
 Replaces: sekai-desktop (<< ${FULL})
 Breaks: sekai-desktop (<< ${FULL})
 Description: SekaiDE - the SekaiOS desktop environment

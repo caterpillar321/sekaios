@@ -1,5 +1,5 @@
 """접근성 — 윈도우 11 의 "접근성"처럼 시각(텍스트 크기·시각 효과·포인터·돋보기·색 필터·대비 테마)과
-상호 작용(키보드: 고정 키·필터 키·화상 키보드).
+상호 작용(키보드: 고정 키·필터 키·화상 키보드), 내레이터(Orca).
 
 저장은 store 의 a11y 섹션 (투명·애니메이션·커서 크기는 appearance 와 같은 값). 합성기 쪽은 store.apply_a11y 가
 hyprctl keyword 로 바로 걸고 ~/.config/hypr/sekai.conf 에도 적어 다음 로그인에도 남는다.
@@ -20,8 +20,12 @@ STEPS = [("0.25", "25%"), ("0.5", "50%"), ("1.0", "100%"), ("2.0", "200%")]
 DELAYS = [("0", "끔"), ("300", "0.3초"), ("500", "0.5초"), ("1000", "1초"), ("2000", "2초")]
 
 
+def _ctl(what, action):
+    subprocess.Popen(["sekai-ctl", what, action], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def _osk(action):
-    subprocess.Popen(["sekai-ctl", "osk", action], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _ctl("osk", action)
 
 
 def build(store):
@@ -110,8 +114,18 @@ def build(store):
         control=switch(bool(x["osk"]), lambda v: store.set("a11y", "osk", v, apply=False)))
 
     s = p.section("내레이터")
-    row(s, "화면 읽기 (내레이터)", "준비 중입니다 — 다음 단계에서 Orca 화면 읽기와 함께 들어옵니다",
-        icon=["audio-speakers", "audio-volume-high"])
+    b = Gtk.Box(spacing=6)
+    b.pack_start(button("켜기", lambda: _ctl("narrator", "on")), False, False, 0)
+    b.pack_start(button("끄기", lambda: _ctl("narrator", "off")), False, False, 0)
+    row(s, "내레이터", "화면의 글자·단추를 소리 내어 읽습니다 (Orca) · Win + Ctrl + Enter — "
+        "Insert 키를 누른 채 다른 키로 명령합니다 (Insert + H 도움말)",
+        icon=["audio-speakers", "audio-volume-high"], control=b)
+    row(s, "로그인할 때 내레이터 켜기", None, icon=["audio-speakers", "audio-volume-high"],
+        control=switch(bool(x.get("narrator")), lambda v: store.set("a11y", "narrator", v, apply=False)))
+    row(s, "내레이터 설정", "목소리·빠르기·읽을 내용·키보드 배치(데스크톱 / 노트북)",
+        icon=["preferences-desktop-accessibility", "preferences-system"],
+        control=button("열기", lambda: subprocess.Popen(["orca", "--replace", "-s"], start_new_session=True,
+                                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)))
     return p
 
 

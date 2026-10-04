@@ -6,6 +6,7 @@
                  ibus-hangul 을 거치므로 한글 입력기가 켜져 있으면 한글로 써진다
   고정 키       걸린 수식 키를 화면 오른쪽 아래에 보인다 (IPC sekaisticky). Shift 다섯 번 → 켤지 묻기
   필터 키       오른쪽 Shift 8초 → 켤지 묻기 (IPC sekaia11y)
+  내레이터      Win + Ctrl + Enter — Orca (화면 읽기). 키는 합성기 → /usr/lib/sekai/a11yd → Orca (a11y KeyboardMonitor)
 """
 import os
 import shutil
@@ -23,6 +24,7 @@ from .popup import make_translucent
 
 E = GtkLayerShell.Edge
 OSK_BIN = "wvkbd-mobintl"
+NARRATOR_BIN = "orca"
 MAX_ZOOM = 10.0
 FILTER_NAMES = {"grayscale": "회색조", "inverted": "반전", "grayscale-inverted": "회색조 반전",
                 "deuteranopia": "적록 (녹색약)", "protanopia": "적록 (적색약)", "tritanopia": "청황 (청색약)"}
@@ -84,16 +86,92 @@ class StickyBadge(Gtk.Window):
             self.hide()
 
 
+class FocusTracker:
+    """돋보기가 켜져 있는 동안 키보드 포커스·글자 커서를 따라간다 (윈도우 돋보기의 "포커스 따라가기").
+    AT-SPI 의 포커스·커서 이벤트로 자리를 알아 합성기에 hyprctl dispatch sekaizoomfocus x y — 마우스를 움직이면
+    합성기가 다시 마우스를 따른다 (SEKAI_ZOOM_FOCUS). 웨이랜드에선 앱이 아는 좌표가 창 안 좌표뿐이라 지금 창의 자리를 더한다"""
+
+    EVENTS = ("object:state-changed:focused", "object:text-caret-moved")
+
+    def __init__(self, hypr):
+        self.hypr = hypr
+        self.listener = None
+        self._last = None
+
+    def start(self):
+        if self.listener is not None:
+            return
+        try:
+            gi.require_version("Atspi", "2.0")
+            from gi.repository import Atspi
+        except (ValueError, ImportError) as e:
+            dbg("포커스 따라가기: Atspi 없음", e)
+            return
+        self.Atspi = Atspi
+        self.listener = Atspi.EventListener.new(self._on_event)
+        for ev in self.EVENTS:
+            try:
+                self.listener.register(ev)
+            except GLib.Error as e:
+                dbg("포커스 따라가기 등록 실패", ev, e)
+
+    def stop(self):
+        if self.listener is None:
+            return
+        for ev in self.EVENTS:
+            try:
+                self.listener.deregister(ev)
+            except GLib.Error:
+                pass
+        self.listener = None
+        self._last = None
+
+    def _on_event(self, ev):
+        try:
+            Atspi = self.Atspi
+            acc = ev.source
+            if ev.type.startswith("object:state-changed:focused"):
+                if not ev.detail1:
+                    return
+                r = acc.get_component_iface().get_extents(Atspi.CoordType.WINDOW)
+                x, y = r.x + r.width / 2, r.y + r.height / 2
+                if r.width <= 0 or r.height <= 0:
+                    return
+            else:
+                t = acc.get_text_iface()
+                if t is None:
+                    return
+                r = t.get_character_extents(max(0, ev.detail1), Atspi.CoordType.WINDOW)
+                if r.width <= 0 and r.height <= 0:
+                    return
+                x, y = r.x, r.y + r.height / 2
+            win = self.hypr.query("activewindow") or {}
+            if not win or win.get("pid") != acc.get_process_id():
+                return                  # 작업 표시줄·메뉴 같은 레이어, 다른 창 — 자리를 모른다
+            ax, ay = win.get("at", [0, 0])
+            pt = (round(ax + x), round(ay + y))
+            if pt != self._last:
+                self._last = pt
+                self.hypr.dispatch(f"sekaizoomfocus {pt[0]} {pt[1]}")
+        except Exception as e:          # 앱이 사라지는 중 등 — 따라가기만 건너뛴다
+            dbg("포커스 따라가기", e)
+
+
 class A11y:
     def __init__(self, hypr, osd, bottom):
         self.hypr = hypr
         self.osd = osd
         self.osk = None
+        self.narrator = None
+        self.focus = FocusTracker(hypr)
         self.badge = StickyBadge(bottom)
         self._asking = False
         # 로그인할 때 화상 키보드 (설정 › 접근성의 "로그인할 때 화상 키보드 띄우기")
         if (config.settings("a11y") or {}).get("osk"):
             GLib.timeout_add_seconds(3, lambda: self.osk_ctl("on") and False)
+        # 로그인할 때 내레이터 (설정 › 접근성의 "로그인할 때 내레이터 켜기")
+        if (config.settings("a11y") or {}).get("narrator"):
+            GLib.timeout_add_seconds(3, lambda: self.narrator_ctl("on") and False)
 
     # ── 돋보기 ──
     def _zoom(self):
@@ -116,6 +194,9 @@ class A11y:
             z = 1.0
         subprocess.run(["hyprctl", "keyword", "cursor:zoom_factor", f"{z:.2f}"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        (self.focus.start if z > 1.0 else self.focus.stop)()
+        if z <= 1.0:
+            self.hypr.dispatch("sekaizoomfocus off")
         self.osd.show_text("zoom-in-symbolic" if z > 1.0 else "zoom-original-symbolic",
                            f"돋보기 {round(z * 100)}%" if z > 1.0 else "돋보기 끔")
 
@@ -162,6 +243,46 @@ class A11y:
             except OSError:
                 pass
             threading.Thread(target=p.wait, daemon=True).start()     # 거둬 간다 (안 하면 좀비로 남는다)
+
+    # ── 내레이터 (Orca) ──
+    def _narrator_running(self):
+        if self.narrator is not None and self.narrator.poll() is None:
+            return True
+        # 설정 앱·터미널에서 따로 띄운 Orca 도 켜진 것으로 본다
+        return subprocess.run(["pgrep", "-u", str(os.getuid()), "-x", NARRATOR_BIN],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+    def narrator_ctl(self, action="toggle"):
+        on = {"on": True, "off": False}.get(action, not self._narrator_running())
+        if on and not self._narrator_running():
+            if not shutil.which(NARRATOR_BIN):
+                self.osd.show_text("audio-speakers-symbolic", "내레이터(Orca)가 설치되지 않았습니다")
+                return
+            # 화면 읽기가 켜졌다고 알린다 — 크로미움·일렉트론 앱이 접근성 정보를 내놓는다
+            subprocess.run(["gsettings", "set", "org.gnome.desktop.a11y.applications", "screen-reader-enabled", "true"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                self.narrator = subprocess.Popen([NARRATOR_BIN, "--replace"], stdout=subprocess.DEVNULL,
+                                                 stderr=subprocess.DEVNULL, start_new_session=True)
+            except OSError as e:
+                dbg("내레이터 실행 실패", e)
+                self.narrator = None
+                return
+            self.osd.show_text("audio-speakers-symbolic", "내레이터 켬 — Win + Ctrl + Enter 로 끕니다")
+        elif not on and self._narrator_running():
+            p, self.narrator = self.narrator, None
+            if p is not None and p.poll() is None:
+                try:
+                    os.killpg(p.pid, signal.SIGTERM)
+                except OSError:
+                    pass
+                threading.Thread(target=p.wait, daemon=True).start()
+            else:
+                subprocess.run(["pkill", "-u", str(os.getuid()), "-x", NARRATOR_BIN],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["gsettings", "set", "org.gnome.desktop.a11y.applications", "screen-reader-enabled", "false"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.osd.show_text("audio-speakers-symbolic", "내레이터 끔")
 
     # ── 합성기 이벤트 ──
     def on_event(self, name, arg):

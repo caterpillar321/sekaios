@@ -1,0 +1,240 @@
+#!/usr/bin/python3
+"""SekaiOS — 화면 읽기(Orca)용 키보드 감시 (org.freedesktop.a11y.KeyboardMonitor).
+
+웨이랜드에선 앱이 전역 키를 잡을 수 없어, Orca 48 · at-spi 2.56 은 합성기에게 이 D-Bus 규약으로 키를 받는다
+(GNOME 48 의 mutter 가 처음 구현 — data/dbus-interfaces/org.freedesktop.a11y.xml). SekaiOS 에선 둘로 나눴다:
+
+  합성기(WorldLink, SEKAI_A11Y_MONITOR)  키마다 가로챌지 판정하고 이벤트를 인스턴스 폴더의 .sekaia11y.sock 으로
+  이 데몬                               D-Bus 이름 org.freedesktop.a11y.Manager, 클라이언트별 설정을 합쳐 합성기에 주고
+                                        받은 이벤트를 클라이언트마다 걸러 KeyEvent 신호로
+
+- 허용하는 클라이언트는 org.gnome.Orca.KeyboardMonitor 이름을 가진 쪽뿐 (mutter 와 같다 — at-spi 가 Orca 대신 요청하는 이름)
+- 클라이언트가 없으면 합성기 소켓을 닫는다 (키를 흘리지 않게, 가로채기도 풀린다)
+- 세션에 하나만: 이름을 이미 누가 가졌으면 조용히 끝난다. hyprland.conf 의 exec-once 가 keep-running 으로 띄운다
+"""
+import os
+import socket
+import sys
+
+import gi
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib  # noqa: E402
+
+NAME = "org.freedesktop.a11y.Manager"
+PATH = "/org/freedesktop/a11y/Manager"
+IFACE = "org.freedesktop.a11y.KeyboardMonitor"
+ALLOWED = ("org.gnome.Orca.KeyboardMonitor",)
+
+XML = """<node><interface name="org.freedesktop.a11y.KeyboardMonitor">
+  <method name="GrabKeyboard"/><method name="UngrabKeyboard"/>
+  <method name="WatchKeyboard"/><method name="UnwatchKeyboard"/>
+  <method name="SetKeyGrabs"><arg type="au" name="modifiers" direction="in"/>
+    <arg type="a(uu)" name="keystrokes" direction="in"/></method>
+  <signal name="KeyEvent"><arg type="b" name="released"/><arg type="u" name="state"/><arg type="u" name="keysym"/>
+    <arg type="u" name="unichar"/><arg type="q" name="keycode"/></signal>
+</interface></node>"""
+
+DEBUG = bool(os.environ.get("SEKAI_A11YD_DEBUG"))
+
+
+def log(*a):
+    if DEBUG:
+        print("a11yd:", *a, file=sys.stderr, flush=True)
+
+
+class Client:
+    def __init__(self, name):
+        self.name = name
+        self.grab_all = False
+        self.watch_all = False
+        self.mods = set()
+        self.strokes = set()
+        self.watch_id = 0
+
+
+class Monitor:
+    def __init__(self, conn):
+        self.conn = conn
+        self.clients = {}
+        self.sock = None
+        self.sock_src = 0
+        self.buf = b""
+        self.mods_down = set()          # 가로챈 채 눌려 있는 Orca 수식 키 (keysym)
+        self.retry_src = 0
+        self.last_cfg = None
+        info = Gio.DBusNodeInfo.new_for_xml(XML).interfaces[0]
+        conn.register_object(PATH, info, self.on_call, None, None)
+
+    # ── D-Bus ──
+    def allowed(self, sender):
+        for n in ALLOWED:
+            try:
+                owner = self.conn.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+                                            "GetNameOwner", GLib.Variant("(s)", (n,)), GLib.VariantType("(s)"),
+                                            Gio.DBusCallFlags.NONE, 1000, None).unpack()[0]
+            except GLib.Error:
+                continue
+            if owner == sender:
+                return True
+        return False
+
+    def client(self, sender):
+        c = self.clients.get(sender)
+        if c is None:
+            c = Client(sender)
+            c.watch_id = Gio.bus_watch_name_on_connection(self.conn, sender, Gio.BusNameWatcherFlags.NONE,
+                                                          None, self.on_vanished)
+            self.clients[sender] = c
+            log("클라이언트", sender)
+        return c
+
+    def on_vanished(self, _conn, name):
+        c = self.clients.pop(name, None)
+        if c:
+            Gio.bus_unwatch_name(c.watch_id)
+            log("떠남", name)
+            self.push()
+
+    def on_call(self, conn, sender, path, iface, method, params, inv):
+        if not self.allowed(sender):
+            inv.return_dbus_error("org.freedesktop.DBus.Error.AccessDenied", "Access denied")
+            return
+        c = self.client(sender)
+        if method == "GrabKeyboard":
+            c.grab_all = True
+        elif method == "UngrabKeyboard":
+            c.grab_all = False
+        elif method == "WatchKeyboard":
+            c.watch_all = True
+        elif method == "UnwatchKeyboard":
+            c.watch_all = False
+        elif method == "SetKeyGrabs":
+            mods, strokes = params.unpack()
+            c.mods = set(mods)
+            c.strokes = {(int(s), int(m)) for s, m in strokes}
+        else:
+            inv.return_dbus_error("org.freedesktop.DBus.Error.UnknownMethod", method)
+            return
+        log(method, sender, "grab", c.grab_all, "watch", c.watch_all, "mods", sorted(c.mods), "strokes", len(c.strokes))
+        inv.return_value(None)
+        self.push()
+
+    # ── 합성기 ──
+    def sock_path(self):
+        sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
+        rt = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+        return os.path.join(rt, "hypr", sig, ".sekaia11y.sock") if sig else None
+
+    def connect(self):
+        if self.sock:
+            return True
+        p = self.sock_path()
+        if not p:
+            return False
+        try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM | socket.SOCK_CLOEXEC)
+            s.connect(p)
+            s.setblocking(False)
+        except OSError as e:
+            log("합성기 연결 실패", e)
+            return False
+        self.sock, self.buf, self.last_cfg = s, b"", None
+        self.sock_src = GLib.io_add_watch(s.fileno(), GLib.PRIORITY_HIGH, GLib.IO_IN | GLib.IO_HUP | GLib.IO_ERR,
+                                          self.on_sock)
+        log("합성기에 붙음")
+        return True
+
+    def disconnect(self):
+        if self.sock_src:
+            GLib.source_remove(self.sock_src)
+            self.sock_src = 0
+        if self.sock:
+            self.sock.close()
+            self.sock = None
+        self.mods_down.clear()
+
+    def push(self):
+        """클라이언트 설정을 합쳐 합성기에 — 없으면 연결을 끊는다 (가로채기가 풀린다)"""
+        if not self.clients:
+            self.disconnect()
+            return
+        if not self.connect():
+            if not self.retry_src:
+                self.retry_src = GLib.timeout_add_seconds(2, self.retry)
+            return
+        cl = self.clients.values()
+        mods = sorted(set().union(*(c.mods for c in cl)))
+        strokes = sorted(set().union(*(c.strokes for c in cl)))
+        cfg = (f"grab {int(any(c.grab_all for c in cl))}\nwatch {int(any(c.watch_all for c in cl))}\n"
+               f"mods {' '.join(map(str, mods))}\nstrokes {' '.join(f'{s}:{m}' for s, m in strokes)}\n")
+        if cfg == self.last_cfg:
+            return
+        try:
+            self.sock.sendall(cfg.encode())
+            self.last_cfg = cfg
+        except OSError:
+            self.disconnect()
+
+    def retry(self):
+        self.retry_src = 0
+        self.push()
+        return False
+
+    def on_sock(self, fd, cond):
+        if cond & (GLib.IO_HUP | GLib.IO_ERR):
+            self.disconnect()
+            self.retry()                         # 합성기가 다시 떴을 수도
+            return False
+        try:
+            data = self.sock.recv(65536)
+        except BlockingIOError:
+            return True
+        except OSError:
+            data = b""
+        if not data:
+            self.disconnect()
+            return False
+        self.buf += data
+        while b"\n" in self.buf:
+            line, self.buf = self.buf.split(b"\n", 1)
+            p = line.split()
+            if len(p) == 7 and p[0] == b"k":
+                self.on_key(*(int(x) for x in p[1:]))
+        return True
+
+    def on_key(self, released, state, sym, uni, keycode, consumed):
+        log("키", "뗌" if released else "누름", f"state={state} sym={sym:#x} kc={keycode} 가로챔={consumed}")
+        allmods = set().union(*(c.mods for c in self.clients.values())) if self.clients else set()
+        if consumed and sym in allmods:
+            (self.mods_down.discard if released else self.mods_down.add)(sym)
+        v = GLib.Variant("(buuuq)", (bool(released), state, sym, uni, keycode & 0xffff))
+        for c in list(self.clients.values()):
+            # mutter 의 should_watch_keypress 와 같다: 다 보기 · 다 잡기 · 내 수식 키 · 내 수식 키를 누른 채 · 내 조합
+            if (c.watch_all or c.grab_all or sym in c.mods or (c.mods & self.mods_down)
+                    or (sym, state) in c.strokes):
+                try:
+                    self.conn.emit_signal(c.name, PATH, IFACE, "KeyEvent", v)
+                except GLib.Error as e:
+                    log("신호 실패", e)
+
+
+def main():
+    loop = GLib.MainLoop()
+    state = {}
+
+    def acquired(conn, name):
+        log("이름 얻음", name)
+
+    def bus(conn, name):
+        state["m"] = Monitor(conn)
+
+    def lost(conn, name):
+        log("이름을 얻지 못함 — 이미 도는 것이 있다")
+        loop.quit()
+
+    Gio.bus_own_name(Gio.BusType.SESSION, NAME, Gio.BusNameOwnerFlags.NONE, bus, acquired, lost)
+    loop.run()
+
+
+if __name__ == "__main__":
+    main()
