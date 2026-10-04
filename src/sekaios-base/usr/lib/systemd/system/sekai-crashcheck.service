@@ -1,0 +1,12 @@
+[Unit]
+Description=SekaiOS — 지난번 커널 오류(패닉) 기록 확인
+# systemd-pstore 가 UEFI 변수의 기록을 /var/lib/systemd/pstore 로 옮긴 뒤
+After=systemd-pstore.service local-fs.target
+ConditionDirectoryNotEmpty=/var/lib/systemd/pstore
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/sekai/sekai-rescue crashcheck
+
+[Install]
+WantedBy=multi-user.target

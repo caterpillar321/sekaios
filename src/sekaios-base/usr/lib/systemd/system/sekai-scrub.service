@@ -1,0 +1,9 @@
+[Unit]
+Description=SekaiOS 드라이브 최적화 — btrfs 데이터 검사 (오류가 있으면 이벤트 뷰어에 남긴다)
+ConditionPathIsMountPoint=/.snapshots
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/sekai/sekai-optimize scrub-all
+Nice=19
+IOSchedulingClass=idle

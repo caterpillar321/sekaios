@@ -1,0 +1,6 @@
+[Unit]
+Description=SekaiOS 자동 복구 — 이번 부팅은 정상 (로그인 화면이 떠 있다)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/sekai/sekai-rescue bootok

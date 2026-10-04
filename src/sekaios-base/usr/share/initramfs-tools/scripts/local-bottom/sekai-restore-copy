@@ -1,0 +1,66 @@
+#!/bin/sh
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 시스템 복원 (파일 복사 방식 — ext4 등) — 루트를 연결한 뒤, 시스템이 돌기 전에 지점으로 되돌린다
+#
+#  요청: ${rootmnt}/.sekai-restore/request ("restore|undo <번호>") 또는 커널 옵션 sekai.restore=<번호>
+#  지점 /.sekai-restore/points/<번호>/root → / 로 rsync --delete. excludes 에 있는 곳(/home·기록·캐시 등)은
+#    건드리지 않는다 (--delete-excluded 를 쓰지 않는다 — 쓰면 개인 파일이 지워진다).
+#  끊기면(강제 종료) 요청이 남아 다음 시작에 다시 한다 — rsync 는 몇 번 돌아도 같은 결과.
+#  btrfs 설치본은 local-premount/sekai-restore 가 한다 (여기선 .sekai-restore 가 없어 지나간다)
+# ═══════════════════════════════════════════════════════════════
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in prereqs) prereqs; exit 0 ;; esac
+
+. /scripts/functions
+
+S="${rootmnt}/.sekai-restore"
+[ -d "$S/points" ] || exit 0
+command -v rsync >/dev/null 2>&1 || exit 0
+
+want=""
+for x in $(cat /proc/cmdline); do
+    case "$x" in sekai.restore=*) want="${x#sekai.restore=}" ;; esac
+done
+action=""; arg=""
+[ -f "$S/request" ] && read -r action arg < "$S/request"
+[ -n "$want" ] && { action=restore; arg="$want"; }
+[ -n "$action" ] || exit 0
+
+epoch=$(date +%s 2>/dev/null || echo 0)
+msg() {
+    log_warning_msg "$1"
+    if [ -x /bin/plymouth ] && plymouth --ping 2>/dev/null; then plymouth display-message --text="$1" || true; fi
+}
+mount -o remount,rw "${rootmnt}" || exit 0
+logline() { echo "$epoch $*" >> "$S/log"; sync; }
+case "$arg" in ''|*[!0-9]*) logline "fail 잘못된-요청 $arg"; rm -f "$S/request"; mount -o remount,ro "${rootmnt}"; exit 0 ;; esac
+src="$S/points/$arg/root"
+if [ ! -d "$src" ] || [ ! -f "$S/points/$arg/info.json" ]; then
+    msg "복원 지점 ${arg}번을 찾지 못해 되돌리지 않습니다"
+    logline "fail 지점-없음 $arg"; rm -f "$S/request"; mount -o remount,ro "${rootmnt}"; exit 0
+fi
+# 부팅 메뉴에서 고른 것이면 요청 파일로 남긴다 (끊겨도 다음에 이어서)
+[ -n "$want" ] && { echo "restore $arg" > "$S/request"; sync; }
+if [ "$action" = undo ]; then msg "시스템 복원을 취소하는 중... 끄지 마세요"; else msg "시스템을 복원 지점 ${arg}번으로 되돌리는 중... 끄지 마세요"; fi
+rsync -aHAX --numeric-ids -x --delete --exclude-from="$S/excludes" "$src/" "${rootmnt}/" >/dev/null 2>"$S/last-error"
+rc=$?
+if [ $rc -eq 0 ] || [ $rc -eq 24 ]; then
+    logline "$action $arg"
+    rm -f "$S/request" "$S/last-error"
+else
+    # 실패는 기록만 하고 요청을 지운다 (계속 같은 실패로 부팅이 막히지 않게) — 복구 화면에서 다시 고를 수 있다
+    logline "fail rsync-$rc $arg"
+    rm -f "$S/request"
+fi
+sync
+k=$(uname -r)
+reboot_needed=0
+[ -d "${rootmnt}/lib/modules/$k" ] || [ -d "${rootmnt}/usr/lib/modules/$k" ] || reboot_needed=1
+mount -o remount,ro "${rootmnt}"
+if [ "$reboot_needed" = 1 ]; then
+    msg "커널이 달라 한 번 더 다시 시작합니다..."
+    sleep 2
+    reboot -f
+fi
+exit 0

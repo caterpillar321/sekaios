@@ -1,0 +1,10 @@
+[Unit]
+Description=SekaiOS 드라이브 최적화 — 한 달에 한 번 데이터 검사
+
+[Timer]
+OnCalendar=monthly
+RandomizedDelaySec=6h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

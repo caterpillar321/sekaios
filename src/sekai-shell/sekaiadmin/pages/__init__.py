@@ -12,9 +12,9 @@ GROUPS = [("system", "시스템 도구"), ("storage", "저장소"), ("services",
 
 # 모듈 이름과 자리 (order 는 각 모듈의 PAGE 가 정한다 — 아래는 약속한 값)
 #   system:   events 10 · scheduler 20 · users 30 · devices 40
-#   storage:  disks 10
+#   storage:  disks 10 · optimize 20
 #   services: services 10
-MODULES = ["events", "scheduler", "users", "devices", "disks", "services"]
+MODULES = ["events", "scheduler", "users", "devices", "disks", "optimize", "services"]
 
 _REQUIRED = ("id", "title", "group", "build")
 

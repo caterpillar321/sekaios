@@ -1,0 +1,8 @@
+[Unit]
+Description=SekaiOS 자동 복구 — 켜고 1분 뒤 정상 확인
+
+[Timer]
+OnBootSec=60s
+
+[Install]
+WantedBy=timers.target

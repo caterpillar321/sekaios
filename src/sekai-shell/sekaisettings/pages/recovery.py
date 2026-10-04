@@ -61,6 +61,8 @@ def _size(n):
 
 
 LIMITS = [("0.05", "디스크의 5%"), ("0.1", "디스크의 10% (권장)"), ("0.15", "디스크의 15%"), ("0.2", "디스크의 20%")]
+# 파일 복사 방식은 첫 지점이 시스템 크기만큼이라 더 넉넉하게
+LIMITS_COPY = [("0.1", "디스크의 10%"), ("0.2", "디스크의 20% (권장)"), ("0.3", "디스크의 30%")]
 
 
 def _log_when(s):
@@ -133,7 +135,7 @@ class RecoveryPage:
             row(s, t, sub, icon=ICON, control=box)
 
         last = st.get("last")
-        if last and last.get("action") in ("restore", "undo", "fail"):
+        if last and last.get("action") in ("restore", "undo", "fail", "recover"):
             s = self._sect("마지막 복원")
             when = _log_when(last.get("time", ""))
             if last["action"] == "restore":
@@ -147,6 +149,9 @@ class RecoveryPage:
                     icon=ICON, control=ctl)
             elif last["action"] == "undo":
                 row(s, f"{when}에 복원을 취소했습니다", None, icon=ICON)
+            elif last["action"] == "recover":
+                row(s, f"{when}에 중간에 끊긴 복원을 마무리했습니다", "되돌리는 도중 전원이 꺼졌던 것을 이어서 끝냈습니다",
+                    icon=ICON)
             else:
                 row(s, f"{when}에 되돌리지 못했습니다", f"이유: {last.get('arg', '')} {last.get('detail', '')}".strip(),
                     icon=["dialog-warning", "dialog-warning-symbolic"])
@@ -168,15 +173,21 @@ class RecoveryPage:
 
         s = self._sect("설정")
         row(s, "업데이트·설치 전에 자동으로 복원 지점 만들기",
-            "업데이트·앱 설치·드라이버 설치 전, 그리고 1주일에 한 번", icon=ICON,
+            ("업데이트·드라이버 설치 전, 그리고 1주일에 한 번" if st.get("backend") == "copy"
+             else "업데이트·앱 설치·드라이버 설치 전, 그리고 1주일에 한 번"), icon=ICON,
             control=switch(bool(st.get("auto", True)), self._set_auto))
         # 윈도우 "시스템 보호"의 최대 사용량 — 넘으면 오래된 지점부터 지운다
         used, limit, ratio = st.get("used"), st.get("limit"), st.get("limit_ratio")
         sub = (f"지금 {_size(used)} 사용 · 최대 {_size(limit)} — 넘으면 오래된 지점부터 지웁니다"
                if used is not None else "넘으면 오래된 지점부터 지웁니다")
-        cur = next((k for k, _ in LIMITS if ratio is not None and abs(float(k) - ratio) < 1e-6), None)
+        limits = LIMITS_COPY if st.get("backend") == "copy" else LIMITS
+        cur = next((k for k, _ in limits if ratio is not None and abs(float(k) - ratio) < 1e-6), None)
         row(s, "복원 지점이 쓸 수 있는 공간", sub, icon=["drive-harddisk", "drive-harddisk-symbolic"],
-            control=combo(LIMITS, cur or (f"{ratio:g}" if ratio else "0.1"), self._set_limit))
+            control=combo(limits, cur or (f"{ratio:g}" if ratio else limits[1][0]), self._set_limit))
+        if st.get("backend") == "copy":
+            self._notice("이 PC 는 ext4 로 설치되어 복원 지점을 파일 복사로 만듭니다. 첫 지점은 시스템 전체를 복사해 "
+                         "몇 분 걸리고 디스크를 시스템 크기만큼 씁니다 (그다음부터는 바뀐 파일만). 그래서 자동 지점은 "
+                         "업데이트·드라이버 설치 전과 1주일에 한 번만 만듭니다.")
         self._notice("복원 지점은 시스템 파일과 설치된 앱만 담습니다. 디스크 여유 공간이 모자라면 오래된 것부터 "
                      "자동으로 지웁니다. 컴퓨터가 켜지지 않으면 부팅 메뉴의 ‘시스템 복원’에서 되돌릴 수 있습니다.")
 
@@ -262,7 +273,8 @@ class RecoveryPage:
 
         def work():
             try:
-                r = subprocess.run(["pkexec", HELPER] + args, capture_output=True, text=True, timeout=600)
+                # 파일 복사 방식(ext4)의 첫 지점은 시스템 전체를 복사해 몇 분 걸린다
+                r = subprocess.run(["pkexec", HELPER] + args, capture_output=True, text=True, timeout=3600)
                 rc, err = r.returncode, (r.stderr or "").strip()
             except Exception as ex:
                 rc, err = 1, str(ex)

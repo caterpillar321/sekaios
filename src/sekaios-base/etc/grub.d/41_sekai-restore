@@ -2,7 +2,8 @@
 # SekaiOS 부팅 메뉴의 "시스템 복원" — 복원 지점 목록은 sekai-restore 가 /boot/grub/sekai-restore.cfg 에 따로 쓴다
 #   (지점이 생길 때마다 grub.cfg 전체를 다시 만들지 않게). btrfs 설치본에서만
 set -e
-[ "$(findmnt -no FSTYPE,FSROOT / 2>/dev/null)" = "btrfs /@" ] || exit 0
+# btrfs(@) 설치본 또는 파일 복사 방식(ext4 등 — /.sekai-restore)
+[ "$(findmnt -no FSTYPE,FSROOT / 2>/dev/null)" = "btrfs /@" ] || [ -d /.sekai-restore/points ] || exit 0
 cat <<'MENU'
 if [ -f "$prefix/sekai-restore.cfg" ]; then
 	submenu '시스템 복원 (이전 상태로 되돌리기)' --class recovery $menuentry_id_option 'sekaios-restore' {

@@ -426,11 +426,30 @@ if [ "$1" = "configure" ]; then
     #   없어 켤 때마다 오류를 남기고, btrfs 에선 공간만 붙잡는다 (지점은 sekai-restore 가 만든다)
     systemctl disable --now snapper-boot.timer snapper-timeline.timer >/dev/null 2>&1 || true
     systemctl enable sekai-restore-grub.path sekai-restore-grub.service >/dev/null 2>&1 || true
+    # 자동 복구 — 연달아 끝까지 못 켜면 복구 화면 (sekai-rescue). 비상·복구 모드도 그 화면 (service.d 조각)
+    systemctl enable sekai-bootcheck.service sekai-bootok.timer >/dev/null 2>&1 || true
+    # 드라이브 최적화 — btrfs 면 한 달에 한 번 데이터 검사 (ext4 면 조건이 맞지 않아 지나간다)
+    systemctl enable sekai-scrub.timer >/dev/null 2>&1 || true
+    # 지난번 커널 패닉 기록 확인 (pstore) — 로그인하면 패널이 알린다. 패닉 뒤 자동 재시작은 sysctl.d/60-sekai-panic.conf
+    systemctl enable sekai-crashcheck.service >/dev/null 2>&1 || true
+    [ -d /run/systemd/system ] && sysctl -q -p /etc/sysctl.d/60-sekai-panic.conf >/dev/null 2>&1 || true
     if [ ! -d /run/live/medium ] && [ ! -f /etc/snapper/configs/root ] \
        && [ "$(findmnt -no FSTYPE,FSROOT / 2>/dev/null)" = "btrfs /@" ] && mountpoint -q /.snapshots; then
         /usr/libexec/sekai/sekai-restore setup >/dev/null 2>&1 || true
     fi
+    # ext4 등 — 파일 복사 방식의 저장소만 만든다 (첫 지점은 주간 타이머가 한가할 때 만든다 — 여기서 복사하면
+    #   업데이트가 몇 분 멈춘다). 설치 이미지를 만드는 chroot 에선 하지 않는다
+    if [ ! -d /run/live/medium ] && [ ! -d /.sekai-restore ] && [ -d /run/systemd/system ] \
+       && [ "$(findmnt -no FSTYPE / 2>/dev/null)" = ext4 ]; then
+        /usr/libexec/sekai/sekai-restore setup >/dev/null 2>&1 || true
+    fi
     [ -d /run/systemd/system ] && systemctl start sekai-restore-grub.path >/dev/null 2>&1 || true
+    # 업데이트로 받은 설치본은 부팅 메뉴(grub.cfg)에 "시스템 복원" 항목이 아직 없다 — 한 번 다시 만든다
+    if [ ! -d /run/live/medium ] && [ -s /boot/grub/grub.cfg ] && ! grep -q "41_sekai-restore" /boot/grub/grub.cfg \
+       && { [ -d /.sekai-restore/points ] || [ "$(findmnt -no FSTYPE,FSROOT / 2>/dev/null)" = "btrfs /@" ]; }; then
+        /usr/libexec/sekai/update-grub-locked >/dev/null 2>&1 || true
+        /usr/libexec/sekai/sekai-restore grub >/dev/null 2>&1 || true
+    fi
     [ -d /run/systemd/system ] && systemctl start sekai-bootmode.path >/dev/null 2>&1 || true
     # cups-browsed 는 cups 의 권장 패키지라 업데이트 때 같이 깔린다 — 실행 조건 조각(etc/systemd/system/
     #   cups-browsed.service.d)으로 막아 두고, 이미 떠 있으면 멈춘다. (Conflicts 로 막았더니 apt 가

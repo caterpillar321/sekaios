@@ -3,9 +3,17 @@
 #  SekaiOS 시스템 복원 — 루트를 연결하기 전에 btrfs 하위 볼륨 @ 를 복원 지점으로 바꿔치기한다
 #
 #  요청: 커널 옵션 sekai.restore=<번호>  (부팅 메뉴의 "복원" 항목 — 그 지점의 커널로 켜진다)
-#        또는 맨 위의 .sekai-restore-request  ("restore <번호>" · "undo <이름>" — 설정 앱이 sekai-restore 로 쓴다)
-#  결과: 맨 위의 .sekai-restore-log 에 한 줄 (설정 앱이 보여 준다)
-#  지금 @ 는 @before-restore-<시각> 으로 남는다 → "복원 취소"
+#        또는 맨 위의 .sekai-restore-request  ("restore <번호>" · "undo <이름>" — sekai-restore 가 쓴다)
+#  결과: 맨 위의 .sekai-restore-log 에 한 줄 "<epoch> restore|undo|recover|fail …" (설정 앱이 보여 준다)
+#  지금 @ 는 @before-restore-<UTC 시각> 으로 남는다 → "복원 취소"
+#
+#  전원이 나가도(강제 종료) 다음 부팅에서 이어서 마무리한다: 요청 파일은 끝날 때까지 지우지 않고,
+#    단계마다 이미 됐는지 보고 건너뛴다 — ① 지점에서 @restore-new 를 만들고 그 UUID 를 요청에 적는다
+#    ② @ 와 @restore-new 를 한 번에 맞바꾼다 (renameat2 EXCHANGE — coreutils mv -T --exchange)
+#    ③ 옛 루트가 된 @restore-new → @before-restore-<시각>.
+#    @ 가 없는 순간이 없어야 한다 — GRUB 은 initramfs 보다 먼저 /@/boot/grub 을 읽어서, @ 가 없으면 grub> 에서
+#    멈춘다 (VM 에서 이름 바꾸기 사이에 끊긴 상태로 재현). 맞바꿨는지는 @ 의 UUID 가 적어 둔 것과 같은지로 안다.
+#  요청이 없는데 @ 가 없으면(모르는 이유로 중간에 끊겼다) @restore-new → 가장 새 @before-restore-* 순으로 되살린다.
 #  켜진 커널의 모듈이 되돌린 시스템에 없으면(커널 업데이트 전으로 되돌림) 한 번 더 다시 시작한다 —
 #    그러면 부팅 메뉴가 되돌린 시스템의 것이라 맞는 커널로 켜진다
 # ═══════════════════════════════════════════════════════════════
@@ -30,66 +38,123 @@ done
 T=/sekai-top
 mkdir -p "$T"
 mount -t btrfs -o subvolid=5 "$ROOT" "$T" 2>/dev/null || exit 0
-[ -d "$T/@" ] && [ -d "$T/@snapshots" ] || { umount "$T"; exit 0; }
+[ -d "$T/@snapshots" ] || { umount "$T"; exit 0; }
 
-action=""; arg=""
-if [ -n "$want" ]; then
-    action=restore; arg="$want"
-elif [ -f "$T/.sekai-restore-request" ]; then
-    read -r action arg < "$T/.sekai-restore-request" || true
-fi
-rm -f "$T/.sekai-restore-request"
-if [ -z "$action" ]; then
-    umount "$T"; exit 0
-fi
-
-# initramfs 에는 시간대가 없다 — 이름엔 UTC 시각, 기록엔 epoch 초 (설정 앱이 그 PC 의 시간대로 보인다)
-ts=$(date -u +%Y%m%d-%H%M%S 2>/dev/null || echo now)
+REQ="$T/.sekai-restore-request"
 epoch=$(date +%s 2>/dev/null || echo 0)
+uuid_of() { btrfs subvolume show "$1" 2>/dev/null | sed -n 's/^[[:space:]]*UUID:[[:space:]]*//p' | head -1; }
+# 맞바꾸기 — 한 번에 (없으면 예전처럼 두 번 이름 바꾸기 — 사이에 @ 가 없는 틈이 있다)
+swap() {
+    if [ -x /bin/mv-exchange ]; then
+        /bin/mv-exchange -T --exchange "$1" "$2"
+    else
+        mv "$1" "$1.sekai-swap" && mv "$2" "$1" && mv "$1.sekai-swap" "$2"
+    fi
+}
 msg() {
     log_warning_msg "$1"
     if [ -x /bin/plymouth ] && plymouth --ping 2>/dev/null; then plymouth display-message --text="$1" || true; fi
 }
-logline() { echo "$epoch $*" >> "$T/.sekai-restore-log"; }
+logline() { echo "$epoch $*" >> "$T/.sekai-restore-log"; sync; }
+finish() { rm -f "$REQ"; sync; }
+setreq() { echo "$*" > "$REQ.tmp" && sync && mv "$REQ.tmp" "$REQ" && sync; }
+
+action=""; arg=""; ts=""; u=""
+if [ -f "$REQ" ]; then
+    read -r action arg ts u < "$REQ" || true
+fi
+# 부팅 메뉴에서 고른 복원 — 요청 파일로 바꿔 둔다 (중간에 끊겨도 다음 부팅이 이어서 하게)
+if [ -n "$want" ] && ! { [ "$action" = restore ] && [ "$arg" = "$want" ]; }; then
+    # 끝나지 않은 다른 요청의 새 루트가 남아 있으면 버린다 (다른 지점에서 만든 것이다)
+    [ -d "$T/@" ] && [ -d "$T/@restore-new" ] && btrfs subvolume delete "$T/@restore-new" >/dev/null 2>&1
+    action=restore; arg="$want"; ts=""; u=""
+fi
+if [ -n "$action" ] && [ -z "$ts" ]; then
+    ts=$(date -u +%Y%m%d-%H%M%S 2>/dev/null || echo now)
+    setreq "$action $arg $ts"
+fi
+
+if [ -z "$action" ]; then
+    # 요청이 없는데 @ 가 없다 — 바꿔치기가 기록 없이 끊겼다. 남은 것으로 되살린다
+    if [ ! -d "$T/@" ]; then
+        if [ -d "$T/@restore-new" ]; then
+            mv "$T/@restore-new" "$T/@" && logline "recover @restore-new"
+        else
+            last=$(ls -d "$T"/@before-restore-* 2>/dev/null | sort | tail -1)
+            [ -n "$last" ] && mv "$last" "$T/@" && logline "recover ${last##*/}"
+        fi
+    fi
+    umount "$T"; exit 0
+fi
 
 case "$action" in
     restore)
-        case "$arg" in ''|*[!0-9]*) logline "fail 잘못된-요청 $arg"; umount "$T"; exit 0 ;; esac
+        case "$arg" in ''|*[!0-9]*) logline "fail 잘못된-요청 $arg"; finish; umount "$T"; exit 0 ;; esac
         src="$T/@snapshots/$arg/snapshot"
-        if [ ! -d "$src" ]; then
-            msg "복원 지점 ${arg}번을 찾지 못해 되돌리지 않습니다"
-            logline "fail 지점-없음 $arg"; umount "$T"; exit 0
-        fi
-        msg "시스템을 복원 지점 ${arg}번으로 되돌리는 중..."
         old="@before-restore-$ts"
-        if ! mv "$T/@" "$T/$old"; then
-            logline "fail 이름-바꾸기 $arg"; umount "$T"; exit 0
+        msg "시스템을 복원 지점 ${arg}번으로 되돌리는 중..."
+        # ① 새 루트를 옆에 만들고 UUID 를 적는다 (적기 전에 끊겼으면 다시 만든다)
+        if [ -z "$u" ]; then
+            if [ ! -d "$src" ]; then
+                msg "복원 지점 ${arg}번을 찾지 못해 되돌리지 않습니다"
+                logline "fail 지점-없음 $arg"; finish; umount "$T"; exit 0
+            fi
+            [ -d "$T/@restore-new" ] && btrfs subvolume delete "$T/@restore-new" >/dev/null 2>&1
+            if ! btrfs subvolume snapshot "$src" "$T/@restore-new" >/dev/null 2>&1; then
+                msg "되돌리지 못했습니다 — 원래 상태로 켭니다"
+                logline "fail 스냅숏 $arg"; finish; umount "$T"; exit 0
+            fi
+            sync
+            u=$(uuid_of "$T/@restore-new")
+            setreq "restore $arg $ts $u"
         fi
-        if ! btrfs subvolume snapshot "$src" "$T/@" >/dev/null 2>&1; then
-            mv "$T/$old" "$T/@"
-            msg "되돌리지 못했습니다 — 원래 상태로 켭니다"
-            logline "fail 스냅숏 $arg"; umount "$T"; exit 0
+        # ② 한 번에 맞바꾼다 — 이미 맞바꿨으면(@ 가 새 루트) 건너뛴다
+        if [ "$(uuid_of "$T/@")" != "$u" ] && [ "$(uuid_of "$T/@restore-new")" = "$u" ]; then
+            swap "$T/@" "$T/@restore-new" || { logline "fail 맞바꾸기 $arg"; finish; umount "$T"; exit 0; }
+            sync
         fi
-        logline "restore $arg $old"
+        # ③ 옛 루트(지금 @restore-new)에 이름을 붙여 둔다 — 복원 취소용
+        if [ "$(uuid_of "$T/@")" = "$u" ] && [ -d "$T/@restore-new" ] && [ ! -d "$T/$old" ]; then
+            mv "$T/@restore-new" "$T/$old"
+            sync
+        fi
+        if [ "$(uuid_of "$T/@")" = "$u" ]; then
+            logline "restore $arg $old"
+        else
+            logline "fail 마무리 $arg"
+        fi
+        finish
         ;;
     undo)
-        case "$arg" in @before-restore-*) ;; *) logline "fail 잘못된-요청 $arg"; umount "$T"; exit 0 ;; esac
-        if [ ! -d "$T/$arg" ]; then
-            logline "fail 취소할-상태-없음 $arg"; umount "$T"; exit 0
-        fi
-        msg "시스템 복원을 취소하는 중..."
+        case "$arg" in @before-restore-*) ;; *) logline "fail 잘못된-요청 $arg"; finish; umount "$T"; exit 0 ;; esac
         gone="@undone-restore-$ts"
-        mv "$T/@" "$T/$gone" || { logline "fail 이름-바꾸기 $arg"; umount "$T"; exit 0; }
-        if ! mv "$T/$arg" "$T/@"; then
-            mv "$T/$gone" "$T/@"
-            logline "fail 되돌리기 $arg"; umount "$T"; exit 0
+        msg "시스템 복원을 취소하는 중..."
+        # ① 되살릴 옛 루트의 UUID 를 적는다
+        if [ -z "$u" ]; then
+            [ -d "$T/$arg" ] || { logline "fail 취소할-상태-없음 $arg"; finish; umount "$T"; exit 0; }
+            u=$(uuid_of "$T/$arg")
+            setreq "undo $arg $ts $u"
         fi
-        # 취소한 쪽(복원했던 상태)은 지운다 — 다시 원하면 같은 지점으로 또 복원하면 된다
-        btrfs subvolume delete "$T/$gone" >/dev/null 2>&1 || true
-        logline "undo $arg $gone"
+        # ② 한 번에 맞바꾼다 (@ ↔ 옛 루트)
+        if [ "$(uuid_of "$T/@")" != "$u" ] && [ "$(uuid_of "$T/$arg")" = "$u" ]; then
+            swap "$T/@" "$T/$arg" || { logline "fail 맞바꾸기 $arg"; finish; umount "$T"; exit 0; }
+            sync
+        fi
+        # ③ 취소한 쪽(지금 그 이름에 있는 복원했던 상태)은 이름을 바꿔 지운다 — 다시 원하면 같은 지점으로 또 복원
+        if [ "$(uuid_of "$T/@")" = "$u" ] && [ -d "$T/$arg" ]; then
+            mv "$T/$arg" "$T/$gone"
+            sync
+        fi
+        if [ "$(uuid_of "$T/@")" = "$u" ]; then
+            logline "undo $arg $gone"
+        else
+            logline "fail 취소 $arg"
+        fi
+        finish
+        [ -d "$T/$gone" ] && btrfs subvolume delete "$T/$gone" >/dev/null 2>&1
         ;;
     *)
-        logline "fail 모르는-요청 $action"; umount "$T"; exit 0 ;;
+        logline "fail 모르는-요청 $action"; finish; umount "$T"; exit 0 ;;
 esac
 
 # 켜진 커널의 모듈이 되돌린 시스템에 있나

@@ -4,7 +4,11 @@ PREREQ=""
 prereqs() { echo "$PREREQ"; }
 case "$1" in prereqs) prereqs; exit 0 ;; esac
 . /usr/share/initramfs-tools/hook-functions
+# 파일 복사 방식(ext4 등)의 되돌리기 — rsync (scripts/local-bottom/sekai-restore-copy)
+command -v rsync >/dev/null 2>&1 && copy_exec "$(command -v rsync)" /bin
 [ -x /usr/bin/btrfs ] || [ -x /bin/btrfs ] || exit 0
 copy_exec "$(command -v btrfs)" /bin
+# 하위 볼륨을 한 번에 맞바꾸는 mv (coreutils 9.5+ 의 --exchange — busybox mv 에는 없다)
+mv --help 2>/dev/null | grep -q -- --exchange && copy_exec /usr/bin/mv /bin/mv-exchange
 manual_add_modules btrfs
 exit 0

@@ -1,0 +1,16 @@
+[Unit]
+Description=SekaiOS 자동 복구 — 부팅 횟수 세기
+# 켤 때 1 올리고, 앞의 두 번을 끝까지 못 켰으면 자동 복구 화면 (sekai-rescue bootcheck).
+#   로그인 화면이 1분 넘게 떠 있었으면(sekai-bootok.timer) 또는 그런 부팅을 깨끗하게 끄면 0 으로
+After=local-fs.target
+Before=greetd.service display-manager.service
+ConditionKernelCommandLine=!sekai.norescue
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/sekai/sekai-rescue bootcheck
+ExecStop=/usr/libexec/sekai/sekai-rescue bootok --shutdown
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=SekaiOS 자동 복구 — 연달아 정상적으로 시작되지 못했을 때
+# sekai-bootcheck 가 띄운다. 로그인 화면 대신 tty1 에 복구 화면을 그린다
+Conflicts=greetd.service display-manager.service getty@tty1.service
+# After=greetd — 로그인 화면이 다 내려간 뒤에 (tty1 이 끊기는 중이면 열 수 없다)
+After=plymouth-start.service systemd-user-sessions.service greetd.service
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/plymouth quit
+ExecStart=/usr/libexec/sekai/sekai-rescue repeated
+StandardInput=null
+StandardOutput=journal

@@ -29,6 +29,7 @@ from sekaishell.windows import WindowManager             # noqa: E402
 from sekaishell.shell import ShellService                # noqa: E402
 from sekaishell.updates import UpdateNotifier            # noqa: E402
 from sekaishell.gpuhint import GpuHint                   # noqa: E402
+from sekaishell.crashhint import CrashHint               # noqa: E402
 from sekaishell import pins                               # noqa: E402
 from sekaishell import startpins                          # noqa: E402
 from sekaishell import monitors                           # noqa: E402
@@ -2127,6 +2128,7 @@ def main():
 
     panel.updates = UpdateNotifier()
     panel.gpuhint = GpuHint()
+    panel.crashhint = CrashHint()          # 지난번 커널 패닉으로 다시 시작했으면 알린다
 
     panel.shell = ShellService({
         "Switch": switcher.step,

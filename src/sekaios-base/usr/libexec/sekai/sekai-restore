@@ -28,6 +28,8 @@
 #  설정 앱은 목록·상태를 /var/lib/sekai/restore.json 으로 읽는다 (누구나 읽을 수 있게 — 볼 때마다 암호를 묻지 않게).
 #    /.snapshots 는 관리자만 (옛 setuid 프로그램을 일반 사용자가 실행하지 못하게 — snapper 의 권장)
 #
+#  btrfs(@) 가 아닌 설치본(ext4 등)은 restore_copy.py — 파일 복사 방식 (명령·출력은 같다, status 의 backend 로 구별).
+#
 #  구조 (설치 프로그램이 만든다): 파일 시스템 맨 위에 하위 볼륨
 #    @ → /   @home → /home   @snapshots → /.snapshots   @log → /var/log   @cache → /var/cache
 #  복원 지점은 @ 만 (개인 파일·기록·캐시는 그대로 — 윈도우의 시스템 복원처럼).
@@ -45,6 +47,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import restore_copy as RC  # noqa: E402  ext4 등 — 파일 복사로 만드는 복원 지점
 
 CONFIG = "root"
 CONF_FILE = "/etc/snapper/configs/root"
@@ -119,7 +124,22 @@ def snapshots_mounted():
     return r.stdout.strip() == "/@snapshots"
 
 
+def backend():
+    """"btrfs" (snapper 스냅숏) · "copy" (파일 복사) · None"""
+    if btrfs_why() is None:
+        return "btrfs"
+    if RC.why() is None:
+        return "copy"
+    return None
+
+
 def why_unsupported():
+    if backend():
+        return None
+    return RC.why() or btrfs_why()
+
+
+def btrfs_why():
     if os.path.isdir("/run/live/medium"):
         return "설치 USB(라이브)로 켠 상태입니다"
     fs, fsroot, _ = root_info()
@@ -139,8 +159,10 @@ def need_supported():
     why = why_unsupported()
     if why:
         die(why, 3)
-    if not os.path.isfile(CONF_FILE):
+    if backend() == "btrfs" and not os.path.isfile(CONF_FILE):
         setup()
+    elif backend() == "copy" and not RC.ready():
+        RC.setup()
 
 
 # ── 맨 위 하위 볼륨 ─────────────────────────────────────────
@@ -193,10 +215,13 @@ def last_log(top):
 # ── snapper ─────────────────────────────────────────────────
 def setup():
     """snapper 설정 (btrfs 설치본에서만). /.snapshots 는 이미 @snapshots 가 연결돼 있어 create-config 를
-    쓰지 않고(.snapshots 하위 볼륨을 새로 만들려다 실패한다) 파일을 직접 만든다"""
+    쓰지 않고(.snapshots 하위 볼륨을 새로 만들려다 실패한다) 파일을 직접 만든다. 복사 방식이면 그 저장소를"""
     why = why_unsupported()
     if why:
         die(why, 3)
+    if backend() == "copy":
+        RC.setup()
+        return
     os.makedirs("/etc/snapper/configs", exist_ok=True)
     conf_set = dict(CONF_SET)
     try:
@@ -296,10 +321,13 @@ def space():
 
 
 KIND_TEXT = {"update": "업데이트", "install": "앱 설치", "remove": "앱 제거", "driver": "드라이버",
-             "manual": "수동", "weekly": "정기", "timeline": "정기", "apt": "패키지 변경", "first": "설치 직후"}
+             "manual": "수동", "weekly": "정기", "timeline": "정기", "apt": "패키지 변경", "first": "설치 직후",
+             "before-restore": "복원 전 상태"}
 
 
 def list_points():
+    if backend() == "copy":
+        return RC.list_points()
     r = snapper("--jsonout", "list", "--disable-used-space", check=False)
     if r.returncode != 0:
         r = snapper("--jsonout", "list", check=False)
@@ -369,6 +397,10 @@ def weekly():
     """7일 안에 만든 지점이 없으면 정기 지점 하나 (윈도우도 한동안 지점이 없으면 만든다)"""
     if os.path.exists(AUTO_OFF):
         return
+    if backend() == "copy":
+        if RC.weekly():
+            refresh()
+        return
     now = datetime.datetime.now()
     for p in list_points():
         try:
@@ -416,7 +448,8 @@ def apt_desc():
 def apt_hook_ok():
     if os.path.exists(AUTO_OFF) or os.environ.get("SEKAI_NO_SNAPSHOT") == "1":
         return False
-    if why_unsupported() or not os.path.isfile(CONF_FILE):
+    b = backend()
+    if b is None or (b == "btrfs" and not os.path.isfile(CONF_FILE)) or (b == "copy" and not RC.ready()):
         return False
     # chroot(이미지 만들기·설치 프로그램)에선 하지 않는다 — 진짜 루트와 장치가 다르다
     try:
@@ -429,6 +462,12 @@ def apt_pre():
     if not apt_hook_ok():
         return
     desc, kind = apt_desc()
+    if backend() == "copy":
+        # 복사는 오래 걸린다 — 업데이트·드라이버 설치 전만 (앱 설치 전은 만들지 않는다)
+        if kind in RC.AUTO_KINDS and RC.create(desc, kind=kind, auto=True, in_apt=True):
+            with open(PRE_FILE, "w") as f:
+                f.write("1")
+        return
     if create(desc, kind=kind, auto=True):
         with open(PRE_FILE, "w") as f:
             f.write("1")
@@ -452,7 +491,7 @@ def esc_grub(s):
 def write_grub():
     """부팅 메뉴의 "복원" 하위 메뉴가 읽는 파일 — 지점마다 그 지점의 커널로 켜면서 sekai.restore=<번호>.
     grub.cfg 전체를 다시 만들지 않고(오래 걸린다) 이 파일만 쓴다 (/etc/grub.d/41_sekai-restore 가 source)"""
-    if why_unsupported() or not os.path.isdir("/boot/grub"):
+    if backend() is None or not os.path.isdir("/boot/grub"):
         return
     _, _, dev = root_info()
     uuid = run(["blkid", "-s", "UUID", "-o", "value", dev], check=False).stdout.strip()
@@ -467,7 +506,9 @@ def write_grub():
     except OSError:
         pass
     blocks = []
-    for p in list_points()[:GRUB_MAX]:
+    if backend() == "copy":
+        blocks = RC.grub_blocks(uuid, opts, esc_grub, GRUB_MAX)
+    for p in (list_points()[:GRUB_MAX] if backend() == "btrfs" else []):
         k = p["kernel"]
         if not k:
             continue
@@ -497,9 +538,12 @@ def write_grub():
 def status():
     why = why_unsupported()
     st = {"supported": why is None, "reason": why or "", "auto": not os.path.exists(AUTO_OFF),
-          "pending": None, "last": None, "undo": None, "used": None, "limit": None, "limit_ratio": None}
+          "pending": None, "last": None, "undo": None, "used": None, "limit": None, "limit_ratio": None,
+          "backend": backend()}
     if why:
         return st
+    if backend() == "copy":
+        return RC.status(st)
     st["used"], st["limit"], st["limit_ratio"] = space()
     with Top() as top:
         st["pending"] = read_request(top)
@@ -527,18 +571,72 @@ def refresh():
 
 
 def prune_old(top):
-    """복원 전 상태(@before-restore-*)는 마지막 KEEP_OLD 개만 — 지금 연결된 루트는 아니다"""
-    for name in old_roots(top)[KEEP_OLD:]:
+    """복원 전 상태(@before-restore-*)는 마지막 KEEP_OLD 개만 — 지금 연결된 루트는 아니다.
+    강제 종료로 남은 것(취소한 쪽 @undone-restore-*, 요청 없이 남은 @restore-new)도 치운다"""
+    names = old_roots(top)[KEEP_OLD:] + [n for n in os.listdir(top) if n.startswith("@undone-restore-")]
+    if not os.path.exists(os.path.join(top, REQUEST)) and os.path.isdir(os.path.join(top, "@restore-new")):
+        names.append("@restore-new")
+    for name in names:
         run(["btrfs", "subvolume", "delete", os.path.join(top, name)], check=False)
 
 
+def copy_main(cmd, a):
+    """파일 복사 방식 (ext4 등) — btrfs 쪽 명령과 같은 뜻"""
+    need_supported()
+    if cmd == "create":
+        n = RC.create(" ".join(a[1:]).strip() or "수동 복원 지점", kind=os.environ.get("SEKAI_RESTORE_KIND", "manual"))
+        refresh()
+        out({"number": n})
+    elif cmd == "delete":
+        nums = [x for x in a[1:] if x.isdigit()]
+        if not nums:
+            die("지울 번호가 없습니다", 2)
+        RC.delete(nums)
+        refresh()
+    elif cmd == "restore":
+        if len(a) < 2 or not a[1].isdigit():
+            die("번호가 없습니다", 2)
+        RC.restore(int(a[1]))
+        refresh()
+    elif cmd == "undo":
+        st = RC.status({})
+        if not st.get("undo"):
+            die("취소할 복원이 없습니다")
+        RC.restore(int(st["undo"]), undo=True)
+        refresh()
+    elif cmd == "cancel":
+        try:
+            os.unlink(RC.REQ)
+        except FileNotFoundError:
+            pass
+        refresh()
+    elif cmd == "limit":
+        try:
+            v = float(a[1])
+        except (IndexError, ValueError):
+            die("비율을 주세요 (예: 0.2)", 2)
+        if not 0.05 <= v <= 0.5:
+            die("0.05 에서 0.5 사이여야 합니다", 2)
+        RC.set_conf(limit=v)
+        RC.prune()
+        refresh()
+    elif cmd == "grub":
+        RC.cleanup_tmp()
+        refresh()
+
+
 def main():
+    RC.C.out, RC.C.die, RC.C.run, RC.C.newest_kernel = out, die, run, newest_kernel
+    RC.C.KIND_TEXT = KIND_TEXT
     a = sys.argv[1:]
     if not a:
         die("명령이 없습니다 (status · list · create · delete · restore · undo · cancel · auto · setup · grub)", 2)
     cmd = a[0]
     if os.geteuid() != 0 and cmd not in ("status",):
         die("관리자 권한이 필요합니다", 2)
+    if backend() == "copy" and cmd in ("create", "delete", "restore", "undo", "cancel", "limit", "grub"):
+        copy_main(cmd, a)
+        return
     if cmd == "status":
         if os.geteuid() != 0:
             out({"supported": why_unsupported() is None, "reason": why_unsupported() or "",
@@ -621,7 +719,7 @@ def main():
     elif cmd == "apt-post":
         apt_post()
     elif cmd == "weekly":
-        if why_unsupported() is None and os.path.isfile(CONF_FILE):
+        if (backend() == "btrfs" and os.path.isfile(CONF_FILE)) or (backend() == "copy" and RC.ready()):
             weekly()
     elif cmd == "grub":
         if why_unsupported() is None:

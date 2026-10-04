@@ -1,0 +1,426 @@
+#!/usr/bin/python3
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 드라이브 최적화 — 컴퓨터 관리 › 드라이브 최적화 (윈도우의 "드라이브 최적화"처럼)
+#
+#    sekai-optimize status                드라이브마다 종류(SSD/HDD)·마지막 TRIM·데이터 검사(btrfs scrub) — JSON
+#    sekai-optimize analyze <장치>        큰 파일의 조각을 재 "자주 고쳐 쓰는 큰 파일"을 찾는다 — JSON
+#    sekai-optimize optimize <장치>       SSD: TRIM · HDD: 조각난 파일 모으기 (btrfs 는 복원 지점이 붙잡은 곳은 빼고)
+#    sekai-optimize scrub <장치>          btrfs 데이터 검사 시작 (끝나길 기다리지 않는다 — status 로 본다)
+#    sekai-optimize scrub-all             (월 1회 sekai-scrub.timer) 모든 btrfs 를 검사하고 끝까지 기다린다
+#    sekai-optimize nocow <폴더>          btrfs: 그 폴더에 앞으로 만드는 파일은 CoW 없이 (VM 디스크·데이터베이스 용)
+#    sekai-optimize rewrite <파일>        btrfs: 쓰는 프로그램이 없을 때 CoW 없는 새 파일로 다시 써 조각을 없앤다
+#
+#  "자주 고쳐 쓰는 큰 파일"은 이름이 아니라 실제 조각 수로 판단한다 — 폴더 이름(libvirt·Steam…)을 정해 두면
+#    옮기거나 새 앱이 오면 틀린다. 틀려도 피해가 작다: CoW 를 끄면 그 파일만 압축·체크섬이 빠질 뿐 데이터는 그대로.
+#  btrfs 의 압축된 조각(최대 128KiB)은 디스크에서 이어져 있으면 하나로 센다 (안 그러면 압축된 큰 파일이 다 조각나 보인다).
+# ═══════════════════════════════════════════════════════════════
+import array
+import datetime
+import fcntl
+import json
+import os
+import re
+import shutil
+import stat
+import struct
+import subprocess
+import sys
+import tempfile
+
+SCRUB_STATE = "/var/lib/sekai/scrub.json"
+MIN_SIZE = 64 * 1024 * 1024
+SKIP_DIRS = {"/proc", "/sys", "/dev", "/run", "/tmp", "/.snapshots", "/.sekai-restore", "/var/lib/sekai-restore"}
+FS_IOC_FIEMAP = 0xC020660B
+FS_IOC_GETFLAGS, FS_IOC_SETFLAGS = 0x80086601, 0x40086602
+FS_NOCOW_FL = 0x00800000
+FIEMAP_EXTENT_LAST, FIEMAP_EXTENT_ENCODED = 0x1, 0x8
+LOCAL_FS = ("ext4", "btrfs", "xfs", "ext3", "ext2", "f2fs")
+
+
+def out(o):
+    print(json.dumps(o, ensure_ascii=False))
+
+
+def die(msg, code=1):
+    print(f"ERROR {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def run(cmd, check=False, **kw):
+    return subprocess.run(cmd, capture_output=True, text=True, **kw)
+
+
+# ── 드라이브 ────────────────────────────────────────────────
+def filesystems():
+    """[{device, fstype, mounts:[…], label, uuid}] — 로컬 파일 시스템 (같은 장치의 하위 볼륨은 하나로)"""
+    r = run(["findmnt", "-rn", "-o", "SOURCE,TARGET,FSTYPE,UUID,LABEL"])
+    byuuid = {}
+    for ln in r.stdout.splitlines():
+        p = ln.split(" ")
+        if len(p) < 3:
+            continue
+        src, tgt, fs = p[0], p[1].replace("\\x20", " "), p[2]
+        uuid = p[3] if len(p) > 3 else ""
+        label = (p[4] if len(p) > 4 else "").replace("\\x20", " ")
+        if fs not in LOCAL_FS or not src.startswith("/dev/"):
+            continue
+        dev = re.sub(r"\[.*\]$", "", src)
+        k = uuid or dev
+        d = byuuid.setdefault(k, {"device": dev, "fstype": fs, "mounts": [], "label": label, "uuid": uuid})
+        d["mounts"].append(tgt)
+    out_ = []
+    for d in byuuid.values():
+        d["mounts"].sort(key=lambda m: (m != "/", m.count("/"), m))
+        d["mount"] = d["mounts"][0]
+        out_.append(d)
+    out_.sort(key=lambda d: (d["mount"] != "/", d["mount"]))
+    return out_
+
+
+def find_fs(dev):
+    for d in filesystems():
+        if dev in (d["device"], d["uuid"], d["mount"]):
+            return d
+    die(f"드라이브를 찾지 못했습니다: {dev}")
+
+
+def rotational(dev):
+    r = run(["lsblk", "-ndo", "ROTA", dev])
+    v = r.stdout.strip()
+    if not v:      # 파티션이면 부모 디스크
+        pk = run(["lsblk", "-ndo", "PKNAME", dev]).stdout.strip()
+        if pk:
+            v = run(["lsblk", "-ndo", "ROTA", "/dev/" + pk]).stdout.strip()
+    return v == "1"
+
+
+def trim_last():
+    r = run(["systemctl", "show", "fstrim.service", "-p", "ExecMainExitTimestamp", "--value"])
+    t = r.stdout.strip()
+    en = run(["systemctl", "is-enabled", "fstrim.timer"]).stdout.strip() == "enabled"
+    return (t if t and t != "n/a" else None), en
+
+
+def scrub_info(mount):
+    r = run(["btrfs", "scrub", "status", "-R", mount])
+    info = {"running": "running" in r.stdout.lower() and "status:" in r.stdout.lower() and
+            re.search(r"Status:\s+running", r.stdout) is not None}
+    m = re.search(r"Scrub started:\s+(.+)", r.stdout)
+    info["started"] = m.group(1).strip() if m else None
+    errs = 0
+    for k in ("read_errors", "csum_errors", "verify_errors", "super_errors", "uncorrectable_errors"):
+        m = re.search(rf"{k}:\s+(\d+)", r.stdout)
+        if m:
+            errs += int(m.group(1))
+    info["errors"] = errs
+    m = re.search(r"Status:\s+(\w+)", r.stdout)
+    info["status"] = m.group(1) if m else ("none" if "no stats available" in r.stdout else None)
+    m = re.search(r"data_bytes_scrubbed:\s+(\d+)", r.stdout)
+    info["scrubbed"] = int(m.group(1)) if m else None
+    return info
+
+
+def status():
+    tl, ten = trim_last()
+    res = []
+    for d in filesystems():
+        st = os.statvfs(d["mount"])
+        item = dict(d, ssd=not rotational(d["device"]), size=st.f_blocks * st.f_frsize,
+                    free=st.f_bavail * st.f_frsize, trim_last=tl, trim_auto=ten)
+        if d["fstype"] == "btrfs":
+            # 지금 검사 상태는 관리자만 읽을 수 있다 — 아니면 마지막 정기 검사 기록(scrub_saved)만
+            item["scrub"] = scrub_info(d["mount"]) if os.geteuid() == 0 else None
+            item["scrub_auto"] = run(["systemctl", "is-enabled", "sekai-scrub.timer"]).stdout.strip() == "enabled"
+        try:
+            with open(SCRUB_STATE) as f:
+                item["scrub_saved"] = json.load(f).get(d["uuid"] or d["device"])
+        except (OSError, ValueError):
+            pass
+        res.append(item)
+    return res
+
+
+# ── 조각 재기 ───────────────────────────────────────────────
+def fiemap(fd, size):
+    """(조각 수, 압축 조각이 있나) — 디스크에서 이어지지 않은 곳의 수 + 1"""
+    # 희소 파일의 구멍(논리 위치가 건너뛴 곳)은 조각으로 치지 않는다 — 논리로 이어지는데 디스크에서 끊긴 곳만
+    frags, last_end, compressed, start, last_lend = 0, None, False, 0, None
+    hdr = struct.Struct("=QQLLLL")       # start length flags mapped_extents extent_count reserved
+    ext = struct.Struct("=QQQQQLLLL")    # logical physical length reserved64[2] flags reserved32[3]
+    N = 512
+    while True:
+        buf = array.array("B", hdr.pack(start, size - start if size > start else 0, 1, 0, N, 0) + bytes(ext.size * N))
+        try:
+            fcntl.ioctl(fd, FS_IOC_FIEMAP, buf, True)
+        except OSError:
+            return None, False
+        _, _, _, mapped, _, _ = hdr.unpack_from(buf, 0)
+        if mapped == 0:
+            break
+        done = False
+        for i in range(mapped):
+            lo, ph, ln, _r1, _r2, fl, _a, _b, _c = ext.unpack_from(buf, hdr.size + i * ext.size)
+            enc = bool(fl & FIEMAP_EXTENT_ENCODED)
+            compressed |= enc
+            if last_end is None:
+                frags = 1
+            elif last_lend is not None and lo != last_lend:
+                pass                                       # 구멍 뒤 — 새 조각으로 세지 않는다
+            elif enc:
+                # 압축 조각: 디스크 길이를 모른다 — 앞 조각 바로 뒤(1MiB 안)면 이어진 것으로
+                if not (last_end - 4096 <= ph <= last_end + (1 << 20)):
+                    frags += 1
+            elif ph != last_end:
+                frags += 1
+            last_end = ph + (min(ln, 128 * 1024) if enc else ln)
+            last_lend = lo + ln
+            start = lo + ln
+            if fl & FIEMAP_EXTENT_LAST:
+                done = True
+        if done or start >= size:
+            break
+    return frags, compressed
+
+
+def walk(roots, dev_ids):
+    seen = set()                       # / 와 /home 처럼 겹쳐 훑어도 한 번만
+    for root in roots:
+        stack = [root]
+        while stack:
+            d = stack.pop()
+            if d in SKIP_DIRS:
+                continue
+            try:
+                it = os.scandir(d)
+            except OSError:
+                continue
+            with it:
+                for e in it:
+                    try:
+                        st = e.stat(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    if st.st_dev not in dev_ids:
+                        continue
+                    if stat.S_ISDIR(st.st_mode):
+                        stack.append(e.path)
+                    elif stat.S_ISREG(st.st_mode) and st.st_size >= MIN_SIZE:
+                        if (st.st_dev, st.st_ino) in seen:
+                            continue
+                        seen.add((st.st_dev, st.st_ino))
+                        yield e.path, st
+
+
+def nocow(path):
+    try:
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            buf = array.array("L", [0])
+            fcntl.ioctl(fd, FS_IOC_GETFLAGS, buf, True)
+            return bool(buf[0] & FS_NOCOW_FL)
+        finally:
+            os.close(fd)
+    except OSError:
+        return False
+
+
+def snapshotted(path, fs):
+    """복원 지점이 붙잡는 곳(btrfs 의 @)인가 — 그곳을 조각 모음하면 지점과 나눠 쓰던 데이터가 갈라져 공간이 는다"""
+    if fs["fstype"] != "btrfs":
+        return False
+    best = "/"
+    for m in fs["mounts"]:
+        if (path == m or path.startswith(m.rstrip("/") + "/")) and len(m) >= len(best):
+            best = m
+    return best == "/"
+
+
+def analyze(dev):
+    fs = find_fs(dev)
+    dev_ids = set()
+    for m in fs["mounts"]:
+        if m in SKIP_DIRS:
+            continue
+        try:
+            dev_ids.add(os.stat(m).st_dev)
+        except OSError:
+            pass
+    roots = [m for m in fs["mounts"] if m not in SKIP_DIRS]
+    files, scanned, system_skipped = [], 0, 0
+    for path, st in walk(roots, dev_ids):
+        scanned += 1
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOATIME)
+        except OSError:
+            try:
+                fd = os.open(path, os.O_RDONLY)
+            except OSError:
+                continue
+        try:
+            frags, comp = fiemap(fd, st.st_size)
+        finally:
+            os.close(fd)
+        if not frags:
+            continue
+        per100 = frags / (st.st_size / (100 * 1024 * 1024))
+        if frags >= 64 and per100 >= 16:      # 평균 조각이 6MB 보다 작다
+            if snapshotted(path, fs):
+                # 복원 지점과 나눠 쓰는 시스템 영역 — 조각 모음하면 공간만 늘어 손대지 않는다 (개수만 알린다)
+                system_skipped += 1
+                continue
+            files.append({"path": path, "size": st.st_size, "frags": frags, "per100": round(per100, 1),
+                          "nocow": nocow(path), "compressed": comp, "snapshotted": snapshotted(path, fs)})
+    files.sort(key=lambda f: f["frags"], reverse=True)
+    return {"device": fs["device"], "fstype": fs["fstype"], "scanned": scanned, "files": files[:200],
+            "system_skipped": system_skipped,
+            "at": datetime.datetime.now().isoformat(timespec="seconds")}
+
+
+# ── 최적화 ──────────────────────────────────────────────────
+def optimize(dev):
+    fs = find_fs(dev)
+    done = []
+    if not rotational(fs["device"]):
+        r = run(["fstrim", "-v", fs["mount"]])
+        if r.returncode != 0:
+            die(f"TRIM 을 하지 못했습니다: {(r.stderr or r.stdout).strip()}")
+        done.append(("trim", r.stdout.strip()))
+        out({"done": done})
+        return
+    a = analyze(dev)
+    skipped = 0
+    for f in a["files"]:
+        if f["snapshotted"]:
+            skipped += 1
+            continue
+        if fs["fstype"] == "btrfs":
+            r = run(["btrfs", "filesystem", "defragment", "-f", f["path"]])
+        elif fs["fstype"] in ("ext4", "ext3", "ext2"):
+            r = run(["e4defrag", f["path"]])
+        else:
+            continue
+        done.append(("defrag", f["path"], r.returncode))
+    out({"done": done, "skipped_snapshotted": skipped})
+
+
+def scrub(dev, wait=False):
+    fs = find_fs(dev)
+    if fs["fstype"] != "btrfs":
+        die("데이터 검사는 btrfs 드라이브에서만 됩니다")
+    r = run(["btrfs", "scrub", "start"] + (["-B"] if wait else []) + [fs["mount"]])
+    info = scrub_info(fs["mount"])
+    if wait:
+        try:
+            with open(SCRUB_STATE) as f:
+                saved = json.load(f)
+        except (OSError, ValueError):
+            saved = {}
+        saved[fs["uuid"] or fs["device"]] = {"at": datetime.datetime.now().isoformat(timespec="seconds"),
+                                             "errors": info["errors"]}
+        os.makedirs(os.path.dirname(SCRUB_STATE), exist_ok=True)
+        with open(SCRUB_STATE + ".tmp", "w") as f:
+            json.dump(saved, f)
+        os.replace(SCRUB_STATE + ".tmp", SCRUB_STATE)
+        if info["errors"]:
+            # 이벤트 뷰어에 오류로 남는다
+            run(["logger", "-p", "user.err", "-t", "sekai-scrub",
+                 f"{fs['mount']} ({fs['device']}) 데이터 검사에서 오류 {info['errors']}개를 찾았습니다 — 디스크를 확인하세요"])
+    elif r.returncode != 0 and "already running" not in (r.stderr or ""):
+        die(f"데이터 검사를 시작하지 못했습니다: {(r.stderr or r.stdout).strip()}")
+    return info
+
+
+def set_nocow(path):
+    path = os.path.realpath(path)
+    if not os.path.isdir(path):
+        die("폴더가 아닙니다")
+    if run(["findmnt", "-no", "FSTYPE", "-T", path]).stdout.strip() != "btrfs":
+        die("btrfs 드라이브의 폴더에서만 됩니다")
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        buf = array.array("L", [0])
+        fcntl.ioctl(fd, FS_IOC_GETFLAGS, buf, True)
+        buf[0] |= FS_NOCOW_FL
+        fcntl.ioctl(fd, FS_IOC_SETFLAGS, buf, True)
+    finally:
+        os.close(fd)
+
+
+def in_use(path):
+    real = os.path.realpath(path)
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            for fd in os.listdir(f"/proc/{pid}/fd"):
+                try:
+                    if os.readlink(f"/proc/{pid}/fd/{fd}") == real:
+                        return True
+                except OSError:
+                    pass
+        except OSError:
+            pass
+    return False
+
+
+def rewrite(path):
+    """CoW 없는 새 파일로 다시 쓴다 — 쓰는 프로그램이 없을 때만. 권한·주인·시각은 그대로"""
+    path = os.path.realpath(path)
+    if not os.path.isfile(path):
+        die("파일이 아닙니다")
+    if run(["findmnt", "-no", "FSTYPE", "-T", path]).stdout.strip() != "btrfs":
+        die("btrfs 드라이브의 파일에서만 됩니다")
+    if in_use(path):
+        die("이 파일을 쓰고 있는 프로그램이 있습니다 — 그 프로그램(가상 머신 등)을 끈 뒤 다시 해 보세요")
+    st = os.stat(path)
+    if shutil.disk_usage(os.path.dirname(path)).free < st.st_size * 1.1:
+        die("디스크 여유 공간이 부족합니다 (파일 크기만큼 필요)")
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".sekai-rewrite.")
+    try:
+        buf = array.array("L", [FS_NOCOW_FL])
+        fcntl.ioctl(fd, FS_IOC_SETFLAGS, buf, True)       # 비어 있을 때 걸어야 듣는다
+        with open(path, "rb") as src, os.fdopen(fd, "wb") as dst:
+            shutil.copyfileobj(src, dst, 16 * 1024 * 1024)
+            dst.flush()
+            os.fsync(dst.fileno())
+        os.chown(tmp, st.st_uid, st.st_gid)
+        os.chmod(tmp, stat.S_IMODE(st.st_mode))
+        os.utime(tmp, ns=(st.st_atime_ns, st.st_mtime_ns))
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def main():
+    a = sys.argv[1:]
+    if not a:
+        die("명령이 없습니다", 2)
+    cmd = a[0]
+    if os.geteuid() != 0 and cmd != "status":
+        die("관리자 권한이 필요합니다", 2)
+    if cmd == "status":
+        out(status())
+    elif cmd == "analyze" and len(a) > 1:
+        out(analyze(a[1]))
+    elif cmd == "optimize" and len(a) > 1:
+        optimize(a[1])
+    elif cmd == "scrub" and len(a) > 1:
+        out(scrub(a[1]))
+    elif cmd == "scrub-all":
+        for d in filesystems():
+            if d["fstype"] == "btrfs":
+                scrub(d["mount"], wait=True)
+    elif cmd == "nocow" and len(a) > 1:
+        set_nocow(a[1])
+    elif cmd == "rewrite" and len(a) > 1:
+        rewrite(a[1])
+    else:
+        die(f"모르는 명령: {' '.join(a)}", 2)
+
+
+if __name__ == "__main__":
+    main()
