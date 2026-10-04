@@ -155,6 +155,12 @@ stage_tree() {
         case "$f" in usr/bin/*|usr/sbin/*|usr/libexec/*|etc/kernel/postinst.d/*|etc/initramfs/post-update.d/*|etc/grub.d/*|etc/update-motd.d/*|usr/share/initramfs-tools/hooks/*|usr/share/initramfs-tools/scripts/*) mode=755 ;; esac
         install -Dm$mode "$src/$f" "$stage/$f"
     done
+    # 심볼릭 링크는 링크 그대로 (커서 테마의 이름 잇기 등)
+    ( cd "$src" && find . -type l ) | while read -r f; do
+        f="${f#./}"
+        mkdir -p "$stage/$(dirname "$f")"
+        cp -P "$src/$f" "$stage/$f"
+    done
     mkdir -p "$stage/DEBIAN"
     ( cd "$stage" && find etc -type f 2>/dev/null | sed 's|^|/|' ) > "$stage/DEBIAN/conffiles"
     [ -s "$stage/DEBIAN/conffiles" ] || rm -f "$stage/DEBIAN/conffiles"
@@ -357,9 +363,13 @@ cat >> "$STAGE_DE/usr/share/doc/sekai-de/copyright" <<'THEME'
 소스:     이 파일들을 만든 원본(SCSS·SVG)과 스크립트는 SekaiOS 소스 저장소에서 받을 수 있다:
           https://github.com/caterpillar321/sekaios
           (third_party/fluent-gtk-theme, scripts/build-theme.sh)
+
+참고:     usr/share/themes/Sekai-Contrast 는 SekaiOS 가 쓴 것(Apache 2.0)으로, GTK 에 들어 있는 고대비 테마를
+          불러 쓴다 (GTK 의 파일을 담지 않음). usr/share/icons/Sekai-Cursor-{White,Black} 은 dmz-cursor-theme 의
+          커서 그림으로 가는 링크와 index.theme 뿐이다 — 그림은 담지 않으며 그 라이선스는 dmz-cursor-theme 의 것.
 THEME
 # 이 패키지를 만든 소스의 커밋 — 옛 패키지에 맞는 소스(GPL-3 6조)를 찾을 수 있게
-printf '          이 패키지를 만든 소스: 커밋 %s\n          GPL-3.0 전문은 테마 폴더의 COPYING 에도 있다 (usr/share/themes/Sekai-*/COPYING)\n' \
+printf '          이 패키지를 만든 소스: 커밋 %s\n          GPL-3.0 전문은 테마 폴더의 COPYING 에도 있다 (usr/share/themes/Sekai-{Light,Dark}/COPYING)\n' \
     "$(git -C "$P" rev-parse HEAD 2>/dev/null || echo 알수없음)" >> "$STAGE_DE/usr/share/doc/sekai-de/copyright"
 
 cat > "$STAGE_DE/DEBIAN/control" <<CTRL
@@ -370,7 +380,7 @@ Maintainer: SekaiOS <sekai@localhost>
 Section: x11
 Priority: optional
 Depends: sekai-shell (= ${FULL}),
- worldlink (>= 0.50.1-sekai24), hyprbars (>= 0.50.0-sekai21), hyprexpo, xwayland,
+ worldlink (>= 0.50.1-sekai30), hyprbars (>= 0.50.0-sekai27), hyprexpo, xwayland,
  xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr,
  swaybg, swayidle, swaylock, grim, slurp, wl-clipboard, cliphist, libnotify-bin,
  brightnessctl, playerctl, wtype, pkexec,
@@ -381,7 +391,7 @@ Depends: sekai-shell (= ${FULL}),
  ibus, ibus-wayland, ibus-hangul, gir1.2-ibus-1.0, ibus-gtk3, ibus-gtk4,
  fonts-pretendard, fonts-nanum, fonts-jetbrains-mono, fonts-noto-color-emoji,
  papirus-icon-theme, adwaita-icon-theme, dmz-cursor-theme,
- gvfs, gvfs-backends, udisks2, libarchive-tools, xdg-user-dirs
+ gvfs, gvfs-backends, udisks2, libarchive-tools, xdg-user-dirs, wvkbd
 Replaces: sekai-desktop (<< ${FULL})
 Breaks: sekai-desktop (<< ${FULL})
 Description: SekaiDE - the SekaiOS desktop environment

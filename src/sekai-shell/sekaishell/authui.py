@@ -58,19 +58,19 @@ window.auth-dim { background: alpha(#000000, 0.50); }
     border-radius: 7px 7px 0 0;
     padding: 9px 20px;
 }
-.auth-head label { color: @on_accent; font-size: 12px; font-weight: 600; }
+.auth-head label { color: @on_accent; font-size: 9pt; font-weight: 600; }
 .auth-head image { color: @on_accent; }
 
 .auth-body { padding: 18px 24px 14px 24px; }
-label.auth-question { font-size: 20px; font-weight: 600; color: @fg; }
-label.auth-title    { font-size: 17px; font-weight: 600; color: @fg; }
-label.auth-appname  { font-size: 15px; font-weight: 600; color: @fg; }
-label.auth-sub      { font-size: 12px; color: @text2; }
-label.auth-text     { font-size: 13px; color: @fg; }
-label.auth-key      { font-size: 12px; color: @text2; }
-label.auth-val      { font-size: 12px; color: @fg; }
+label.auth-question { font-size: 15pt; font-weight: 600; color: @fg; }
+label.auth-title    { font-size: 12.75pt; font-weight: 600; color: @fg; }
+label.auth-appname  { font-size: 11.25pt; font-weight: 600; color: @fg; }
+label.auth-sub      { font-size: 9pt; color: @text2; }
+label.auth-text     { font-size: 9.75pt; color: @fg; }
+label.auth-key      { font-size: 9pt; color: @text2; }
+label.auth-val      { font-size: 9pt; color: @fg; }
 label.auth-unknown  { color: @auth_warn; }
-label.auth-msg      { font-size: 12px; color: @auth_err; }
+label.auth-msg      { font-size: 9pt; color: @auth_err; }
 label.auth-msg.info { color: @text2; }
 label.auth-msg.warn { color: @auth_warn; }
 
@@ -81,7 +81,7 @@ button.auth-link {
     padding: 2px 4px;
     margin-left: -4px;
 }
-button.auth-link label { color: mix(@accent, @fg, 0.25); font-size: 12px; }
+button.auth-link label { color: mix(@accent, @fg, 0.25); font-size: 9pt; }
 button.auth-link:hover { background: @hover; }
 .auth-details {
     background: @card;
@@ -158,6 +158,8 @@ def load_style(extra=""):
         if _prov is not None:
             Gtk.StyleContext.remove_provider_for_screen(scr, _prov)
         Gtk.StyleContext.add_provider_for_screen(scr, prov, Gtk.STYLE_PROVIDER_PRIORITY_USER)
+        from sekaishell import theme as _sekai_theme
+        _sekai_theme.apply_contrast_css()   # 대비 테마면 테두리·초점을 앱 CSS 위에
         _prov = prov
     theme.apply_gtk_settings(Gtk.Settings.get_default(), a["mode"])
     return a

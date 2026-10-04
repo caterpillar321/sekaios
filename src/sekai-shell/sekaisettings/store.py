@@ -91,6 +91,23 @@ DEFAULTS = {
         "suspend": 0,
     },
     # 단축키 — 기본값은 hyprland.conf 의 bind 줄 (sekaishell/keybinds.py). 여기엔 바꾼 것만
+    # 접근성 (설정 › 접근성) — 윈도우 11 의 접근성과 같은 항목들
+    "a11y": {
+        "text_scale": 1.0,           # 텍스트 크기 — GTK 의 text-scaling-factor (SekaiOS 앱 글자는 pt 라 같이 커진다)
+        "magnifier_step": 1.0,       # 돋보기 한 번에 키우는 만큼 (1.0 = 100%)
+        "color_filter": False,       # 색 필터 — 합성기 화면 셰이더 (/usr/share/sekai/shaders)
+        "color_filter_kind": "grayscale",
+        "contrast": False,           # 대비 테마 — 켜면 모드를 contrast 로, 끄면 아래 둘로 되돌린다
+        "prev_mode": "dark",
+        "prev_accent": "",
+        "cursor_color": "white",     # white = Sekai-Cursor-White · black = Sekai-Cursor-Black (DMZ)
+        "sticky_keys": False,        # 고정 키 (WorldLink input:sekai_sticky_keys)
+        "a11y_shortcuts": True,      # Shift 다섯 번 · 오른쪽 Shift 8초로 켤지 묻기
+        "filter_keys": False,        # 필터 키 — 아래 두 값 (0 = 그 기능 끔)
+        "bounce_ms": 500,            #   반복 입력 무시
+        "slow_ms": 0,                #   누르고 있어야 입력
+        "osk": False,                # 화상 키보드 (wvkbd) — 로그인할 때 띄울지
+    },
     "keybinds": {
         "changed": {},           # 기본 키 조합 → 새 조합 ("" = 끔), 예: {"SUPER+E": "SUPER+w"}
         "custom": [],            # [{"name", "command", "key"}]
@@ -253,6 +270,32 @@ def _str(v):    return str(v)
 def _layout(v): return str(v) or "us"
 def _rgba(v):   return hex_to_rgba(v)
 def _accent(v): return hex_to_rgba(v, 0.53)
+
+
+# 접근성 — 커서 색(테마)과 색 필터 셰이더
+CURSOR_THEMES = {"white": "Sekai-Cursor-White", "black": "Sekai-Cursor-Black"}
+SHADER_DIR = "/usr/share/sekai/shaders"
+COLOR_FILTERS = ("grayscale", "inverted", "grayscale-inverted", "deuteranopia", "protanopia", "tritanopia")
+
+
+def color_filter_path(kind):
+    if kind not in COLOR_FILTERS:
+        return None
+    p = os.path.join(SHADER_DIR, f"{kind}.frag")
+    return p if os.path.isfile(p) else None
+
+
+def apply_cursor(theme_name, size):
+    """커서 테마·크기를 바로 (hyprctl setcursor) — GTK 앱이 쓰는 GSettings·settings.ini 도 맞춘다"""
+    run(["hyprctl", "setcursor", theme_name, str(size)])
+    run(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", theme_name])
+    run(["gsettings", "set", "org.gnome.desktop.interface", "cursor-size", str(size)])
+    for d in ("gtk-3.0", "gtk-4.0"):
+        try:
+            theme._write_ini(os.path.join(HOME, ".config", d, "settings.ini"),
+                             {"gtk-cursor-theme-name": theme_name, "gtk-cursor-theme-size": size})
+        except OSError:
+            pass
 
 
 def _apply_wm_mode(mode):
@@ -442,7 +485,17 @@ class Store:
         lines.append("}")
         lines.append("")
 
+        x = self.get("a11y")
         lines.append(f"env = XCURSOR_SIZE,{int(a['cursor_size'])}")
+        lines.append(f"env = XCURSOR_THEME,{CURSOR_THEMES.get(x.get('cursor_color'), 'Sekai-Cursor-White')}")
+        lines.append("")
+        # 접근성 — 색 필터(화면 셰이더) · 대비 테마의 굵은 노란 테두리
+        if x.get("color_filter") and color_filter_path(x.get("color_filter_kind")):
+            lines.append(f"decoration:screen_shader = {color_filter_path(x.get('color_filter_kind'))}")
+        if a.get("mode") == "contrast":
+            lines.append("general:border_size = 3")
+            lines.append("general:col.active_border = rgba(ffff00ff)")
+            lines.append("general:col.inactive_border = rgba(ffffffff)")
         lines.append("")
 
         lines.append("input {")
@@ -456,6 +509,10 @@ class Store:
         lines.append(f"    sensitivity = {float(i['sensitivity']):.2f}")
         lines.append(f"    natural_scroll = {'true' if i['natural_scroll'] else 'false'}")
         lines.append(f"    follow_mouse = {int(i['follow_mouse'])}")
+        lines.append(f"    sekai_sticky_keys = {1 if x.get('sticky_keys') else 0}")
+        lines.append(f"    sekai_bounce_keys = {int(x.get('bounce_ms') or 0) if x.get('filter_keys') else 0}")
+        lines.append(f"    sekai_slow_keys = {int(x.get('slow_ms') or 0) if x.get('filter_keys') else 0}")
+        lines.append(f"    sekai_a11y_shortcuts = {1 if x.get('a11y_shortcuts', True) else 0}")
         lines.append("    touchpad {")
         lines.append(f"        natural_scroll = {'true' if i['tp_natural_scroll'] else 'false'}")
         lines.append(f"        tap-to-click = {'true' if i['tp_tap'] else 'false'}")
@@ -602,6 +659,10 @@ class Store:
             self.apply_wallpaper()
         elif section == "display":
             self.apply_display()
+        elif section == "a11y":
+            self.apply_a11y(key)
+        elif section == "appearance" and key == "cursor_size":
+            self.apply_a11y("cursor_size")           # 다시 로그인하지 않아도 바로 (hyprctl setcursor)
         elif section == "power":
             # sekai-idle 이 설정을 다시 읽고 swayidle 을 새로 띄운다
             for pid in run(["pgrep", "-f", r"^\S*python3\S* \S*sekai-idle( |$)"]).split():
@@ -610,11 +671,52 @@ class Store:
                 except Exception:
                     pass
 
+    # ── 접근성 즉시 반영 ────────────────────────────────
+    def apply_a11y(self, key=None):
+        """key 가 없으면 전부. 합성기 값은 hyprctl keyword, 글자 크기·커서는 GSettings 와 GTK 설정 파일도"""
+        x = self.get("a11y")
+        if key in (None, "color_filter", "color_filter_kind"):
+            path = color_filter_path(x.get("color_filter_kind")) if x.get("color_filter") else None
+            keyword("decoration:screen_shader", path or "[[EMPTY]]")
+        if key in (None, "sticky_keys"):
+            keyword("input:sekai_sticky_keys", 1 if x.get("sticky_keys") else 0)
+        if key in (None, "a11y_shortcuts"):
+            keyword("input:sekai_a11y_shortcuts", 1 if x.get("a11y_shortcuts", True) else 0)
+        if key in (None, "filter_keys", "bounce_ms", "slow_ms"):
+            on = bool(x.get("filter_keys"))
+            keyword("input:sekai_bounce_keys", int(x.get("bounce_ms") or 0) if on else 0)
+            keyword("input:sekai_slow_keys", int(x.get("slow_ms") or 0) if on else 0)
+        if key in (None, "text_scale"):
+            run(["gsettings", "set", "org.gnome.desktop.interface", "text-scaling-factor",
+                 f"{float(x.get('text_scale') or 1.0):.2f}"])
+        if key in (None, "cursor_color") or key == "cursor_size":
+            apply_cursor(CURSOR_THEMES.get(x.get("cursor_color"), "Sekai-Cursor-White"), int(self.get("appearance", "cursor_size")))
+        if key == "osk":
+            run(["sekai-ctl", "osk", "on" if x.get("osk") else "off"])
+
+    def set_contrast(self, on):
+        """대비 테마 — 켜면 지금 모드·강조색을 적어 두고 contrast 로, 끄면 되돌린다"""
+        x = self.data.setdefault("a11y", {})
+        a = self.data.setdefault("appearance", {})
+        if on and a.get("mode") != "contrast":
+            x["prev_mode"] = a.get("mode", "dark")
+            x["prev_accent"] = a.get("accent", DEFAULTS["appearance"]["accent"])
+            x["contrast"] = True
+            a["accent"] = theme.CONTRAST_ACCENT
+            self.set_mode("contrast")
+        elif not on and a.get("mode") == "contrast":
+            x["contrast"] = False
+            if x.get("prev_accent"):
+                a["accent"] = x["prev_accent"]
+            self.set_mode(x.get("prev_mode") if x.get("prev_mode") in ("dark", "light") else "dark")
+        self.apply_one("appearance", "accent", self.get("appearance", "accent"))
+
     def apply_all(self):
         self.write_hypr_fragment()
         for section in ("appearance", "input"):
             for k, v in self.get(section).items():
                 self.apply_one(section, k, v)
+        self.apply_a11y()
         self.apply_display()
         self.apply_wallpaper()
         self.notify_panel()

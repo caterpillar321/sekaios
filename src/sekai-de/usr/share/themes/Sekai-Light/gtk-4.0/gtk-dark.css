@@ -5992,13 +5992,13 @@ carousel.card {
   min-height: 28px;
   min-width: 28px;
   padding: 6px;
-  font-size: 18px;
+  font-size: 13.5pt;
   font-weight: bold;
   border-radius: 9999px;
 }
 
 .context-tile-lozenge.large {
-  font-size: 24px;
+  font-size: 18pt;
   padding: 16px;
   min-width: 24px;
   /* 60px minus the left and right padding */

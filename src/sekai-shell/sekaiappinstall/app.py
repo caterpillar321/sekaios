@@ -30,7 +30,7 @@ CSS_PATHS = [os.path.join(HERE, "..", "settings.css"), "/usr/share/sekai-shell/s
 AI_CSS = """
 .ai-window { background: @winbg; color: @fg; }
 .ai-body { padding: 26px 30px 18px 30px; }
-label.ai-name { font-size: 22px; font-weight: 700; color: @fg; }
+label.ai-name { font-size: 16.5pt; font-weight: 700; color: @fg; }
 label.ai-sub { color: @text2; }
 label.ai-state { font-weight: 600; color: @fg; }
 label.ai-summary { color: @fg; }
@@ -54,7 +54,7 @@ label.ai-desc { color: @text2; }
     padding: 10px 14px;
 }
 .ai-foot { padding: 14px 30px 20px 30px; border-top: 1px solid @line; background: @surface; }
-label.ai-progress-text { color: @text2; font-size: 13px; }
+label.ai-progress-text { color: @text2; font-size: 9.75pt; }
 """
 
 
@@ -73,6 +73,8 @@ def _load_css(a):
         print("[sekai-appinstall] CSS 오류:", e.message, file=sys.stderr, flush=True)
         return None
     Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_USER)
+    from sekaishell import theme as _sekai_theme
+    _sekai_theme.apply_contrast_css()   # 대비 테마면 테두리·초점을 앱 CSS 위에
     return prov
 
 

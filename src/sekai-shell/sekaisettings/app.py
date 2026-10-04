@@ -50,6 +50,8 @@ def _load_css(store):
         return None
     Gtk.StyleContext.add_provider_for_screen(
         Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_USER)
+    from sekaishell import theme as _sekai_theme
+    _sekai_theme.apply_contrast_css()   # 대비 테마면 테두리·초점을 앱 CSS 위에
     return prov
 
 

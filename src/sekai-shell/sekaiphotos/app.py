@@ -48,8 +48,8 @@ PHOTOS_CSS = """
 .ph-toolbar image { color: @fg; }
 button.ph-name { padding: 6px 10px; }
 button.ph-name label { font-weight: 600; color: @fg; }
-label.ph-pos { color: @text2; font-size: 13px; font-feature-settings: "tnum"; }
-button.ph-zoom label { font-size: 13px; font-feature-settings: "tnum"; }
+label.ph-pos { color: @text2; font-size: 9.75pt; font-feature-settings: "tnum"; }
+button.ph-zoom label { font-size: 9.75pt; font-feature-settings: "tnum"; }
 separator.ph-sep { background: @line; min-width: 1px; margin: 8px 4px; }
 button.ph-nav {
     background: alpha(@surface, 0.86);
@@ -63,11 +63,11 @@ button.ph-nav:hover { background: @card; }
 button.ph-nav image { color: @fg; }
 .ph-info { background: @winbg; border-left: 1px solid @line; }
 .ph-info-head { padding: 14px 10px 8px 20px; }
-label.ph-info-title { font-size: 16px; font-weight: 700; color: @fg; }
+label.ph-info-title { font-size: 12pt; font-weight: 700; color: @fg; }
 button.ph-info-close { background: transparent; border-color: transparent; padding: 6px; }
 button.ph-info-close:hover { background: @hover; }
 .ph-info-body { padding: 6px 20px 24px 20px; }
-label.ph-info-key { font-size: 12px; color: @text2; }
+label.ph-info-key { font-size: 9pt; color: @text2; }
 label.ph-info-val { color: @fg; }
 button.ph-link { background: transparent; border-color: transparent; padding: 0; }
 button.ph-link label { color: mix(@accent, @fg, 0.25); }
@@ -80,11 +80,11 @@ button.ph-link:hover label { text-decoration-line: underline; }
     margin-bottom: 28px;
     color: @fg;
 }
-label.ph-msg-title { font-size: 18px; font-weight: 600; color: @fg; }
+label.ph-msg-title { font-size: 13.5pt; font-weight: 600; color: @fg; }
 label.ph-msg-sub { color: @text2; }
 image.ph-msg-icon { color: @text3; opacity: 0.6; }
 label.ph-pop-title { font-weight: 600; }
-label.ph-err { color: mix(#e0453a, @fg, 0.25); font-size: 12px; }
+label.ph-err { color: mix(#e0453a, @fg, 0.25); font-size: 9pt; }
 popover.ph-rename, popover.ph-rename > * { background: @card; color: @fg; }
 """
 
@@ -106,6 +106,8 @@ def _load_css(a):
         print("[sekai-photos] CSS 오류:", e.message, file=sys.stderr, flush=True)
         return None
     Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_USER)
+    from sekaishell import theme as _sekai_theme
+    _sekai_theme.apply_contrast_css()   # 대비 테마면 테두리·초점을 앱 CSS 위에
     return prov
 
 

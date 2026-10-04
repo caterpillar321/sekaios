@@ -21,7 +21,15 @@ PALETTES = {
         "fg": "#1c1c21",
         "titlebar_bg": "#f3f3f5",  # 창 제목줄 — GTK 라이트 앱 본문(#f6f5f4)에 맞춤
     },
+    # 대비 테마 (설정 › 접근성) — 윈도우 11 의 "야간 하늘": 검정 바탕 · 흰 글자 · 노란 선택 · 보라빛 링크
+    "contrast": {
+        "bg": "#000000",
+        "surface": "#000000",
+        "fg": "#ffffff",
+        "titlebar_bg": "#000000",
+    },
 }
+CONTRAST_ACCENT = "#ffff00"        # 대비 테마의 강조색 (선택·초점) — 사용자가 고른 강조색 대신
 
 # 모드별 GTK 테마·아이콘 테마 — 작업 표시줄(패널) 아이콘이 Papirus·Papirus-Dark 는 흰색,
 #   Papirus-Light 는 어두운 색이다. 밝은 작업 표시줄엔 Papirus-Light 를 써야 트레이 아이콘이 보인다
@@ -30,6 +38,9 @@ PALETTES = {
 GTK = {
     "dark":  {"gtk": "Sekai-Dark",   "icons": "Papirus-Dark", "scheme": "prefer-dark", "prefer_dark": 1},
     "light": {"gtk": "Sekai-Light",  "icons": "Papirus-Light", "scheme": "prefer-light", "prefer_dark": 0},
+    # 대비 테마 — GTK3·GTK4 는 GTK 의 고대비 위에 테두리·노란 선택을 얹은 Sekai-Contrast, libadwaita 는 a11y high-contrast
+    "contrast": {"gtk": "Sekai-Contrast", "gtk4": "Sekai-Contrast", "icons": "Papirus-Dark",
+                 "scheme": "prefer-dark", "prefer_dark": 1},
 }
 
 
@@ -50,7 +61,7 @@ def apply_gtk_settings(gtk_settings, mode):
     """이 프로그램의 GtkSettings 에 모드를 적용 (셸 프로그램·설정 앱이 스스로 부른다)"""
     if gtk_settings is None:
         return
-    gtk_settings.set_property("gtk-application-prefer-dark-theme", mode == "dark")
+    gtk_settings.set_property("gtk-application-prefer-dark-theme", mode in ("dark", "contrast"))
     gtk_settings.set_property("gtk-icon-theme-name", icon_theme(mode))
     # 대화상자 제목줄은 WorldLink 가 그린다 (제목 + 닫기). GTK 는 Wayland 에서 이 값을 늘 켜서 확인 창이 제목 띠를
     #   스스로 한 겹 더 그렸다 — 제목줄이 두 겹. 끄면 대화상자 단추도 아래쪽 줄에 놓인다 (윈도우처럼)
@@ -93,10 +104,18 @@ def apply_system(mode):
     #   (테마 이름은 설정 포털로 바로 바뀐다). libadwaita·Chromium 은 color-scheme 을 본다.
     vals = {"gtk-application-prefer-dark-theme": 0, "gtk-theme-name": g["gtk"], "gtk-icon-theme-name": icons}
     for d in ("gtk-3.0", "gtk-4.0"):
+        v = dict(vals, **({"gtk-theme-name": g["gtk4"]} if d == "gtk-4.0" and g.get("gtk4") else {}))
         try:
-            _write_ini(os.path.join(home, ".config", d, "settings.ini"), vals)
+            _write_ini(os.path.join(home, ".config", d, "settings.ini"), v)
         except OSError:
             pass
+    # 대비 테마: libadwaita·포털(설정의 contrast)이 보는 a11y 고대비 (GTK 앱의 테두리·초점은 Sekai-Contrast 테마가)
+    try:
+        subprocess.run(["gsettings", "set", "org.gnome.desktop.a11y.interface", "high-contrast",
+                        "true" if mode == "contrast" else "false"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+    except Exception:
+        pass
     try:
         write_window_controls(mode, home)
     except OSError:
@@ -149,6 +168,24 @@ _ADW = {
         "warning_bg_color": "#F4B400", "warning_fg_color": "rgba(0, 0, 0, 0.87)", "warning_color": "#B06F00",
         "error_bg_color": "#D93025", "error_fg_color": "#ffffff", "error_color": "#D93025",
     },
+}
+_ADW["contrast"] = {
+    "window_bg_color": "#000000", "window_fg_color": "#ffffff",
+    "view_bg_color": "#000000", "view_fg_color": "#ffffff",
+    "headerbar_bg_color": "#000000", "headerbar_fg_color": "#ffffff", "headerbar_backdrop_color": "#000000",
+    "headerbar_border_color": "#ffffff", "headerbar_shade_color": "#ffffff",
+    "sidebar_bg_color": "#000000", "sidebar_fg_color": "#ffffff", "sidebar_backdrop_color": "#000000",
+    "secondary_sidebar_bg_color": "#000000", "secondary_sidebar_fg_color": "#ffffff",
+    "secondary_sidebar_backdrop_color": "#000000",
+    "card_bg_color": "#000000", "card_fg_color": "#ffffff",
+    "dialog_bg_color": "#000000", "dialog_fg_color": "#ffffff",
+    "popover_bg_color": "#000000", "popover_fg_color": "#ffffff",
+    "thumbnail_bg_color": "#000000", "thumbnail_fg_color": "#ffffff",
+    "accent_color": "#ffff00", "accent_bg_color": "#ffff00", "accent_fg_color": "#000000",
+    "destructive_bg_color": "#ff4040", "destructive_fg_color": "#000000", "destructive_color": "#ff8080",
+    "success_bg_color": "#3ff23f", "success_fg_color": "#000000", "success_color": "#3ff23f",
+    "warning_bg_color": "#ffff00", "warning_fg_color": "#000000", "warning_color": "#ffff00",
+    "error_bg_color": "#ff4040", "error_fg_color": "#000000", "error_color": "#ff8080",
 }
 _SHAPES = {
     "min": '<path d="M0 5.5H10"/>',
@@ -214,7 +251,8 @@ def _adw_colors(mode):
     sub = {"ACCENT": acc, "ACCENT_FG": "rgba(0, 0, 0, 0.87)" if light_acc else "#ffffff",
            # 글자로 쓰는 강조색 — 다크 바탕엔 조금 밝게, 라이트 바탕엔 어둡게 (읽히게)
            "ACCENT_TEXT": _mix(acc, "#ffffff", 0.2) if mode == "dark" else _mix(acc, "#000000", 0.45)}
-    return {k: sub.get(v, v) for k, v in _ADW["dark" if mode == "dark" else "light"].items()}
+    pal = _ADW.get(mode, _ADW["light"])
+    return {k: sub.get(v, v) for k, v in pal.items()}
 
 
 def _adw_css(mode):
@@ -234,7 +272,7 @@ def write_window_controls(mode, home=None):
                               f'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10">'
                               f'<g fill="none" stroke="{col}" stroke-width="1">{body}</g></svg>\n')
     _write_if_changed(os.path.join(d, CONTROLS_CSS),
-                      _adw_css(mode) + _CONTROLS.replace("TONE", "dark" if mode == "dark" else "light"))
+                      _adw_css(mode) + _CONTROLS.replace("TONE", "dark" if mode in ("dark", "contrast") else "light"))
     for old in ("sekai-window-controls.css", ".sekai-window-controls"):     # 이 판을 만들며 잠깐 쓴 이름
         try:
             os.remove(os.path.join(d, old))
@@ -253,6 +291,34 @@ def write_window_controls(mode, home=None):
     if CONTROLS_CSS not in old:
         _write_if_changed(css, f'@import url("{CONTROLS_CSS}");\n' + old)
     open(mark, "w").close()
+
+
+# ── 대비 테마의 테두리·초점 — Sekai-Contrast 테마(sekai-de)의 sekai-contrast.css 를 SekaiOS 앱이 한 번 더 ──
+CONTRAST_CSS = "/usr/share/themes/Sekai-Contrast/gtk-3.0/sekai-contrast.css"
+_contrast_prov = None
+
+
+def apply_contrast_css(screen=None):
+    """SekaiOS 앱: 대비 테마면 테두리·초점 CSS 를 앱 CSS 보다 위(USER+5)에 얹는다 — 테마 CSS 는 앱 CSS 보다 아래라
+    앱이 칸 테두리를 지운 곳(설정의 카드 등)에선 졌다. 앱이 자기 CSS 를 올린 뒤 부른다 (GTK3).
+    대비 테마가 꺼져 있으면 얹었던 것을 내린다 (패널은 SIGHUP 때마다 다시 부른다)"""
+    global _contrast_prov
+    try:
+        import gi
+        gi.require_version("Gtk", "3.0")
+        from gi.repository import Gdk, Gtk
+        from . import config
+        on = (config.settings("appearance") or {}).get("mode") == "contrast"
+        screen = screen or Gdk.Screen.get_default()
+        if _contrast_prov is not None:
+            Gtk.StyleContext.remove_provider_for_screen(screen, _contrast_prov)
+            _contrast_prov = None
+        if on and os.path.exists(CONTRAST_CSS):
+            _contrast_prov = Gtk.CssProvider()
+            _contrast_prov.load_from_path(CONTRAST_CSS)
+            Gtk.StyleContext.add_provider_for_screen(screen, _contrast_prov, Gtk.STYLE_PROVIDER_PRIORITY_USER + 5)
+    except Exception:
+        pass
 
 
 # ── 글꼴 다듬기 (윈도우의 ClearType) ──

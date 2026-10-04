@@ -1,0 +1,4 @@
+/* SekaiOS 대비 테마 — GTK3 에 들어 있는 고대비(반전) 위에 sekai-contrast.css.
+   테마 이름이 바뀌면 열려 있는 앱도 바로 다시 읽는다 (사용자 gtk.css 는 앱이 뜰 때 한 번만 읽어 끄기를 못 따랐다) */
+@import url("resource:///org/gtk/libgtk/theme/HighContrast/gtk-contained-inverse.css");
+@import url("sekai-contrast.css");

@@ -8,7 +8,7 @@ OUT=/build/deb
 #   예전엔 여기서 원본에 patch-*.py 를 적용했다. 이제 그 고친 것들은 포크의 커밋이다 (git log v0.50.1..sekai).
 #   재현할 수 있게 커밋을 고정한다 — 합성기를 고치면 포크에 커밋·푸시하고 여기 REF 와 rev_for 를 올린다.
 SEKAICOMP_URL="https://github.com/caterpillar321/worldlink.git"
-SEKAICOMP_REF="e5baf65c0fe04e70ff4a227034c41484e574bd26"
+SEKAICOMP_REF="e9d5e7161d8fbc85e8601053b8267478bcf91b3e"
 MAINT="SekaiOS <sekai@localhost>"
 REV="sekai2"
 # 패키지별 리비전 (고친 패키지만 올린다 → apt 가 그 패키지만 업그레이드)
@@ -66,7 +66,8 @@ REV="sekai2"
 #      sekai27: 최소·최대 크기에 창 영역 시작점을 더하지 않는다 — 그림자 둔 대화상자의 크기·누름 (포크 007e06b) — hyprbars sekai24 · hyprexpo sekai12
 #      sekai28: 장식 규약을 안 쓰는 창(GTK4·libadwaita)은 창 영역이 안쪽에서 시작했는지로 제목줄을 앱이 그리는지 안다 (포크 9c98341), 최소화를 할 수 있다고 알림 — GTK4 최소화 단추 (포크 7415372), 앱 제목줄 끌기의 기준점은 누른 자리 (포크 53fd314) — hyprbars sekai25 · hyprexpo sekai13
 #      sekai29: 끄는 중 Esc 로 취소, 제목줄 오른쪽 클릭 창 메뉴(sekaiwinmenu), 모달 대화상자가 있으면 부모를 누를 때 대화상자로 (포크 e5baf65) — hyprbars sekai26 · hyprexpo sekai14
-rev_for() { case "$1" in hyprbars) echo sekai26 ;; hyprexpo) echo sekai14 ;; worldlink|sekaicomp|hyprland) echo sekai29 ;; *) echo "$REV" ;; esac; }
+#      sekai30: 접근성 — 고정 키 · 필터 키(반복 입력 무시 · 누르고 있어야 입력), Shift 다섯 번 · 오른쪽 Shift 8초 알림, setcursor 가 지금 커서를 바로 다시 그림 (포크 e9d5e71) — hyprbars sekai27 · hyprexpo sekai15
+rev_for() { case "$1" in hyprbars) echo sekai27 ;; hyprexpo) echo sekai15 ;; worldlink|sekaicomp|hyprland) echo sekai30 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"

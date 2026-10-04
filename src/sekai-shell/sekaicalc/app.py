@@ -58,7 +58,7 @@ CALC_CSS = """
 .calc-window { background: @c_bg; color: @fg; }
 .c-column { padding: 0 4px 4px 4px; }
 .c-top { padding: 6px 2px 0 2px; }
-label.c-title { font-size: 20px; font-weight: 700; color: @fg; }
+label.c-title { font-size: 15pt; font-weight: 700; color: @fg; }
 button.c-flat {
     background: transparent;
     background-image: none;
@@ -73,8 +73,8 @@ button.c-flat image { color: @fg; }
 
 /* 식 줄과 결과 */
 .c-display { padding: 8px 12px 4px 12px; }
-label.c-expr { color: @text2; font-size: 14px; }
-label.c-result { color: @fg; font-weight: 600; font-size: 46px; }
+label.c-expr { color: @text2; font-size: 10.5pt; }
+label.c-result { color: @fg; font-weight: 600; font-size: 34.5pt; }
 
 /* 공학용 — DEG · F-E · 삼각법 · 함수 */
 button.c-mode-btn {
@@ -86,7 +86,7 @@ button.c-mode-btn {
     padding: 5px 10px;
     min-height: 0;
 }
-button.c-mode-btn label { font-size: 13px; font-weight: 600; color: @fg; }
+button.c-mode-btn label { font-size: 9.75pt; font-weight: 600; color: @fg; }
 button.c-mode-btn:hover { background: @c_fn_hi; }
 button.c-mode-btn:checked { background: alpha(@accent, 0.22); }
 button.c-mode-btn:disabled label { color: @text3; }
@@ -103,7 +103,7 @@ button.c-mem {
     padding: 6px 0;
     min-height: 0;
 }
-button.c-mem label { font-size: 12px; font-weight: 600; color: @fg; }
+button.c-mem label { font-size: 9pt; font-weight: 600; color: @fg; }
 button.c-mem:hover { background: @c_fn_hi; }
 button.c-mem:disabled label { color: @text3; }
 
@@ -122,10 +122,10 @@ button.c-key {
 }
 button.c-key label { color: @fg; }
 button.c-fn { background-color: @c_fn; }
-button.c-fn label { font-size: 15px; }
+button.c-fn label { font-size: 11.25pt; }
 button.c-fn:hover { background-color: @c_fn_hi; }
 button.c-num { background-color: @c_num; }
-button.c-num label { font-size: 18px; font-weight: 600; }
+button.c-num label { font-size: 13.5pt; font-weight: 600; }
 button.c-num:hover { background-color: @c_num_hi; }
 button.c-key:active, button.c-key:checked { background-color: @c_down; }
 button.c-key:active label { color: @text2; }
@@ -133,7 +133,7 @@ button.c-key:disabled { background-color: alpha(@c_fn, 0.5); }
 button.c-key:disabled label { color: @text3; }
 button.c-fn.on { background-color: alpha(@accent, 0.28); }
 button.c-eq { background-color: @accent; border-color: mix(@accent, #000000, 0.08); }
-button.c-eq label { color: @c_on_accent; font-size: 22px; font-weight: 500; }
+button.c-eq label { color: @c_on_accent; font-size: 16.5pt; font-weight: 500; }
 button.c-eq:hover { background-color: mix(@accent, @c_bg, 0.10); }
 button.c-eq:active { background-color: mix(@accent, @c_bg, 0.22); }
 button.c-eq:active label { color: alpha(@c_on_accent, 0.8); }
@@ -152,16 +152,16 @@ button.c-tab {
     margin-right: 14px;
     border-bottom: 3px solid transparent;
 }
-button.c-tab label { font-size: 14px; font-weight: 600; color: @text2; }
+button.c-tab label { font-size: 10.5pt; font-weight: 600; color: @text2; }
 button.c-tab:hover label { color: @fg; }
 button.c-tab.on { border-bottom-color: @accent; }
 button.c-tab.on label { color: @fg; }
 list.c-list, .c-list row { background: transparent; }
 .c-item { padding: 8px 10px; border-radius: 6px; }
 .c-item:hover { background: @c_fn_hi; }
-label.c-item-expr { color: @text2; font-size: 13px; }
-label.c-item-value { color: @fg; font-size: 20px; font-weight: 600; }
-label.c-empty { color: @text2; font-size: 13px; padding: 12px 12px; }
+label.c-item-expr { color: @text2; font-size: 9.75pt; }
+label.c-item-value { color: @fg; font-size: 15pt; font-weight: 600; }
+label.c-empty { color: @text2; font-size: 9.75pt; padding: 12px 12px; }
 .c-mem-btns { opacity: 0; }
 .c-item:hover .c-mem-btns { opacity: 1; }
 button.c-mem-item {
@@ -173,7 +173,7 @@ button.c-mem-item {
     padding: 2px 8px;
     min-height: 0;
 }
-button.c-mem-item label { font-size: 11px; font-weight: 600; color: @fg; }
+button.c-mem-item label { font-size: 8.25pt; font-weight: 600; color: @fg; }
 button.c-mem-item:hover { background: @c_num_hi; }
 .c-listbar { padding: 2px; }
 
@@ -192,7 +192,7 @@ button.c-mem-item:hover { background: @c_num_hi; }
     padding: 6px 6px;
     box-shadow: 2px 0 12px alpha(#000000, 0.25);
 }
-label.c-nav-cap { font-size: 13px; font-weight: 600; color: @text2; padding: 12px 10px 6px 10px; }
+label.c-nav-cap { font-size: 9.75pt; font-weight: 600; color: @text2; padding: 12px 10px 6px 10px; }
 button.c-nav-row {
     background: transparent;
     background-image: none;
@@ -209,7 +209,7 @@ button.c-nav-row.on {
     background-color: @c_fn;
     background-image: linear-gradient(@accent, @accent);
 }
-button.c-nav-row label { color: @fg; font-size: 14px; }
+button.c-nav-row label { color: @fg; font-size: 10.5pt; }
 button.c-nav-row image { color: @fg; }
 """
 
@@ -243,6 +243,8 @@ def _load_css(a):
         print("[sekai-calc] CSS 오류:", e.message, file=sys.stderr, flush=True)
         return None
     Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_USER)
+    from sekaishell import theme as _sekai_theme
+    _sekai_theme.apply_contrast_css()   # 대비 테마면 테두리·초점을 앱 CSS 위에
     return prov
 
 

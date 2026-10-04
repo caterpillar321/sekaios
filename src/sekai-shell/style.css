@@ -28,7 +28,7 @@
 /* ── 기본 ─────────────────────────────────────────────────────── */
 * {
     font-family: "Pretendard", "Pretendard Variable", "NanumGothic", sans-serif;
-    font-size: 13px;
+    font-size: 9.75pt;
     font-feature-settings: "tnum";   /* 시계·숫자 폭 고정 → 깜빡이며 흔들리지 않게 */
     -gtk-icon-shadow: none;
     text-shadow: none;
@@ -126,7 +126,7 @@ window.toast-stack {
 .tray { padding: 0 2px; }
 .tray-item.attention { background: alpha(@accent, 0.18); }
 /* 한/영 표시 — ibus 태극 그림 대신 글자 (가 · A) */
-.tray-item .ime-mode { font-size: 14px; color: @text2; min-width: 18px; }
+.tray-item .ime-mode { font-size: 10.5pt; color: @text2; min-width: 18px; }
 .tray-item:hover .ime-mode { color: @fg; }
 
 /* ═══ 빠른 설정 (Win+A · 네트워크·음량·배터리 아이콘) ═══════════════ */
@@ -175,13 +175,13 @@ window.toast-stack {
 .qs-tile.on .qs-tile-more { border-left-color: alpha(@on_accent, 0.25); }
 .qs-tile.on .qs-tile-main:hover, .qs-tile.on .qs-tile-more:hover   { background: alpha(#ffffff, 0.16); }
 .qs-tile.on .qs-tile-main:active, .qs-tile.on .qs-tile-more:active { background: alpha(#000000, 0.10); }
-.qs-tile-label { font-size: 12px; color: @fg; }
+.qs-tile-label { font-size: 9pt; color: @fg; }
 .qs-tile-main:disabled image, .qs-tile-label:disabled { color: @text3; }
 
 /* 밝기·음량 */
 .qs-slider scale { padding: 6px 4px; }
 .qs-slider image { color: @text2; }
-.qs-value { font-size: 12px; color: @text2; }
+.qs-value { font-size: 9pt; color: @text2; }
 .qs-slider.muted scale highlight { background: @text3; }
 .qs-slider.muted scale slider { border-color: @text3; }
 
@@ -191,7 +191,7 @@ window.toast-stack {
 .qs-icon-btn:hover image { color: @fg; }
 .qs-icon-btn:active { background: @pressed; }
 /* › · ‹ (세부 보기) */
-.qs-chevron { font-size: 16px; color: @text2; min-width: 12px; margin-top: -2px; }
+.qs-chevron { font-size: 12pt; color: @text2; min-width: 12px; margin-top: -2px; }
 .qs-icon-btn:hover .qs-chevron, .qs-tile-more:hover .qs-chevron { color: @fg; }
 .qs-tile.on .qs-chevron { color: @on_accent; }
 
@@ -204,11 +204,11 @@ window.toast-stack {
     min-height: 36px;
 }
 .qs-battery image { color: @fg; }
-.qs-battery-pct   { font-size: 13px; font-weight: 600; color: @fg; }
-.qs-battery-state { font-size: 12px; color: @text2; }
+.qs-battery-pct   { font-size: 9.75pt; font-weight: 600; color: @fg; }
+.qs-battery-state { font-size: 9pt; color: @text2; }
 
 /* 세부 보기 (Wi-Fi · 블루투스 · 출력 장치) */
-.qs-title { font-size: 15px; font-weight: 700; color: @fg; }
+.qs-title { font-size: 11.25pt; font-weight: 700; color: @fg; }
 .qs-note  { color: @text3; padding: 20px 8px; }
 .qs-list  { padding: 2px 0; }
 .qs-row { border-radius: 8px; }
@@ -220,11 +220,11 @@ window.toast-stack {
 .qs-row.current .qs-row-btn image { color: @accent; }
 .qs-row .qs-row-btn image.qs-row-trail { color: @text3; }     /* 잠금 — 연결된 줄에서도 흐리게 */
 .qs-row .qs-row-btn image.qs-row-check { color: @accent; }    /* 고른 출력 장치 */
-.qs-row-name { font-size: 13px; color: @fg; }
+.qs-row-name { font-size: 9.75pt; color: @fg; }
 .qs-row.current .qs-row-name { font-weight: 600; }
-.qs-row-sub  { font-size: 11px; color: @text2; }
+.qs-row-sub  { font-size: 8.25pt; color: @text2; }
 .qs-row-actions { padding: 2px 10px 10px 40px; }
-.qs-status { font-size: 12px; color: @text2; }
+.qs-status { font-size: 9pt; color: @text2; }
 .qs-status.error { color: @danger; }
 .qs-entry {
     background: @raised;
@@ -276,7 +276,7 @@ window.toast-stack {
     background: @accent;
     color: @on_accent;
     border-radius: 999px;
-    font-size: 10px;
+    font-size: 7.5pt;
     font-weight: 700;
     padding: 0 5px;
     min-width: 8px;
@@ -291,8 +291,8 @@ window.toast-stack {
     min-height: 40px;
 }
 .clock:hover { background: @hover; }
-.clock-time { font-size: 13px; font-weight: 600; color: @fg; }
-.clock-date { font-size: 11px; color: @text2; }
+.clock-time { font-size: 9.75pt; font-weight: 600; color: @fg; }
+.clock-date { font-size: 8.25pt; color: @text2; }
 
 /* ═══ 시작 메뉴 ═══════════════════════════════════════════════════ */
 .menu-root {
@@ -330,21 +330,21 @@ window.toast-stack {
     padding: 8px 12px;
     margin: 0 8px 14px 0;
     min-height: 22px;
-    font-size: 14px;
+    font-size: 10.5pt;
     box-shadow: none;
 }
 .menu-search:focus { border-bottom-color: @accent; }
 .menu-search image { color: @text3; }
 
 .section-title {
-    font-size: 12px;
+    font-size: 9pt;
     font-weight: 600;
     color: @text2;
     margin: 2px 4px 8px 4px;
 }
 
 .letter-header {
-    font-size: 12px;
+    font-size: 9pt;
     font-weight: 700;
     color: @accent;
     padding: 12px 10px 4px 10px;
@@ -359,17 +359,17 @@ window.toast-stack {
 .app-list row:hover    { background: @hover; }
 .app-list row:selected { background: @raised; }
 .app-row { padding: 7px 10px; }
-.app-row label { font-size: 13px; color: @fg; }
+.app-row label { font-size: 9.75pt; color: @fg; }
 
 /* 검색 결과 — 가장 일치하는 항목 · 앱 · 설정 · 파일 묶음 (윈도우 검색처럼) */
 .result-header {
-    font-size: 12px;
+    font-size: 9pt;
     font-weight: 600;
     color: @text2;
     padding: 12px 10px 4px 10px;
 }
-.app-row .result-sub { font-size: 11px; color: @text3; }
-.app-row .best-title { font-size: 15px; font-weight: 600; }
+.app-row .result-sub { font-size: 8.25pt; color: @text3; }
+.app-row .best-title { font-size: 11.25pt; font-weight: 600; }
 .app-list row.best-row .app-row { padding: 10px 10px; }
 /* 검색 칸에 초점이 있어도 ↓/↑ 로 고른 행이 보이게 — 왼쪽 강조 막대 */
 .app-list.searching row:selected {
@@ -377,7 +377,7 @@ window.toast-stack {
     box-shadow: inset 3px 0 @accent;
 }
 .search-empty {
-    font-size: 13px;
+    font-size: 9.75pt;
     color: @text3;
     padding: 32px 16px;
 }
@@ -391,7 +391,7 @@ window.toast-stack {
     min-width: 88px;
     background: transparent;
 }
-.tile label { font-size: 12px; color: @text2; }
+.tile label { font-size: 9pt; color: @text2; }
 .tile:hover { background: @hover; }
 .tile:hover label { color: @fg; }
 .tile:active { background: @pressed; }
@@ -411,7 +411,7 @@ popover.power-pop .power-btn { min-width: 170px; }
     border-radius: 6px;
     padding: 8px 12px;
 }
-.power-btn label { font-size: 13px; }
+.power-btn label { font-size: 9.75pt; }
 .power-btn image { color: @text2; }
 .power-btn:hover { background: @hover; }
 .power-btn.pw-off:hover image,
@@ -425,9 +425,9 @@ popover.power-pop .power-btn { min-width: 170px; }
     padding: 16px;
 }
 
-.pop-title    { font-size: 15px; font-weight: 700; color: @fg; }
-.pop-subtitle { font-size: 12px; color: @text2; }
-.pop-value    { font-size: 13px; font-weight: 600; color: @text2; }
+.pop-title    { font-size: 11.25pt; font-weight: 700; color: @fg; }
+.pop-subtitle { font-size: 9pt; color: @text2; }
+.pop-value    { font-size: 9.75pt; font-weight: 600; color: @text2; }
 
 .pop-btn {
     background: @raised;
@@ -488,7 +488,7 @@ calendar {
 calendar.header  { color: @fg; font-weight: 600; border: none; }
 calendar.button  { color: @text2; background: transparent; border: none; box-shadow: none; }
 calendar.button:hover { color: @fg; }
-calendar.highlight { color: @text3; font-size: 11px; font-weight: 600; }
+calendar.highlight { color: @text3; font-size: 8.25pt; font-weight: 600; }
 calendar:indeterminate { color: alpha(@fg, 0.25); }
 calendar:selected {
     background: @accent;
@@ -501,7 +501,7 @@ calendar:selected {
 .tray-menu .popup-root { padding: 6px; }
 .menu-head {
     color: @text3;
-    font-size: 11px;
+    font-size: 8.25pt;
     font-weight: 600;
     padding: 6px 10px 6px 10px;
 }
@@ -537,10 +537,10 @@ calendar:selected {
 .noti-card.critical { border-color: alpha(@danger, 0.55); }
 .noti-card.critical .noti-app { color: @danger; }
 
-.noti-app     { color: @text2; font-size: 11px; font-weight: 600; }
-.noti-time    { color: @text3; font-size: 11px; }
-.noti-summary { color: @fg; font-size: 14px; font-weight: 600; }
-.noti-body    { color: @text2; font-size: 13px; }
+.noti-app     { color: @text2; font-size: 8.25pt; font-weight: 600; }
+.noti-time    { color: @text3; font-size: 8.25pt; }
+.noti-summary { color: @fg; font-size: 10.5pt; font-weight: 600; }
+.noti-body    { color: @text2; font-size: 9.75pt; }
 
 .noti-close {
     border-radius: 6px;
@@ -556,7 +556,7 @@ calendar:selected {
     border: 1px solid @line;
     border-radius: 8px;
     padding: 6px 14px;
-    font-size: 12px;
+    font-size: 9pt;
 }
 .noti-list .noti-action { background: @hover; }
 .noti-action:hover { background: @pressed; }
@@ -579,14 +579,14 @@ window.switcher-window, window.osd-window { background: transparent; color: @fg;
     border: 2px solid transparent;
     min-width: 116px;
 }
-.switch-card label { font-size: 12px; color: @text2; }
+.switch-card label { font-size: 9pt; color: @text2; }
 .switch-card.minimized image { opacity: 0.55; }
 .switch-card.selected {
     background: alpha(@fg, 0.08);
     border-color: @accent;
 }
 .switch-card.selected label { color: @fg; }
-.switcher-title { font-size: 13px; font-weight: 600; color: @fg; padding: 2px 8px 0 8px; }
+.switcher-title { font-size: 9.75pt; font-weight: 600; color: @fg; padding: 2px 8px 0 8px; }
 
 /* ═══ 음량·밝기 표시 (OSD) ══════════════════════════════════════════ */
 .osd {
@@ -606,8 +606,8 @@ window.switcher-window, window.osd-window { background: transparent; color: @fg;
 .osd levelbar block.filled { background: @accent; }
 .osd levelbar block.empty  { background: transparent; }
 .osd levelbar.muted block.filled { background: @text3; }
-.osd-value { font-size: 13px; font-weight: 600; color: @fg; }
-.osd-text  { font-size: 13px; color: @fg; }
+.osd-value { font-size: 9.75pt; font-weight: 600; color: @fg; }
+.osd-text  { font-size: 9.75pt; color: @fg; }
 
 /* ═══ 클립보드 기록 ════════════════════════════════════════════════ */
 .clip-list, .clip-list row { background: transparent; }
@@ -623,7 +623,7 @@ window.switcher-window, window.osd-window { background: transparent; color: @fg;
     background: @hover;
     border-color: alpha(@accent, 0.7);
 }
-.clip-text { color: @fg; font-size: 13px; }
+.clip-text { color: @fg; font-size: 9.75pt; }
 
 /* ═══ 클릭 캐처 (팝업 바깥을 살짝 어둡게) ═══════════════════════════ */
 window.click-catcher { background: transparent; }
@@ -648,7 +648,7 @@ tooltip {
     color: @fg;
 }
 /* 글자색도 — 라이트 모드에서 Adwaita 기본(흰 글자)이 남아 밝은 바탕에 안 보였다 */
-tooltip label { font-size: 12px; color: @fg; }
+tooltip label { font-size: 9pt; color: @fg; }
 
 /* ═══ 끌어서 스냅 미리보기 (윈도우 11) ═══════════════════════════ */
 window.snap-preview-win { background: transparent; }
@@ -691,7 +691,7 @@ window.snap-assist-win { background: transparent; }
     border-radius: 12px;
     padding: 16px;
 }
-.snap-assist-title { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+.snap-assist-title { font-size: 11.25pt; font-weight: 600; margin-bottom: 4px; }
 button.snap-card {
     background: @raised;
     background-image: none;
@@ -739,9 +739,23 @@ button.snap-card:hover { background: @hover; border-color: @accent; }
 }
 .preview-card.hover { background-color: @hover; }
 .preview-card.active { border-color: alpha(@accent, 0.6); }
-.preview-title { font-size: 12px; color: @fg; }
+.preview-title { font-size: 9pt; color: @fg; }
 .preview-close { min-width: 22px; min-height: 22px; padding: 0; border: none; border-radius: 6px; opacity: 0.7; }
 .preview-close:hover { background-color: @danger; opacity: 1; }
 .preview-close:hover image { color: #ffffff; }
 .preview-thumb { border-radius: 4px; }
-menu.task-menu, .task-menu menuitem { font-size: 13px; }
+menu.task-menu, .task-menu menuitem { font-size: 9.75pt; }
+
+/* ═══ 접근성 — 고정 키 표시 (걸림은 테두리, 잠금은 채움) ═══════════════ */
+.sticky-badge-win { background: transparent; }
+.sticky-badge { padding: 6px; }
+.sticky-key {
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 2px solid @accent;
+    background: alpha(@surface, 0.92);
+    color: @fg;
+    font-weight: 700;
+}
+.sticky-key.locked { background: @accent; color: @bg; }
+

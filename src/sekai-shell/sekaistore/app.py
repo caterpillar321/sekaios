@@ -39,15 +39,15 @@ button.nav-btn {
 button.nav-btn:hover { background: @hover; }
 button.nav-btn.on { background: @card; }
 button.nav-btn.on image { color: @accent; }
-button.nav-btn label { font-size: 11px; color: @text2; }
+button.nav-btn label { font-size: 8.25pt; color: @text2; }
 button.nav-btn.on label { color: @fg; font-weight: 600; }
 .store-top { padding: 10px 24px 6px 16px; }
 entry.store-search { min-width: 440px; border-radius: 8px; }
 button.flat-btn { background: transparent; background-image: none; border: none; box-shadow: none; border-radius: 6px; }
 button.flat-btn:hover { background: @hover; }
 .page-pad { padding: 10px 32px 32px 32px; }
-label.page-h { font-size: 26px; font-weight: 700; color: @fg; }
-label.sec-h { font-size: 18px; font-weight: 700; color: @fg; }
+label.page-h { font-size: 19.5pt; font-weight: 700; color: @fg; }
+label.sec-h { font-size: 13.5pt; font-weight: 700; color: @fg; }
 button.link-btn { background: transparent; background-image: none; border: none; box-shadow: none; padding: 2px 6px; }
 button.link-btn label { color: @accent; }
 
@@ -58,8 +58,8 @@ button.store-tile {
 button.store-tile:hover { background: @hover; }
 button.store-tile:active { background: @pressed; }
 label.tile-name { font-weight: 600; color: @fg; }
-label.tile-sub { color: @text2; font-size: 12.5px; }
-label.tile-badge { color: @text3; font-size: 12px; }
+label.tile-sub { color: @text2; font-size: 9.38pt; }
+label.tile-badge { color: @text3; font-size: 9pt; }
 label.tile-badge.on { color: @accent; font-weight: 600; }
 
 .hero { border-radius: 14px; padding: 30px 34px; border: 1px solid @line; }
@@ -67,8 +67,8 @@ label.tile-badge.on { color: @accent; font-weight: 600; }
 .hero-1 { background-image: linear-gradient(110deg, mix(#c2185b, @surface, 0.55), mix(#c2185b, @surface, 0.85)); }
 .hero-2 { background-image: linear-gradient(110deg, mix(#3949ab, @surface, 0.50), mix(#3949ab, @surface, 0.85)); }
 .hero-3 { background-image: linear-gradient(110deg, mix(#ef6c00, @surface, 0.55), mix(#ef6c00, @surface, 0.85)); }
-label.hero-name { font-size: 30px; font-weight: 800; color: @fg; }
-label.hero-tag { font-size: 16px; font-weight: 600; color: @fg; }
+label.hero-name { font-size: 22.5pt; font-weight: 800; color: @fg; }
+label.hero-tag { font-size: 12pt; font-weight: 600; color: @fg; }
 label.hero-sub { color: @fg; }
 button.dot { min-width: 8px; min-height: 8px; padding: 0; border-radius: 999px; border: none;
              background: alpha(@fg, 0.25); background-image: none; box-shadow: none; }
@@ -81,10 +81,10 @@ button.chip.on { background: @accent; border-color: @accent; }
 button.chip.on label { color: @on_accent; font-weight: 600; }
 
 .detail-head { background: @card; border: 1px solid @line; border-radius: 12px; padding: 24px 28px; }
-label.detail-name { font-size: 26px; font-weight: 700; color: @fg; }
+label.detail-name { font-size: 19.5pt; font-weight: 700; color: @fg; }
 label.detail-dev { color: @accent; }
 label.detail-sum { color: @fg; }
-label.detail-meta { color: @text2; font-size: 12.5px; }
+label.detail-meta { color: @text2; font-size: 9.38pt; }
 label.detail-err { color: #ff6b6b; }
 label.info-k { color: @text2; }
 label.info-v { color: @fg; }
@@ -109,6 +109,8 @@ def _load_css(a):
         print("[sekai-store] CSS 오류:", e.message, file=sys.stderr, flush=True)
         return None
     Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_USER)
+    from sekaishell import theme as _sekai_theme
+    _sekai_theme.apply_contrast_css()   # 대비 테마면 테두리·초점을 앱 CSS 위에
     return prov
 
 

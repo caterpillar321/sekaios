@@ -1,0 +1,3 @@
+/* SekaiOS 대비 테마 — GTK4 에 들어 있는 고대비(어두움) 위에 sekai-contrast.css */
+@import url("resource:///org/gtk/libgtk/theme/Default/Default-hc-dark.css");
+@import url("sekai-contrast.css");

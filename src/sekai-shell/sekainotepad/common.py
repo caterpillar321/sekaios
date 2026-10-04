@@ -69,7 +69,7 @@ notebook.np-tabs > header > tabs > tab {
 }
 notebook.np-tabs > header > tabs > tab:hover { background: alpha(@fg, 0.06); }
 notebook.np-tabs > header > tabs > tab:checked { background: @np_bar; }
-notebook.np-tabs > header > tabs > tab label { color: @text2; font-size: 13px; }
+notebook.np-tabs > header > tabs > tab label { color: @text2; font-size: 9.75pt; }
 notebook.np-tabs > header > tabs > tab:hover label,
 notebook.np-tabs > header > tabs > tab:checked label { color: @fg; }
 notebook.np-tabs > header > arrow { color: @text2; min-width: 22px; min-height: 22px; }
@@ -85,7 +85,7 @@ button.np-tabclose {
 }
 button.np-tabclose:hover { background: alpha(@fg, 0.10); }
 button.np-tabclose image { color: @text2; }
-label.np-dot { font-size: 9px; color: @fg; }
+label.np-dot { font-size: 6.75pt; color: @fg; }
 /* 저장하지 않은 탭: 닫기 단추 자리에 ● — 탭에 마우스를 올리면 다시 × (윈도우 11 메모장처럼) */
 .np-tab .np-dot { opacity: 0; }
 .np-tab.modified .np-dot { opacity: 1; }
@@ -114,11 +114,11 @@ menubar.np-menubar > menuitem {
     box-shadow: none;
 }
 menubar.np-menubar > menuitem:hover { background: @hover; box-shadow: none; }
-menubar.np-menubar > menuitem label { color: @fg; font-size: 13px; }
+menubar.np-menubar > menuitem label { color: @fg; font-size: 9.75pt; }
 menu { padding: 4px; border-radius: 8px; }
 menu menuitem { padding: 6px 12px; border-radius: 4px; min-width: 190px; }
-menu menuitem label { font-size: 13px; }
-menu menuitem accelerator { color: @text3; font-size: 12px; }
+menu menuitem label { font-size: 9.75pt; }
+menu menuitem accelerator { color: @text3; font-size: 9pt; }
 menu menuitem:disabled label { color: @text3; }
 menu separator { background: @line; margin: 4px 0; min-height: 1px; }
 button.np-flat {
@@ -146,9 +146,9 @@ textview.np-text text selection:focus { background-color: alpha(@accent, 0.38); 
 }
 .np-find entry { min-width: 260px; padding: 4px 8px; }
 .np-find entry.np-nomatch { border-bottom-color: mix(#e0453a, @fg, 0.2); }
-.np-find button.np-text-btn { padding: 4px 12px; font-size: 13px; }
-label.np-count { color: @text2; font-size: 12px; min-width: 64px; }
-.np-find checkbutton label { font-size: 13px; }
+.np-find button.np-text-btn { padding: 4px 12px; font-size: 9.75pt; }
+label.np-count { color: @text2; font-size: 9pt; min-width: 64px; }
+.np-find checkbutton label { font-size: 9.75pt; }
 
 /* ── 알림 막대 (다른 프로그램이 파일을 바꿨을 때) ── */
 .np-notice {
@@ -156,15 +156,15 @@ label.np-count { color: @text2; font-size: 12px; min-width: 64px; }
     border-bottom: 1px solid alpha(@accent, 0.35);
     padding: 6px 12px;
 }
-.np-notice label { color: @fg; font-size: 13px; }
-.np-notice button { padding: 3px 12px; font-size: 13px; }
+.np-notice label { color: @fg; font-size: 9.75pt; }
+.np-notice button { padding: 3px 12px; font-size: 9.75pt; }
 
 /* ── 상태 표시줄 ── */
 .np-status { background: @np_bar; border-top: 1px solid @line; padding: 0 8px; min-height: 26px; }
-.np-status label { color: @text2; font-size: 12px; padding: 4px 10px; }
+.np-status label { color: @text2; font-size: 9pt; padding: 4px 10px; }
 .np-status separator { background: @line; min-width: 1px; margin: 6px 0; }
 
-label.np-error { color: mix(#e0453a, @fg, 0.25); font-size: 13px; }   /* 다크·라이트 모두 읽히게 */
+label.np-error { color: mix(#e0453a, @fg, 0.25); font-size: 9.75pt; }   /* 다크·라이트 모두 읽히게 */
 
 /* ── 설정 페이지 ── */
 .np-settings { background: @np_text; }
@@ -189,6 +189,8 @@ def load_css(a):
         print("[sekai-notepad] CSS 오류:", e.message, file=sys.stderr, flush=True)
         return None
     Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_USER)
+    from sekaishell import theme as _sekai_theme
+    _sekai_theme.apply_contrast_css()   # 대비 테마면 테두리·초점을 앱 CSS 위에
     return prov
 
 

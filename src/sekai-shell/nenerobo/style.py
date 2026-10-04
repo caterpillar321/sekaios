@@ -130,11 +130,11 @@ popover.menu modelbutton accelerator {{ margin-left: 28px; }}
 .nr-side row {{ border-radius: 8px; padding: 9px 12px; margin: 1px 0; }}
 .nr-side row:selected {{ background: {_rgba(ap["accent"], 0.18)}; color: {fg}; }}
 .nr-page {{ padding: 22px 28px; }}
-.nr-h1 {{ font-size: 20px; font-weight: 700; margin-bottom: 14px; }}
+.nr-h1 {{ font-size: 15pt; font-weight: 700; margin-bottom: 14px; }}
 .nr-card {{ background: {ap["surface"]}; border-radius: 10px; border: 1px solid {_rgba(fg, 0.08)}; }}
 .nr-card > row, .nr-row {{ padding: 12px 16px; }}
 .nr-card > row:not(:last-child) {{ border-bottom: 1px solid {_rgba(fg, 0.07)}; }}
-.nr-sub {{ color: {_rgba(fg, 0.62)}; font-size: 12px; }}
+.nr-sub {{ color: {_rgba(fg, 0.62)}; font-size: 9pt; }}
 .nr-err {{ color: #e5484d; font-weight: 600; }}
 .nr-sec {{ font-weight: 600; margin: 18px 0 8px 2px; }}
 .nr-swatch {{ min-width: 18px; min-height: 18px; border-radius: 4px; }}

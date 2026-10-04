@@ -12,6 +12,9 @@
 #    sekai-ctl osd <아이콘> <글>             화면에 잠깐 알림
 #    sekai-ctl desktop new|close|next|prev   가상 데스크톱 (이름을 화면 가운데에)
 #    sekai-ctl desktop go|move <번호>        그 데스크톱으로 / 지금 창을 그리로
+#    sekai-ctl magnify in|out|off            돋보기 (Win + = · Win + - · Win + Esc)
+#    sekai-ctl colorfilter                   색 필터 켜고 끄기 (Win + Ctrl + C)
+#    sekai-ctl osk [on|off]                  화상 키보드 (Win + Ctrl + O)
 #
 #  셸이 떠 있지 않으면 음량·밝기·데스크톱 이동은 그래도 한다 (표시만 없다).
 # ═══════════════════════════════════════════════════════════════
@@ -46,6 +49,9 @@ case "$1" in
     notifications) call NotificationCenter ;;
     quicksettings|qs) call QuickSettings ;;
     osd)           call Osd "${2:-dialog-information-symbolic}" "${3:-}" ;;
+    magnify)       call Magnify "${2:-in}" ;;                 # 돋보기 in · out · off · toggle
+    colorfilter)   call ColorFilter "${2:-toggle}" ;;         # 색 필터 켜고 끄기
+    osk)           call Osk "${2:-toggle}" ;;                 # 화상 키보드 on · off · toggle
     desktop)
         call Desktop "${2:-show}" "${3:-}" || case "$2" in
             next) hyprctl dispatch workspace e+1 ;;
@@ -55,6 +61,6 @@ case "$1" in
             new)  hyprctl dispatch workspace emptym ;;
         esac >/dev/null 2>&1 ;;
     *)
-        sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '3,19p' "$0" | sed 's/^# \{0,1\}//'
         exit 2 ;;
 esac

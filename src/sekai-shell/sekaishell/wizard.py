@@ -24,18 +24,18 @@ DEFAULT_COLORS = {"accent": "#39c5bb", "bg": "#151517", "surface": "#1e1e22", "f
 WIZ_CSS = """
 .wizard { background: @winbg; color: @fg; }
 .wiz-head { padding: 18px 28px 10px 28px; }
-.wiz-brand { font-size: 15px; font-weight: 700; color: @fg; }
-.wiz-step { font-size: 12px; color: @text3; padding: 0 2px; }
+.wiz-brand { font-size: 11.25pt; font-weight: 700; color: @fg; }
+.wiz-step { font-size: 9pt; color: @text3; padding: 0 2px; }
 .wiz-step.done { color: @text2; }
 .wiz-step.current { color: @accent; font-weight: 700; }
-.wiz-dot { font-size: 12px; color: @text3; }
+.wiz-dot { font-size: 9pt; color: @text3; }
 .wiz-body { padding: 8px 56px 8px 56px; }
 .wiz-foot { padding: 14px 28px 20px 28px; border-top: 1px solid @line; }
-.wiz-hint { font-size: 12px; color: @text3; }
+.wiz-hint { font-size: 9pt; color: @text3; }
 
-.wiz-title { font-size: 30px; font-weight: 700; color: @fg; }
-.wiz-sub   { font-size: 15px; color: @text2; }
-.wiz-big   { font-size: 40px; font-weight: 700; color: @fg; }
+.wiz-title { font-size: 22.5pt; font-weight: 700; color: @fg; }
+.wiz-sub   { font-size: 11.25pt; color: @text2; }
+.wiz-big   { font-size: 30pt; font-weight: 700; color: @fg; }
 
 button.wiz-next, button.wiz-back { min-width: 96px; min-height: 34px; padding: 4px 18px; }
 button.wiz-next {
@@ -63,10 +63,10 @@ button.wiz-next.danger:disabled label { color: alpha(#ffffff, 0.45); }
 }
 .choice:hover { background: @hover; }
 .choice.selected { border: 2px solid @accent; padding: 13px 17px; background: alpha(@accent, 0.08); }
-.choice-title { font-size: 15px; font-weight: 600; color: @fg; }
-.choice-sub   { font-size: 12px; color: @text2; }
+.choice-title { font-size: 11.25pt; font-weight: 600; color: @fg; }
+.choice-sub   { font-size: 9pt; color: @text2; }
 .badge {
-    font-size: 11px; font-weight: 700; border-radius: 999px; padding: 2px 9px;
+    font-size: 8.25pt; font-weight: 700; border-radius: 999px; padding: 2px 9px;
     background: alpha(@fg, 0.10); color: @text2;
 }
 .badge.warn   { background: alpha(#ff6b81, 0.18); color: #ff9aa8; }
@@ -77,11 +77,11 @@ button.wiz-next.danger:disabled label { color: alpha(#ffffff, 0.45); }
 
 /* 파티션 계획 막대 */
 .plan-seg { border-radius: 6px; padding: 8px 10px; }
-.plan-seg label { font-size: 12px; color: #0f1f1e; font-weight: 600; }
+.plan-seg label { font-size: 9pt; color: #0f1f1e; font-weight: 600; }
 .plan-seg.esp  { background: #f0c66e; }
 .plan-seg.swap { background: #9aa4ff; }
 .plan-seg.root { background: @accent; }
-.plan-legend { font-size: 12px; color: @text2; }
+.plan-legend { font-size: 9pt; color: @text2; }
 
 /* 설치 중 */
 progressbar.wiz-progress trough {
@@ -90,12 +90,12 @@ progressbar.wiz-progress trough {
 progressbar.wiz-progress progress {
     background: @accent; border: none; border-radius: 999px; min-height: 6px;
 }
-.wiz-percent { font-size: 56px; font-weight: 300; color: @fg; font-feature-settings: "tnum"; }
+.wiz-percent { font-size: 42pt; font-weight: 300; color: @fg; font-feature-settings: "tnum"; }
 .tip-card {
     background: @card; border: 1px solid @line; border-radius: 12px; padding: 18px 22px;
 }
-.tip-title { font-size: 14px; font-weight: 700; color: @fg; }
-.tip-body  { font-size: 13px; color: @text2; }
+.tip-title { font-size: 10.5pt; font-weight: 700; color: @fg; }
+.tip-body  { font-size: 9.75pt; color: @text2; }
 """
 
 
@@ -112,6 +112,8 @@ def load_css(extra="", colors=None):
     prov.load_from_data((pre + body + WIZ_CSS + extra).encode())
     Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov,
                                              Gtk.STYLE_PROVIDER_PRIORITY_USER)
+    from sekaishell import theme as _sekai_theme
+    _sekai_theme.apply_contrast_css()   # 대비 테마면 테두리·초점을 앱 CSS 위에
     st = Gtk.Settings.get_default()
     if st:
         st.set_property("gtk-application-prefer-dark-theme", True)

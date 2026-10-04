@@ -1,0 +1,22 @@
+/* SekaiOS 대비 테마 (설정 › 접근성 › 대비 테마) — 윈도우의 대비 테마처럼 흰 테두리, 노란 선택·초점, 회색 비활성.
+   색만으로는 단추·칸의 경계가 안 보인다 (검정 위 검정). gtk.css 가 GTK 의 고대비 테마 위에 얹고,
+   SekaiOS 앱은 이 파일을 앱 CSS 보다 위(USER+5)에 한 번 더 얹는다 (앱이 칸 테두리를 지운 곳에서도 보이게) */
+label { color: #ffffff; }
+selection, *:selected, row:selected, treeview:selected, .view:selected { background-color: #ffff00; color: #000000; }
+*:selected label, row:selected label { color: #000000; }
+button, entry, spinbutton, .row, .menu-item, .tile, .pop-btn, .power-btn,
+switch, scale trough, .card, popover > contents, menu, .menu, tooltip {
+  border: 2px solid #ffffff;
+}
+button:hover, .menu-item:hover, .tile:hover, .task-btn:hover, row.activatable:hover, .row:hover {
+  background-color: #ffff00; background-image: none; color: #000000;
+}
+button:hover label, .menu-item:hover label, .tile:hover label, .task-btn:hover label, row.activatable:hover label,
+.row:hover label { color: #000000; }
+*:disabled, *:disabled label { color: #a6a6a6; }
+link, *:link { color: #8080ff; }
+/* 목록형 사이드바(설정·탐색기)는 칸마다 상자를 치면 무겁다 — 가리킬 때와 선택만 */
+.side-row, .side-list row { border: 2px solid transparent; }
+.side-row:hover, .side-list row:hover { background-color: #ffff00; color: #000000; }
+.side-row:hover label, .side-list row:hover label { color: #000000; }
+button:focus, entry:focus, row:focus, .menu-item:focus { outline: 3px solid #ffff00; outline-offset: 1px; }

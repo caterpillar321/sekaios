@@ -319,7 +319,7 @@ def build_appearance(store):
                       _theme.font_smoothing(), _theme.set_font_smoothing))
 
     s = p.section("커서")
-    row(s, "커서 크기", "다시 로그인해야 완전히 적용됩니다",
+    row(s, "커서 크기", "바로 바뀝니다 · 색은 설정 › 접근성",
         control=spin(a["cursor_size"], 12, 64, 2,
                      lambda v: store.set("appearance", "cursor_size", v)))
 

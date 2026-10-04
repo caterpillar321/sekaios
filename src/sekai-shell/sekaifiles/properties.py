@@ -35,10 +35,10 @@ from sekaishell.fileops import display_text, fmt_size, fmt_size_exact  # noqa: E
 
 CSS = """
 .sekai-fo.fo-props notebook > stack { padding: 14px 4px 4px 4px; }
-.sekai-fo.fo-props label.fo-pkey { color: @fo_text2; font-size: 13px; }
-.sekai-fo.fo-props label.fo-pval { font-size: 13px; }
+.sekai-fo.fo-props label.fo-pkey { color: @fo_text2; font-size: 9.75pt; }
+.sekai-fo.fo-props label.fo-pval { font-size: 9.75pt; }
 .sekai-fo.fo-props label.fo-sec { font-weight: 600; margin-top: 4px; }
-.sekai-fo.fo-props entry.fo-name { font-size: 14px; }
+.sekai-fo.fo-props entry.fo-name { font-size: 10.5pt; }
 .sekai-fo.fo-props .fo-note { background: alpha(@accent, 0.10); border: 1px solid alpha(@accent, 0.28);
                                border-radius: 6px; padding: 8px 10px; }
 .sekai-fo.fo-props button.fo-small { padding: 3px 12px; }

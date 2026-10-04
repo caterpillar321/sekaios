@@ -45,19 +45,19 @@ SETTINGS = {"graphics": "그래픽 드라이버 설정", "display": "디스플�
             "input": "키보드 및 마우스 설정", "power": "전원 설정"}
 
 CSS = """
-treeview.dm-tree { font-size: 13px; }
+treeview.dm-tree { font-size: 9.75pt; }
 .dm-detail { padding: 2px 6px 12px 18px; }
-label.dm-name { font-size: 17px; font-weight: 700; color: @fg; }
-label.dm-kind { font-size: 12px; color: @text2; }
+label.dm-name { font-size: 12.75pt; font-weight: 700; color: @fg; }
+label.dm-kind { font-size: 9pt; color: @text2; }
 .dm-state { background: @card; border: 1px solid @line; border-radius: 8px; padding: 10px 14px; }
 .dm-state.warn { background: alpha(@adm_warn, 0.12); border-color: alpha(@adm_warn, 0.45); }
 .dm-state.off { background: alpha(@fg, 0.04); }
 label.dm-state-title { font-weight: 600; color: @fg; }
-label.dm-state-text { font-size: 12px; color: @text2; }
-label.dm-sec { font-size: 13px; font-weight: 600; color: @fg; margin-top: 10px; }
+label.dm-state-text { font-size: 9pt; color: @text2; }
+label.dm-sec { font-size: 9.75pt; font-weight: 600; color: @fg; margin-top: 10px; }
 button.dm-item { padding: 6px 10px; background: @card; border: 1px solid @line; border-radius: 8px; }
 button.dm-item:hover { background: @hover; }
-label.dm-dim { font-size: 12px; color: @text2; }
+label.dm-dim { font-size: 9pt; color: @text2; }
 flowbox.dm-acts flowboxchild { padding: 0; }
 """
 

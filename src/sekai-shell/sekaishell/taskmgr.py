@@ -53,10 +53,10 @@ TM_CSS = """
 }
 .tm-search:focus { border-bottom-color: @accent; }
 .tm-bar { padding: 6px 24px 10px 24px; }
-.tm-title { font-size: 20px; font-weight: 700; color: @fg; }
+.tm-title { font-size: 15pt; font-weight: 700; color: @fg; }
 .tm-body { padding: 0 16px 16px 16px; }
 .tm-listbox { border: 1px solid @line; border-radius: 8px; background: @winbg; }
-treeview.tm-list { background-color: @winbg; color: @fg; font-size: 13px; }
+treeview.tm-list { background-color: @winbg; color: @fg; font-size: 9.75pt; }
 treeview.tm-list:selected { background-color: alpha(@accent, 0.28); color: @fg; }
 treeview.tm-list header button {
     background: @winbg;
@@ -67,14 +67,14 @@ treeview.tm-list header button {
     border-radius: 0;
     padding: 4px 8px;
     color: @text2;
-    font-size: 12px;
+    font-size: 9pt;
     box-shadow: none;
 }
 treeview.tm-list header button:hover { background: @hover; }
 treeview.tm-list header button label { color: @text2; }
-.tm-colhead-value { font-size: 15px; font-weight: 600; color: @fg; }
-label.tm-colhead-name { font-size: 12px; color: @text2; }
-.tm-speed-cap { padding: 0 20px; font-size: 12px; color: @text2; }
+.tm-colhead-value { font-size: 11.25pt; font-weight: 600; color: @fg; }
+label.tm-colhead-name { font-size: 9pt; color: @text2; }
+.tm-speed-cap { padding: 0 20px; font-size: 9pt; color: @text2; }
 .tm-speed { margin: 4px 14px 14px 14px; }
 .tm-empty { padding: 16px 4px; color: @text2; }
 .tm-toast {
@@ -103,22 +103,22 @@ button.tm-end:disabled { opacity: 0.55; }
     background-position: 0% 50%;
     background-repeat: no-repeat;
 }
-.perf-title { font-size: 14px; color: @fg; }
-.perf-sub { font-size: 12px; color: @text2; }
+.perf-title { font-size: 10.5pt; color: @fg; }
+.perf-sub { font-size: 9pt; color: @text2; }
 .perf-main { padding: 4px 28px 24px 28px; }
 .perf-narrow .perf-main { padding: 4px 12px 16px 12px; }
 .perf-narrow .perf-picker { margin-left: 12px; }
-.perf-head { font-size: 26px; font-weight: 700; color: @fg; }
-.perf-model { font-size: 15px; color: @text2; }
+.perf-head { font-size: 19.5pt; font-weight: 700; color: @fg; }
+.perf-model { font-size: 11.25pt; color: @text2; }
 .perf-caprow { margin-top: 14px; margin-bottom: 4px; }
-.perf-cap { font-size: 12px; color: @text2; }
+.perf-cap { font-size: 9pt; color: @text2; }
 .perf-foot { margin-top: 2px; }
 .perf-stats { margin-top: 18px; }
-.perf-big-val { font-size: 22px; color: @fg; font-feature-settings: "tnum"; }
-.perf-kv-key { font-size: 12px; color: @text2; }
-.perf-kv-val { font-size: 12px; color: @fg; }
-.perf-note { font-size: 12px; color: @text2; margin-top: 8px; }
-button.perf-toggle { padding: 2px 10px; font-size: 12px; }
+.perf-big-val { font-size: 16.5pt; color: @fg; font-feature-settings: "tnum"; }
+.perf-kv-key { font-size: 9pt; color: @text2; }
+.perf-kv-val { font-size: 9pt; color: @fg; }
+.perf-note { font-size: 9pt; color: @text2; margin-top: 8px; }
+button.perf-toggle { padding: 2px 10px; font-size: 9pt; }
 button.perf-toggle:checked { background: alpha(@accent, 0.25); border-color: alpha(@accent, 0.6); }
 """
 
@@ -138,6 +138,8 @@ def _load_css(a):
         dbg("작업 관리자 CSS 오류:", e)
         return None
     Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_USER)
+    from sekaishell import theme as _sekai_theme
+    _sekai_theme.apply_contrast_css()   # 대비 테마면 테두리·초점을 앱 CSS 위에
     return prov
 
 

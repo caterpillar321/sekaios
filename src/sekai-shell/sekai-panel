@@ -2050,6 +2050,8 @@ def main():
         Gtk.StyleContext.add_provider_for_screen(
             Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_USER)
         css_holder["prov"] = prov
+        from sekaishell import theme as _th
+        _th.apply_contrast_css()           # 대비 테마면 테두리·초점을 위에 (SIGHUP 때마다 — 켜고 끄기를 따른다)
 
     load_css()
 
@@ -2129,6 +2131,10 @@ def main():
     panel.updates = UpdateNotifier()
     panel.gpuhint = GpuHint()
     panel.crashhint = CrashHint()          # 지난번 커널 패닉으로 다시 시작했으면 알린다
+    # 접근성 — 돋보기 · 색 필터 · 화상 키보드 · 고정 키 표시 · Shift 다섯 번 묻기 (sekaishell/a11y.py)
+    from sekaishell.a11y import A11y
+    a11y = A11y(hypr, osd, int(sekai_conf("panel", "height", PANEL_HEIGHT)) + 12)
+    panel.event_hooks.append(a11y.on_event)
 
     panel.shell = ShellService({
         "Switch": switcher.step,
@@ -2142,6 +2148,9 @@ def main():
         "QuickSettings": panel.toggle_quick_settings,
         "Osd": osd.show_text,
         "Desktop": desktop,
+        "Magnify": a11y.magnify,
+        "ColorFilter": a11y.color_filter,
+        "Osk": a11y.osk_ctl,
     })
 
     # SIGUSR1 = 시작 메뉴 토글

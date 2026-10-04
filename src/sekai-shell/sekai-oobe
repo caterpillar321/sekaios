@@ -60,8 +60,8 @@ button.swatch-btn { padding: 0; min-width: 44px; min-height: 44px; border-radius
 button.swatch-btn.selected { border-color: @fg; }
 .wall-pick { border: 3px solid transparent; border-radius: 12px; padding: 2px; }
 .wall-pick.selected { border-color: @accent; }
-.field-err { font-size: 12px; color: #ff9aa8; }
-.setup-msg { font-size: 18px; color: @text2; }
+.field-err { font-size: 9pt; color: #ff9aa8; }
+.setup-msg { font-size: 13.5pt; color: @text2; }
 """
 
 

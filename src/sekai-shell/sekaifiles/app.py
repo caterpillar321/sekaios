@@ -84,7 +84,7 @@ button.fx-cap.close:active { background: #b22a1d; color: #ffffff; }
 window.fx-window.fx-hypr decoration, window.fx-window.fx-hypr.csd decoration { box-shadow: none; border-radius: 0; margin: 0; border: none; }
 .fx-tabbar scrolledwindow, .fx-tabbar viewport { background: transparent; border: none; }
 .fx-tab { padding: 5px 5px 5px 12px; border-radius: 8px 8px 0 0; min-height: 24px; }
-.fx-tab label { font-size: 13px; color: @text2; }
+.fx-tab label { font-size: 9.75pt; color: @text2; }
 .fx-tab:hover { background: alpha(@fg, 0.05); }
 .fx-tab.active {
     background: @fx_top;
@@ -108,7 +108,7 @@ button.fx-tool, button.fx-cmd, button.fx-crumb, button.fx-crumb-sep, button.fx-e
 }
 button.fx-tool { padding: 7px 9px; }
 button.fx-cmd { padding: 6px 10px; }
-button.fx-cmd label { font-size: 13px; color: @fg; }
+button.fx-cmd label { font-size: 9.75pt; color: @fg; }
 button.fx-tool:hover, button.fx-cmd:hover, button.fx-crumb:hover, button.fx-crumb-sep:hover,
 button.fx-eject:hover, button.fx-status-btn:hover { background: @hover; }
 button.fx-tool:active, button.fx-cmd:active, button.fx-crumb:active, button.fx-crumb-sep:active,
@@ -124,7 +124,7 @@ separator.fx-cmd-sep { background: @line; min-width: 1px; margin: 7px 2px; }
 .fx-crumbs { padding: 0 2px; }
 .fx-crumb-icon { margin: 0 2px 0 8px; color: @text2; }
 button.fx-crumb { padding: 3px 6px; }
-button.fx-crumb label { font-size: 13px; color: @fg; }
+button.fx-crumb label { font-size: 9.75pt; color: @fg; }
 button.fx-crumb-sep { padding: 3px 3px; }
 button.fx-crumb-sep image { color: @text2; }
 entry.fx-address-entry {
@@ -134,7 +134,7 @@ entry.fx-address-entry {
     box-shadow: none;
     padding: 4px 10px;
     min-height: 22px;
-    font-size: 13px;
+    font-size: 9.75pt;
 }
 entry.fx-search {
     background: @card;
@@ -142,7 +142,7 @@ entry.fx-search {
     border-radius: 6px;
     padding: 4px 10px;
     min-height: 22px;
-    font-size: 13px;
+    font-size: 9.75pt;
     box-shadow: none;
 }
 entry.fx-search:focus { border-bottom: 2px solid @accent; }
@@ -161,7 +161,7 @@ paned.fx-paned > separator { background: @line; min-width: 1px; }
     background-position: 0% 50%;
     background-repeat: no-repeat;
 }
-.fx-nav-list row.fx-nav-row label { font-size: 13px; color: @fg; }
+.fx-nav-list row.fx-nav-row label { font-size: 9.75pt; color: @fg; }
 .fx-nav-list row.fx-nav-row:hover { background-color: @hover; }
 .fx-nav-list row.fx-nav-row:selected {
     background-color: @card;
@@ -179,7 +179,7 @@ button.fx-eject image { color: @text2; }
 
 /* 내용 */
 .fx-content { background: @winbg; }
-iconview.fx-icons { background-color: @winbg; color: @fg; font-size: 13px; outline-style: none; }
+iconview.fx-icons { background-color: @winbg; color: @fg; font-size: 9.75pt; outline-style: none; }
 iconview.fx-icons:selected, iconview.fx-icons.cell:selected {
     background-color: @fx_sel;
     color: @fg;
@@ -195,7 +195,7 @@ treeview.fx-details rubberband, treeview.fx-details .rubberband {
     background-color: alpha(@accent, 0.16);
     border: 1px solid alpha(@accent, 0.85);
 }
-treeview.fx-details { background-color: @winbg; color: @fg; font-size: 13px; outline-style: none; }
+treeview.fx-details { background-color: @winbg; color: @fg; font-size: 9.75pt; outline-style: none; }
 treeview.fx-details:hover { background-color: alpha(@fg, 0.05); }
 treeview.fx-details:selected { background-color: @fx_sel; color: @fg; }
 treeview.fx-details:drop(active) { background-color: alpha(@accent, 0.18); }
@@ -210,18 +210,18 @@ treeview.fx-details header button {
     box-shadow: none;
 }
 treeview.fx-details header button:hover { background: @hover; }
-treeview.fx-details header button label { color: @text2; font-size: 12px; }
+treeview.fx-details header button label { color: @text2; font-size: 9pt; }
 entry.fx-rename {
     background: @winbg;
     border: 1px solid @accent;
     border-radius: 4px;
     padding: 1px 4px;
     min-height: 0;
-    font-size: 13px;
+    font-size: 9.75pt;
 }
-label.fx-empty { color: @text2; padding: 40px 24px; font-size: 13px; }
+label.fx-empty { color: @text2; padding: 40px 24px; font-size: 9.75pt; }
 .fx-status { padding: 3px 10px 3px 14px; border-top: 1px solid @line; background: @winbg; }
-.fx-status label { font-size: 12px; color: @text2; }
+.fx-status label { font-size: 9pt; color: @text2; }
 button.fx-status-btn { padding: 2px 6px; }
 button.fx-status-btn:checked { background: @card; border-color: @line; }
 label.fx-toast {
@@ -235,12 +235,12 @@ label.fx-toast {
 /* 홈 · 내 PC */
 .fx-page, .fx-page viewport { background: @winbg; }
 .fx-page-body { padding: 6px 20px 24px 20px; }
-label.fx-section { font-size: 14px; font-weight: 600; color: @fg; margin: 14px 4px 8px 4px; }
+label.fx-section { font-size: 10.5pt; font-weight: 600; color: @fg; margin: 14px 4px 8px 4px; }
 flowbox.fx-tiles flowboxchild.fx-tile { padding: 10px 12px; border-radius: 8px; }
 flowbox.fx-tiles flowboxchild.fx-tile:hover { background: @hover; }
 flowbox.fx-tiles flowboxchild.fx-tile:selected { background: @fx_sel; }
-label.fx-tile-name { font-size: 13px; color: @fg; }
-label.fx-tile-sub { font-size: 12px; color: @text2; }
+label.fx-tile-name { font-size: 9.75pt; color: @fg; }
+label.fx-tile-sub { font-size: 9pt; color: @text2; }
 progressbar.fx-cap trough {
     background: alpha(@fg, 0.14);
     border: none;
@@ -255,25 +255,25 @@ progressbar.fx-cap progress {
     min-height: 6px;
 }
 progressbar.fx-cap.full progress { background: #d13438; }
-label.fx-empty-inline { color: @text2; padding: 6px 8px; font-size: 13px; }
+label.fx-empty-inline { color: @text2; padding: 6px 8px; font-size: 9.75pt; }
 
 /* 메뉴 */
 menu.fx-menu { padding: 4px 0; }
 menu.fx-menu menuitem { padding: 6px 14px; }
-menu.fx-menu menuitem label { font-size: 13px; }
-label.fx-accel { color: @text3; font-size: 12px; margin-left: 28px; }
+menu.fx-menu menuitem label { font-size: 9.75pt; }
+label.fx-accel { color: @text3; font-size: 9pt; margin-left: 28px; }
 menu.fx-menu menuitem.separator, menu.fx-menu separator { background: none; min-height: 0; padding: 0; margin: 4px 0; }
 menu.fx-menu menuitem.separator separator, menu.fx-menu separator { background: @line; min-height: 1px; }
 
 /* 연결 프로그램 선택 */
-label.fx-dialog-title { font-size: 15px; font-weight: 600; }
+label.fx-dialog-title { font-size: 11.25pt; font-weight: 600; }
 .fx-app-scroll { border: 1px solid @line; border-radius: 8px; }
 .fx-app-list, .fx-app-list row { background: transparent; }
 .fx-app-list row.fx-app-row { padding: 6px 10px; }
 .fx-app-list row.fx-app-row:hover { background: @hover; }
 .fx-app-list row.fx-app-row:selected { background: @fx_sel; }
 .fx-app-list row.fx-app-row label { color: @fg; }
-label.fx-app-group { font-size: 12px; font-weight: 600; color: @text2; padding: 10px 10px 4px 10px; }
+label.fx-app-group { font-size: 9pt; font-weight: 600; color: @text2; padding: 10px 10px 4px 10px; }
 """
 
 
@@ -295,6 +295,8 @@ def _load_css(a):
         print("[sekai-files] CSS 오류:", e.message, file=sys.stderr, flush=True)
         return None
     Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_USER)
+    from sekaishell import theme as _sekai_theme
+    _sekai_theme.apply_contrast_css()   # 대비 테마면 테두리·초점을 앱 CSS 위에
     return prov
 
 

@@ -92,14 +92,14 @@ ADMIN_CSS = """
 .adm-actions-row { padding: 0 12px 8px 12px; }
 .adm-narrow .adm-actions-row button { padding-left: 10px; padding-right: 10px; }
 .adm-narrow .adm-body { padding: 0 8px 8px 8px; }
-.adm-title { font-size: 20px; font-weight: 700; color: @fg; }
+.adm-title { font-size: 15pt; font-weight: 700; color: @fg; }
 .adm-body { padding: 0 16px 16px 16px; }
-label.adm-group { padding: 14px 22px 4px 22px; font-size: 12px; font-weight: 600; color: @text3; }
+label.adm-group { padding: 14px 22px 4px 22px; font-size: 9pt; font-weight: 600; color: @text3; }
 /* 메뉴의 기호 아이콘 — 고른 줄에서 GTK 테마의 선택 글자색(흰색)을 따라가 라이트 모드에서 사라지지 않게 */
 .side-row image { color: @text2; }
 .side-row:hover image, .side-row:selected image { color: @fg; }
 .adm-listbox { border: 1px solid @line; border-radius: 8px; background: @winbg; }
-treeview.adm-list { background-color: @winbg; color: @fg; font-size: 13px; }
+treeview.adm-list { background-color: @winbg; color: @fg; font-size: 9.75pt; }
 treeview.adm-list:selected { background-color: alpha(@accent, 0.28); color: @fg; }
 treeview.adm-list header button {
     background: @winbg;
@@ -110,7 +110,7 @@ treeview.adm-list header button {
     border-radius: 0;
     padding: 4px 8px;
     color: @text2;
-    font-size: 12px;
+    font-size: 9pt;
     box-shadow: none;
 }
 treeview.adm-list header button:hover { background: @hover; }
@@ -136,13 +136,13 @@ treeview.adm-list header button label { color: @text2; }
 .adm-notice button { padding: 4px 12px; }
 /* 거르기 줄 */
 .adm-filters { margin-bottom: 8px; }
-.adm-filters combobox button, .adm-filters button { padding: 4px 10px; font-size: 13px; }
-label.adm-cap { color: @text2; font-size: 12px; }
-button.adm-chip { padding: 2px 10px; border-radius: 999px; font-size: 12px; background: @card; }
+.adm-filters combobox button, .adm-filters button { padding: 4px 10px; font-size: 9.75pt; }
+label.adm-cap { color: @text2; font-size: 9pt; }
+button.adm-chip { padding: 2px 10px; border-radius: 999px; font-size: 9pt; background: @card; }
 button.adm-chip:hover { background: @hover; }
 button.adm-chip.err label { color: @adm_err; }
 button.adm-chip.warn label { color: @adm_warn; }
-label.adm-sum { color: @text2; font-size: 12px; }
+label.adm-sum { color: @text2; font-size: 9pt; }
 /* 두 칸짜리 전환 (시스템 서비스 | 사용자 서비스) */
 .adm-seg button { border-radius: 0; padding: 4px 14px; }
 .adm-seg button:first-child { border-radius: 6px 0 0 6px; }
@@ -155,17 +155,17 @@ label.adm-sum { color: @text2; font-size: 12px; }
     border-radius: 8px;
     padding: 12px 16px;
 }
-label.adm-dtitle { font-size: 14px; font-weight: 600; color: @fg; }
-label.adm-key { font-size: 12px; color: @text2; }
-label.adm-val { font-size: 12px; color: @fg; }
-textview.adm-msg, textview.adm-msg text { background: @card; color: @fg; font-size: 13px; }
-label.adm-status { font-size: 12px; color: @text2; padding: 6px 2px 0 2px; }
-button.adm-link { padding: 2px 8px; font-size: 12px; background: transparent; border-color: transparent; }
+label.adm-dtitle { font-size: 10.5pt; font-weight: 600; color: @fg; }
+label.adm-key { font-size: 9pt; color: @text2; }
+label.adm-val { font-size: 9pt; color: @fg; }
+textview.adm-msg, textview.adm-msg text { background: @card; color: @fg; font-size: 9.75pt; }
+label.adm-status { font-size: 9pt; color: @text2; padding: 6px 2px 0 2px; }
+button.adm-link { padding: 2px 8px; font-size: 9pt; background: transparent; border-color: transparent; }
 button.adm-link label { color: mix(@accent, @fg, 0.25); }
 button.adm-link:hover { background: @hover; }
 paned > separator { background: transparent; min-width: 6px; min-height: 6px; }
 /* 페이지 안의 왼쪽 보기 목록 (이벤트 뷰어의 시스템·응용 프로그램…) */
-treeview.adm-side { background-color: @winbg; color: @fg; font-size: 13px; }
+treeview.adm-side { background-color: @winbg; color: @fg; font-size: 9.75pt; }
 treeview.adm-side:selected { background-color: alpha(@accent, 0.22); color: @fg; }
 """
 
@@ -187,6 +187,8 @@ def _load_css(a, extra=""):
             return None
         return _load_css(a)                       # 페이지가 더한 모양이 틀렸다 — 그것만 빼고
     Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_USER)
+    from sekaishell import theme as _sekai_theme
+    _sekai_theme.apply_contrast_css()   # 대비 테마면 테두리·초점을 앱 CSS 위에
     return prov
 
 

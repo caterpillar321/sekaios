@@ -84,15 +84,15 @@ window.sekai-fo, window.sekai-fo.background { background: @fo_bg; color: @fg; }
 .sekai-fo label { color: @fg; }
 .sekai-fo .fo-body { padding: 18px 22px 16px 22px; }
 .sekai-fo .fo-foot { padding: 12px 22px; background: @fo_foot; border-top: 1px solid @fo_line; }
-.sekai-fo label.fo-head { font-size: 13px; color: @fo_text2; }
-.sekai-fo label.fo-title { font-size: 17px; font-weight: 600; }
+.sekai-fo label.fo-head { font-size: 9.75pt; color: @fo_text2; }
+.sekai-fo label.fo-title { font-size: 12.75pt; font-weight: 600; }
 .sekai-fo label.fo-name { font-weight: 600; }
-.sekai-fo label.fo-pct { font-size: 20px; font-weight: 600; }
-.sekai-fo label.fo-key { font-size: 12px; color: @fo_text2; }
-.sekai-fo label.fo-val { font-size: 12px; }
-.sekai-fo label.fo-sub { font-size: 12px; color: @fo_text2; }
-.sekai-fo label.fo-tag { font-size: 11px; color: @accent; font-weight: 600; }
-.sekai-fo label.fo-error { color: @fo_err; font-size: 12px; }
+.sekai-fo label.fo-pct { font-size: 15pt; font-weight: 600; }
+.sekai-fo label.fo-key { font-size: 9pt; color: @fo_text2; }
+.sekai-fo label.fo-val { font-size: 9pt; }
+.sekai-fo label.fo-sub { font-size: 9pt; color: @fo_text2; }
+.sekai-fo label.fo-tag { font-size: 8.25pt; color: @accent; font-weight: 600; }
+.sekai-fo label.fo-error { color: @fo_err; font-size: 9pt; }
 .sekai-fo image.fo-dim { color: @fo_text2; }
 .sekai-fo button {
     background: @fo_hover; background-image: none;

@@ -256,8 +256,8 @@ class DesktopOsd(Gtk.Window):
         box.pack_start(self.label, False, False, 0)
         self.add(box)
         css = Gtk.CssProvider()
-        css.load_from_data(b".desktop-osd-name { font-size: 26px; font-weight: 700; padding: 10px 36px; }"
-                           b".desktop-osd-note { font-size: 15px; font-weight: 600; padding: 8px 24px; }")
+        css.load_from_data(b".desktop-osd-name { font-size: 19.5pt; font-weight: 700; padding: 10px 36px; }"
+                           b".desktop-osd-note { font-size: 11.25pt; font-weight: 600; padding: 8px 24px; }")
         # 작업 표시줄 CSS(.switcher-title 13px)보다 앞서게 한 단계 위로
         self.label.get_style_context().add_provider(css, Gtk.STYLE_PROVIDER_PRIORITY_USER + 1)
         self._timer = None

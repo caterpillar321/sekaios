@@ -49,11 +49,11 @@ CSS = b"""
 * { font-family: "Pretendard", sans-serif; text-shadow: none; -gtk-icon-shadow: none; }
 window { background: #151517; }
 
-.clock { font-size: 88px; font-weight: 300; color: @fg; font-feature-settings: "tnum"; }
-.date  { font-size: 22px; font-weight: 500; color: @text2; }
+.clock { font-size: 66pt; font-weight: 300; color: @fg; font-feature-settings: "tnum"; }
+.date  { font-size: 16.5pt; font-weight: 500; color: @text2; }
 
-.avatar { font-size: 44px; font-weight: 700; color: #0f1f1e; }
-.username { font-size: 26px; font-weight: 600; color: @fg; }
+.avatar { font-size: 33pt; font-weight: 700; color: #0f1f1e; }
+.username { font-size: 19.5pt; font-weight: 600; color: @fg; }
 
 entry.pw {
     background: @glass;
@@ -63,7 +63,7 @@ entry.pw {
     color: @fg;
     caret-color: @accent;
     padding: 10px 14px;
-    font-size: 15px;
+    font-size: 11.25pt;
     min-width: 280px;
     box-shadow: none;
 }
@@ -83,7 +83,7 @@ button.go {
 button.go:hover { background: alpha(@accent, 0.35); }
 button.go image { color: @fg; }
 
-.msg      { font-size: 14px; color: #ffd0d8; }
+.msg      { font-size: 10.5pt; color: #ffd0d8; }
 .msg.info { color: @text2; }
 
 button.corner {
@@ -97,7 +97,7 @@ button.corner {
 }
 button.corner:hover { background: alpha(@fg, 0.14); }
 button.corner image { color: @fg; }
-button.corner.kb-ind label { color: @fg; font-size: 12px; font-weight: 700; }
+button.corner.kb-ind label { color: @fg; font-size: 9pt; font-weight: 700; }
 
 .userlist button {
     background: transparent; border: none; border-radius: 8px; box-shadow: none;
@@ -105,9 +105,9 @@ button.corner.kb-ind label { color: @fg; font-size: 12px; font-weight: 700; }
 }
 .userlist button:hover   { background: alpha(@fg, 0.12); }
 .userlist button.current { background: alpha(@fg, 0.18); }
-.userlist label { font-size: 14px; color: @fg; }
-.mini-avatar { font-size: 14px; font-weight: 700; color: #0f1f1e; }
-.signed-in { font-size: 11px; color: @accent; }
+.userlist label { font-size: 10.5pt; color: @fg; }
+.mini-avatar { font-size: 10.5pt; font-weight: 700; color: #0f1f1e; }
+.signed-in { font-size: 8.25pt; color: @accent; }
 
 tooltip { background: #1e1e22; color: @fg; border-radius: 6px; }
 """

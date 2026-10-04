@@ -63,6 +63,8 @@ for variant in Light Dark; do
             css "$TMP/src/gtk/$g/gtk-Dark.scss" "$d/gtk-$g/gtk-dark.css" "$name (다크)"
         fi
         cp -r "$TMP/assets" "$d/gtk-$g/assets"
+        # 글자 크기를 pt 로 — 설정 › 접근성 › 텍스트 크기(text-scaling-factor)가 테마 글자에도 듣게
+        python3 "$P/scripts/px2pt.py" "$d/gtk-$g"/gtk*.css >/dev/null
     done
     # 라이선스 전문을 파일과 함께 (GPL-3.0)
     cp "$P/third_party/fluent-gtk-theme/COPYING" "$d/COPYING"
