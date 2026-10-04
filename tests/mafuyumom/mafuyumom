@@ -3,11 +3,14 @@
 
   mafuyumom golden --from ~/.cache/sekai-svm-btrfs   골든 이미지 만들기 (원본 VM 은 꺼 둔다)
   mafuyumom list                                     시험 목록
-  mafuyumom run [-s 스위트…] [-k 낱말] [--install-latest] [--keep] [--reuse]
+  mafuyumom run [-s 스위트…] [-k 낱말] [--slow] [--install-latest] [--keep] [--reuse]
         골든 위에 새 VM → 로그인 → 시험 → 보고서(~/.cache/mafuyumom/reports/<시각>/report.html)
         --install-latest  packages/ 의 최신 SekaiOS·WorldLink 패키지를 깔고 다시 부팅한 뒤 시험
         --keep            끝나도 VM 을 끄지 않는다 (VNC 127.0.0.1:5909 · SSH 2340)
         --reuse           이미 켜진 시험 VM 으로 (새로 만들지 않음)
+        --slow            느린 시험(복원하고 다시 시작 등)까지
+  mafuyumom quick [--install-latest]                 중간 점검 (~1분 반) — 켜진 VM 그대로, 영역마다 대표 하나씩
+  mafuyumom full [--keep]                            마지막 검사 (~20분) — 골든 위 새 VM + 최신 패키지 + 느린 시험까지 전부
   mafuyumom stop                                     시험 VM 끄기
 """
 import argparse
@@ -65,7 +68,9 @@ def install_latest(q):
 def cmd_run(a):
     load_suites()
     sel = [t for t in runner.TESTS
-           if (not a.suite or t["suite"] in a.suite) and (not a.k or a.k in t["id"] or a.k in t["name"])]
+           if (not a.suite or t["suite"] in a.suite) and (not a.k or a.k in t["id"] or a.k in t["name"])
+           and (a.slow or a.k or not t["slow"])            # 느린 시험(재부팅 등)은 --slow 나 -k 로 골랐을 때만
+           and (not getattr(a, "quick", False) or t["quick"])]
     if not sel:
         raise SystemExit("고른 시험이 없습니다 (mafuyumom list)")
     t0 = time.time()
@@ -79,6 +84,8 @@ def cmd_run(a):
     print("■ 로그인", flush=True)
     if not vm.login(q):
         raise SystemExit("로그인하지 못했습니다")
+    if not vm.close_all_windows():
+        print("  ! 지난 판의 창이 남아 있다", flush=True)
     if a.install_latest:
         install_latest(q)
     versions = vm.versions()
@@ -110,7 +117,12 @@ def main():
     r.add_argument("-k")
     r.add_argument("--install-latest", action="store_true")
     r.add_argument("--keep", action="store_true")
+    r.add_argument("--slow", action="store_true")
     r.add_argument("--reuse", action="store_true")
+    q = sp.add_parser("quick")
+    q.add_argument("--install-latest", action="store_true")
+    f = sp.add_parser("full")
+    f.add_argument("--keep", action="store_true")
     a = p.parse_args()
     if a.cmd == "golden":
         vm.make_golden(os.path.expanduser(a.src))
@@ -121,10 +133,17 @@ def main():
             if t["suite"] != cur:
                 cur = t["suite"]
                 print(f"[{cur}]")
-            print(f"  {t['id']:42s} {t['name']}")
+            tag = "Q" if t["quick"] else ("S" if t["slow"] else " ")
+            print(f"  {tag} {t['id']:42s} {t['name']}")
     elif a.cmd == "stop":
         vm.stop(force=True)
     elif a.cmd == "run":
+        sys.exit(cmd_run(a))
+    elif a.cmd == "quick":      # 중간 점검 — 켜진 VM 그대로, 영역마다 대표 하나씩
+        a.suite, a.k, a.slow, a.quick, a.reuse, a.keep = None, None, False, True, True, True
+        sys.exit(cmd_run(a))
+    elif a.cmd == "full":       # 마지막 검사 — 골든 위 새 VM, 최신 패키지, 느린 시험까지 전부
+        a.suite, a.k, a.slow, a.quick, a.reuse, a.install_latest = None, None, True, False, False, True
         sys.exit(cmd_run(a))
 
 

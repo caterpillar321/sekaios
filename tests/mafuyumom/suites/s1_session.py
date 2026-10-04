@@ -10,7 +10,7 @@ def active(t):
     return (t.hypr("activewindow") or {}).get("class")
 
 
-@test("작업 표시줄이 떠 있고 시작 단추가 있다", suite="session")
+@test("작업 표시줄이 떠 있고 시작 단추가 있다", suite="session", quick=True)
 def taskbar(t):
     bar = t.ui.find(app=PANEL, role="frame")
     t.expect(bar and bar["y"] is not None and bar["y"] >= 1000, f"작업 표시줄 자리 {bar and (bar['y'], bar['h'])}")
@@ -34,7 +34,7 @@ def start_menu_list(t):
     t.close("org.sekaios.Calculator")
 
 
-@test("시작 메뉴 검색(영문)으로 메모장 열기", suite="session")
+@test("시작 메뉴 검색(영문)으로 메모장 열기", suite="session", quick=True)
 def start_menu_search(t):
     t.kill("sekai-notepad")
     t.key("meta_l")
@@ -70,7 +70,7 @@ def notification(t):
     t.key("esc")
 
 
-@test("Alt+Tab 으로 다른 창으로", suite="session")
+@test("Alt+Tab 으로 다른 창으로", suite="session", quick=True)
 def alt_tab(t):
     t.kill("sekai-notepad")
     t.close("org.sekaios.Calculator")
@@ -101,7 +101,7 @@ def desktops(t):
     t.expect(t.wait(lambda: (t.hypr("activeworkspace") or {}).get("id") == ws0, 5), "Win+Ctrl+F4 로 닫고 원래 데스크톱")
 
 
-@test("잠그고(Win+L) 암호로 풀기", suite="session")
+@test("잠그고(Win+L) 암호로 풀기", suite="session", quick=True)
 def lock_unlock(t):
     mark = "$XDG_RUNTIME_DIR/sekai-lock.pid.locked"
     t.key("meta_l-l")

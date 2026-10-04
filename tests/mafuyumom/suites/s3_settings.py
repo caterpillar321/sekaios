@@ -33,14 +33,14 @@ def make_page_test(page):
         if nameless:
             t.finding(f"이름 없는 단추·스위치 {len(nameless)}개 (내레이터가 이름을 못 읽는다)")
     _.__name__ = f"page_{page}"
-    return test(f"설정 › {page} 페이지가 열린다", suite="settings")(_)
+    return test(f"설정 › {page} 페이지가 열린다", suite="settings", quick=page in ("about", "a11y"))(_)
 
 
 for _p in PAGES:
     make_page_test(_p)
 
 
-@test("라이트·다크 모드 바꾸기 → 앱 테마(gsettings)·작업 표시줄이 따른다", suite="settings")
+@test("라이트·다크 모드 바꾸기 → 앱 테마(gsettings)·작업 표시줄이 따른다", suite="settings", quick=True)
 def theme_mode(t):
     def scheme():
         return t.sh("gsettings get org.gnome.desktop.interface color-scheme").out.strip()

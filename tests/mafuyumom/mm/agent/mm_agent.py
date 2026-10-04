@@ -2,8 +2,9 @@
 """MafuyuMom 에이전트 — VM 의 로그인 세션 안에서 AT-SPI 로 화면의 위젯을 찾는다.
 
   python3 mm_agent.py '<JSON 요청>'   → 표준 출력에 JSON
-  요청: {"op": "find", "app": "<앱 이름 정규식>", "role": "push button", "name": "확인", "name_re": "…",
-         "all": false, "showing": true, "max": 50}
+  python3 mm_agent.py --serve          → 한 줄 요청 · 한 줄 답 (하네스는 이것을 한 번 띄워 계속 쓴다)
+  요청: {"op": "find", "app": "<앱 이름 정규식>", "role": "button", "name": "확인", "name_re": "…",
+         "frame": "<창 제목 정규식>", "not_frame": "…", "all": false, "showing": true, "max": 50}
         {"op": "tree", "app": "…", "depth": 8}
         {"op": "action", …찾기 조건…, "action": "click"}     (마우스 없이 위젯의 동작 — 마우스가 안 되는 곳에만)
         {"op": "text", …찾기 조건…}                          (글자 칸·라벨의 내용)
@@ -20,7 +21,7 @@ import sys
 
 import gi
 gi.require_version("Atspi", "2.0")
-from gi.repository import Atspi  # noqa: E402
+from gi.repository import Atspi, GLib  # noqa: E402
 
 HIDDEN = -2147483648
 
@@ -160,6 +161,11 @@ def find(req):
             frame = a.get_child_at_index(i)
             if frame is None:
                 continue
+            fname = frame.get_name() or ""
+            if "frame" in req and not re.search(req["frame"], fname):
+                continue                           # 그 창(제목)에서만 — 대화상자 단추를 뒤 창의 같은 이름 단추와 가른다
+            if "not_frame" in req and re.search(req["not_frame"], fname):
+                continue
             fxy = origin(frame, pid)
 
             def cb(o, frame_xy):
@@ -201,21 +207,17 @@ def tree(req):
     return lines
 
 
-def main():
-    Atspi.init()
-    try:
-        Atspi.set_timeout(3000, 15000)
-    except Exception:
-        pass
-    req = json.loads(sys.argv[1])
+def handle(req):
+    global _places
+    _places = None                                 # 창 자리는 요청마다 새로
     op = req.get("op", "find")
     if op == "apps":
-        print(json.dumps([{"name": a.get_name(), "pid": a.get_process_id()} for a in apps()], ensure_ascii=False))
-    elif op == "find":
-        print(json.dumps([dict(node(o, fxy), app=an) for o, fxy, an in find(req)], ensure_ascii=False))
-    elif op == "tree":
-        print(json.dumps(tree(req), ensure_ascii=False))
-    elif op == "action":
+        return [{"name": a.get_name(), "pid": a.get_process_id()} for a in apps()]
+    if op == "find":
+        return [dict(node(o, fxy), app=an) for o, fxy, an in find(req)]
+    if op == "tree":
+        return tree(req)
+    if op == "action":
         f = find(req)
         ok = False
         if f:
@@ -226,20 +228,25 @@ def main():
                     if ai.get_action_name(i) == req.get("action", "click"):
                         ok = ai.do_action(i)
                         break
-        print(json.dumps({"ok": bool(ok), "found": bool(f)}))
-    elif op == "text":
+        return {"ok": bool(ok), "found": bool(f)}
+    if op == "text":
+        if req.get("largest"):                   # 여러 개면 가장 큰 것 (본문 칸 — 검색 칸 말고)
+            req["all"] = True
         f = find(req)
         out = None
         if f:
+            if req.get("largest"):
+                f.sort(key=lambda h: -((node(h[0], h[1])["w"] or 0) * (node(h[0], h[1])["h"] or 0)))
             o = f[0][0]
-            t = o.get_text_iface()
-            out = t.get_text(0, t.get_character_count()) if t else (o.get_name() or "")
-        print(json.dumps({"text": out, "found": bool(f)}, ensure_ascii=False))
-    elif op == "focus":
+            # o.get_text_iface() 는 Accessible 을 돌려줘 get_text 이름이 겹친다 — Atspi.Text 로 직접
+            try:
+                out = Atspi.Text.get_text(o, 0, Atspi.Text.get_character_count(o))
+            except Exception:
+                out = o.get_name() or ""
+        return {"text": out, "found": bool(f)}
+    if op == "focus":
         hit = []
         for a in apps():
-            fxy_cache = {}
-
             def cb(o, frame_xy):
                 if "focused" in states(o):
                     hit.append(dict(node(o, frame_xy), app=a.get_name()))
@@ -254,10 +261,47 @@ def main():
                     break
             if hit:
                 break
-        print(json.dumps(hit[0] if hit else None, ensure_ascii=False))
-    else:
-        print(json.dumps({"error": f"모르는 op {op}"}))
+        return hit[0] if hit else None
+    return {"error": f"모르는 op {op}"}
 
+
+def fresh():
+    """오래 사는 클라이언트 — 쌓인 이벤트를 처리하고 캐시를 비워 이름·상태를 새로 읽게 한다"""
+    ctx = GLib.MainContext.default()
+    while ctx.iteration(False):
+        pass
+    try:
+        Atspi.get_desktop(0).clear_cache()
+    except Exception:
+        pass
+
+
+def serve():
+    """한 줄에 요청 하나(JSON) → 한 줄에 답 하나. 요청마다 프로세스를 새로 띄우면 앱마다 AT-SPI 직접 연결이 새로 생기고,
+    GLib 2.84 가 그 연결의 pidfd 를 놓지 않아 오래 켜 둔 앱이 파일 1024개에 막혀 멈춘다 (MafuyuMom 이 찾음)"""
+    print(json.dumps({"ready": True}), flush=True)
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            fresh()
+            out = handle(json.loads(line))
+        except Exception as e:
+            out = {"error": f"{type(e).__name__}: {e}"}
+        print(json.dumps(out, ensure_ascii=False), flush=True)
+
+
+def main():
+    Atspi.init()
+    try:
+        Atspi.set_timeout(3000, 15000)
+    except Exception:
+        pass
+    if sys.argv[1:] == ["--serve"]:
+        serve()
+    else:
+        print(json.dumps(handle(json.loads(sys.argv[1])), ensure_ascii=False))
 
 if __name__ == "__main__":
     main()

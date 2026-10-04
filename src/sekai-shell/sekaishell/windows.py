@@ -45,6 +45,7 @@ class WindowManager:
         self.saved = {}            # 주소 → 반쪽 맞춤 전 (x, y, w, h)
         self.snapped = {}          # 주소 → 영역 (left right tl tr bl br)
         self.known = {}            # 주소 → 마지막으로 본 창 정보 (닫힐 때 크기를 알려고)
+        self.mains = set()         # 앱의 첫 창(본 창)으로 열린 주소 — 크기는 이 창만 기억한다
         self.drag_start = {}       # 주소 → 끌기 시작 때 ((x, y), (w, h))
         self.preview = None        # 끌어서 스냅 미리보기 (sekai-panel 이 넣어 준다)
         self.assist = None         # 스냅 도우미 (sekai-panel 이 넣어 준다)
@@ -624,6 +625,7 @@ class WindowManager:
             c = self.known.pop(addr, None)
             if c:
                 self._closed(c)                       # 스냅 기록을 지우기 전에 (스냅된 창인지 본다)
+            self.mains.discard(addr)
             self.saved.pop(addr, None)
             self.snapped.pop(addr, None)
         elif name in ("movewindow", "movewindowv2", "activewindowv2"):
@@ -654,6 +656,8 @@ class WindowManager:
         cls = c.get("class") or ""
         if cls in SKIP_CLASSES or not c.get("floating") or c.get("fullscreen"):
             return
+        if c["address"] not in self.mains:
+            return                          # 대화상자 — 앱을 끄면 창이 한꺼번에 닫혀 대화상자가 "마지막 창"일 수 있다
         w, h = c.get("size", [0, 0])
         if c["address"] in self.snapped:
             g = self.saved.get(c["address"])
@@ -674,11 +678,12 @@ class WindowManager:
         if not c:
             return False
         self.known[addr] = c
+        if not self._first_of_class(c, clients):
+            return False
+        self.mains.add(addr)
         cls = c.get("class") or ""
         want = self.sizes.get(cls)
         if not want or not c.get("floating") or c.get("fullscreen"):
-            return False
-        if not self._first_of_class(c, clients):
             return False
         ax, ay, aw, ah = self._work_area(c)
         bar = self._bar(c)

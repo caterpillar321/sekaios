@@ -110,6 +110,9 @@ class QMP:
         for ch in text:
             self.cmd("send-key", keys=[{"type": "qcode", "data": n} for n in keys_for(ch)], **{"hold-time": 40})
             time.sleep(gap)
+        # send-key 는 줄에 넣고 바로 돌아온다 — QEMU 가 글자마다 누름·뗌을 시간 맞춰 보내 실제로는 한 글자 ~0.1초.
+        #   다 들어가기 전에 다음 일(단추 누르기)을 하면 앞부분만 들어간다 ("MM point 4903" → "MM")
+        time.sleep(0.07 * len(text) + 0.2)
 
     # ── 마우스 (화면 좌표 px) ──
     def _abs(self, x, y):

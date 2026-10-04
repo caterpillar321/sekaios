@@ -32,7 +32,7 @@ def run(cmd, timeout=60, session=True, input=None):
     """사용자로 — session=True 면 로그인한 세션의 환경으로"""
     full = f"{SESSION_ENV}; {cmd}" if session else cmd
     try:
-        p = subprocess.run(_ssh_base() + [full], capture_output=True, text=True, timeout=timeout, input=input)
+        p = subprocess.run(_ssh_base() + [full], capture_output=True, text=True, errors="replace", timeout=timeout, input=input)
         return Result(p.returncode, p.stdout, p.stderr)
     except subprocess.TimeoutExpired as e:
         return Result(124, e.stdout or "" if isinstance(e.stdout, str) else "", f"시간 초과 {timeout}s")
@@ -42,7 +42,7 @@ def root(cmd, timeout=300):
     """root 로 (sudo — 암호는 표준 입력)"""
     full = f"sudo -S -p '' bash -c {shlex.quote(cmd)}"
     try:
-        p = subprocess.run(_ssh_base() + [full], capture_output=True, text=True, timeout=timeout,
+        p = subprocess.run(_ssh_base() + [full], capture_output=True, text=True, errors="replace", timeout=timeout,
                            input=config.PASSWORD + "\n")
         return Result(p.returncode, p.stdout, p.stderr)
     except subprocess.TimeoutExpired:

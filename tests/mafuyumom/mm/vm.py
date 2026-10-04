@@ -141,6 +141,20 @@ def session_up():
     return remote.run('pgrep -f "/usr/bin/sekai-pane[l]" >/dev/null', session=False, timeout=10).ok
 
 
+def close_all_windows(timeout=10):
+    """열린 창을 모두 닫는다 — --reuse 로 이어 돌릴 때 지난 판의 창이 입력을 가로채지 않게"""
+    remote.run("hyprctl -j clients | python3 -c 'import json,sys,os,signal\n"
+               "for c in json.load(sys.stdin):\n"
+               "    try: os.kill(c[\"pid\"], signal.SIGTERM)\n"
+               "    except Exception: pass'", timeout=20)
+    end = time.time() + timeout
+    while time.time() < end:
+        if remote.run("hyprctl clients").out.strip() == "no open windows":
+            return True
+        time.sleep(0.5)
+    return False
+
+
 def login(q, timeout=120):
     """로그인 화면에서 암호를 쳐 들어간다 — 작업 표시줄이 뜰 때까지"""
     if session_up():
@@ -166,6 +180,22 @@ def reboot_and_login(q):
     if not wait_ssh():
         return False
     return login(q)
+
+
+def boot_id():
+    r = remote.run("cat /proc/sys/kernel/random/boot_id", session=False, timeout=10)
+    return r.out.strip() if r.ok else None
+
+
+def wait_rebooted(q, old_boot, timeout=600):
+    """시험이 화면에서 다시 시작을 눌렀을 때 — 새로 부팅될 때까지(boot_id 가 바뀔 때까지) 기다렸다가 로그인"""
+    end = time.time() + timeout
+    while time.time() < end:
+        time.sleep(5)
+        b = boot_id()
+        if b and b != old_boot:
+            return login(q)
+    return False
 
 
 def versions():

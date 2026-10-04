@@ -13,10 +13,20 @@ def fresh_notepad(t, x=400, y=200, w=900, h=640):
     t.gone(NP, 5)
     c = t.launch("sekai-notepad", NP)
     t.expect(c, "메모장이 떴다")
-    t.sh(f"hyprctl dispatch resizewindowpixel exact {w} {h},class:{NP} >/dev/null; "
-         f"hyprctl dispatch movewindowpixel exact {x} {y},class:{NP} >/dev/null")
-    time.sleep(0.8)
-    return main_win(t)
+    # 패널이 새 창을 기억한 크기로 가운데에 놓는다 — 그보다 먼저 옮기면 되돌려진다. 자리가 맞을 때까지
+    for _ in range(4):
+        m = main_win(t)
+        if m and m.get("fullscreen"):                    # 메모장은 최대화한 채 닫으면 최대화로 다시 연다
+            t.sh(f"hyprctl dispatch focuswindow address:{m['address']} >/dev/null; "
+                 "hyprctl dispatch fullscreenstate 0 0 >/dev/null")
+            time.sleep(0.5)
+        t.sh(f"hyprctl dispatch resizewindowpixel exact {w} {h},class:{NP} >/dev/null; "
+             f"hyprctl dispatch movewindowpixel exact {x} {y},class:{NP} >/dev/null")
+        time.sleep(0.8)
+        m = main_win(t)
+        if m and abs(m["at"][0] - x) < 4 and abs(m["at"][1] - y) < 4 and abs(m["size"][0] - w) < 4:
+            return m
+    t.fail(f"메모장을 {x},{y} {w}x{h} 에 놓지 못했다 ({m and (m['at'], m['size'])})")
 
 
 def main_win(t):
@@ -59,7 +69,7 @@ def button_cancel(t):
         t.expect(state(t) == "보통", f"{name} 단추 — 벗어나 뗌 → 그대로 ({state(t)})")
 
 
-@test("최대화·복원 (단추·제목줄 두 번 누르기)", suite="windows")
+@test("최대화·복원 (단추·제목줄 두 번 누르기)", suite="windows", quick=True)
 def maximize(t):
     c = fresh_notepad(t)
     by, cl, mx, mn = bar(c)
@@ -73,7 +83,7 @@ def maximize(t):
     t.expect(abs(c["size"][0] - 900) <= 4 and abs(c["size"][1] - 640) <= 4, f"원래 크기로 ({c['size']})")
 
 
-@test("최소화하고 작업 표시줄로 되살리기 — 데스크톱은 그대로", suite="windows")
+@test("최소화하고 작업 표시줄로 되살리기 — 데스크톱은 그대로", suite="windows", quick=True)
 def minimize(t):
     c = fresh_notepad(t)
     ws = c["workspace"]["name"]
@@ -91,7 +101,7 @@ def minimize(t):
     t.expect((t.hypr("activewindow") or {}).get("class") == NP, "초점도 받았다")
 
 
-@test("끌어서 스냅 — 왼쪽·오른쪽 절반, 레이아웃 바, Esc 취소", suite="windows")
+@test("끌어서 스냅 — 왼쪽·오른쪽 절반, 레이아웃 바, Esc 취소", suite="windows", quick=True)
 def snap(t):
     c = fresh_notepad(t, 500, 250)
     by = c["at"][1] - 17

@@ -29,9 +29,10 @@ class Skip(Exception):
     pass
 
 
-def test(name, suite, timeout=180, slow=False):
+def test(name, suite, timeout=180, slow=False, quick=False):
+    """slow: 재부팅·긴 무작위 — full 에서만. quick: 영역마다 대표 하나씩 — mafuyumom quick (중간 점검, ~1분 반)"""
     def deco(fn):
-        TESTS.append({"name": name, "suite": suite, "fn": fn, "timeout": timeout, "slow": slow,
+        TESTS.append({"name": name, "suite": suite, "fn": fn, "timeout": timeout, "slow": slow, "quick": quick,
                       "id": f"{suite}/{fn.__name__}"})
         return fn
     return deco
@@ -40,14 +41,15 @@ def test(name, suite, timeout=180, slow=False):
 class T:
     """시험에 넘기는 도구 상자"""
 
-    def __init__(self, q, outdir, tid):
+    def __init__(self, q, outdir, tid, ui=None):
         self.q = q
-        self.ui = UI(q)
+        self.ui = ui or UI(q)
         self.outdir = outdir
         self.tid = tid
         self.shots = []
         self.notes = []
         self.findings = []        # 시험은 통과해도 남길 발견 (예: 이름 없는 단추)
+        self.cleanups = []        # 시험이 실패해도 끝에 돌리는 정리 (다음 시험에 창이 남지 않게)
 
     # ── 입력 ──
     def key(self, *combos, **kw):
@@ -108,7 +110,47 @@ class T:
         return self.gone(cls)
 
     def kill(self, proc):
-        self.sh(f"pkill -x {proc}; true")
+        """SekaiOS 앱은 python3 로 돌아 이름(comm)이 python3 — 명령줄의 /usr/bin/이름 으로도 찾는다"""
+        self.sh(f"pkill -x {proc}; pkill -f '[/]usr/bin/{proc}( |$)'; true")
+
+    def after(self, fn):
+        """끝에 꼭 할 정리 — 문자열이면 VM 안 셸 명령"""
+        self.cleanups.append(fn)
+
+    def auth(self, timeout=20):
+        """관리자 인증 창(사용자 계정 컨트롤)이 뜨면 암호를 넣고 예 — 창이 안 뜨면(인증을 기억 중) False.
+        창은 미끄러져 들어온다 — 움직이는 중에 치면 글자가 빠져 "암호가 올바르지 않습니다"가 된다"""
+        from . import config
+        f = self.ui.wait(app="polkit-agent", role="password text", timeout=timeout)
+        if not f:
+            return False
+        for _ in range(10):                               # 자리가 멈출 때까지
+            time.sleep(0.3)
+            g = self.ui.find(app="polkit-agent", role="password text")
+            if not g:
+                break
+            if (g["cx"], g["cy"]) == (f["cx"], f["cy"]):
+                break
+            f = g
+        self.shot("인증창")
+        for attempt in range(2):
+            self.click(f["cx"], f["cy"])
+            time.sleep(0.3)
+            self.key("ctrl-a")
+            self.key("backspace")
+            self.type(config.PASSWORD)
+            want = len(config.PASSWORD)
+            n = self.wait(lambda: len(self.ui.text(app="polkit-agent", role="password text") or "") == want and want, 3) \
+                or len(self.ui.text(app="polkit-agent", role="password text") or "")
+            if n != want:
+                self.note(f"인증 창에 친 글자 {n}/{len(config.PASSWORD)} — 다시")
+                continue
+            self.key("ret")
+            if self.wait(lambda: not self.ui.find(app="polkit-agent", role="password text"), 10):
+                return True
+            self.note("인증 창이 닫히지 않았다 (암호 거절?) — 다시")
+            f = self.ui.find(app="polkit-agent", role="password text") or f
+        self.fail("관리자 인증을 통과하지 못했다")
 
     # ── 판정 ──
     def wait(self, cond, timeout=10, every=0.5):
@@ -151,9 +193,17 @@ class T:
 
 def run(selected, outdir, q):
     results = []
+    ui = UI(q)                    # 에이전트 하나를 끝까지 (요청마다 띄우면 앱에 pidfd 가 쌓인다 — mm_agent.serve)
+    try:
+        return _run(selected, outdir, q, ui, results)
+    finally:
+        ui.stop()
+
+
+def _run(selected, outdir, q, ui, results):
     for tc in selected:
         print(f"▶ {tc['id']} — {tc['name']}", flush=True)
-        t = T(q, outdir, tc["id"])
+        t = T(q, outdir, tc["id"], ui)
         since = time.time()
         before = checks.probe(since - 1)
         status, msg = "pass", ""
@@ -167,10 +217,17 @@ def run(selected, outdir, q):
         except Exception as e:
             status, msg = "error", f"{type(e).__name__}: {e}\n{traceback.format_exc(limit=4)}"
         dt = time.time() - t0
+        if status in ("fail", "error"):
+            t.shot("끝")                                # 정리하기 전 화면
+        for fn in reversed(t.cleanups):
+            try:
+                t.sh(fn) if isinstance(fn, str) else fn()
+            except Exception as e:
+                t.notes.append(f"(정리 실패: {e})")
         after = checks.probe(since - 1)
         probs = checks.problems(before, after)
         tb = checks.tracebacks(since - 1) if after.get("tb", 0) > before.get("tb", 0) else ""
-        if status in ("fail", "error") or probs:
+        if probs and status not in ("fail", "error"):
             t.shot("끝")
         if probs and status == "pass":
             status = "warn"
