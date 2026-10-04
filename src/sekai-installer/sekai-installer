@@ -147,6 +147,7 @@ class Installer(Gtk.Window):
         self.disk = None
         self.esp_mb = 512
         self.swap_mb = 0
+        self.fs = "btrfs"                      # btrfs = 시스템 복원 지점을 쓸 수 있다 (고급 설정에서 ext4)
         self.busy = False
 
         self.wz = W.Wizard("SekaiOS 설치", [
@@ -256,6 +257,13 @@ class Installer(Gtk.Window):
         self.swap_combo.set_active(0)
         self.swap_combo.connect("changed", lambda c: self._set_swap(int(c.get_active_id())))
         adv.attach(self.swap_combo, 1, 1, 2, 1)
+        adv.attach(W.label("파일 시스템", "row-title"), 0, 2, 1, 1)
+        self.fs_combo = Gtk.ComboBoxText()
+        self.fs_combo.append("btrfs", "btrfs — 시스템 복원 지점 사용 (권장)")
+        self.fs_combo.append("ext4", "ext4 — 시스템 복원 지점 없음")
+        self.fs_combo.set_active_id("btrfs")
+        self.fs_combo.connect("changed", lambda c: self._set_fs(c.get_active_id()))
+        adv.attach(self.fs_combo, 1, 2, 2, 1)
         exp.add(adv)
         box.pack_start(exp, False, False, 6)
         return box
@@ -266,6 +274,10 @@ class Installer(Gtk.Window):
 
     def _set_swap(self, v):
         self.swap_mb = v
+        self._plan()
+
+    def _set_fs(self, v):
+        self.fs = v or "btrfs"
         self._plan()
 
     def go_disk(self, forward=True):
@@ -356,7 +368,9 @@ class Installer(Gtk.Window):
             b.set_size_request(max(110, int(760 * mb / total)), -1)
             self.plan.pack_start(b, cls == "root", True, 0)
         self.plan.show_all()
-        legend = ("ESP 는 FAT32, SekaiOS 는 ext4 로 만듭니다. 부트로더(GRUB, 보안 부팅 지원)는 이 디스크의 ESP 에만 "
+        fs_note = ("btrfs 로 만들어 업데이트 전마다 시스템 복원 지점을 남깁니다 (개인 파일은 건드리지 않음)"
+                   if self.fs == "btrfs" else "ext4 로 만듭니다 (시스템 복원 지점 없음)")
+        legend = (f"ESP 는 FAT32, SekaiOS 는 {fs_note}. 부트로더(GRUB, 보안 부팅 지원)는 이 디스크의 ESP 에만 "
                   "설치되고, 다른 디스크의 Windows 는 부팅 메뉴에서 자동으로 찾아 보여 줍니다.")
         self.plan_legend.set_text(legend)
 
@@ -394,7 +408,7 @@ class Installer(Gtk.Window):
         rows = [("설치할 디스크", f"{d['model']}  ({human(d['size'])}, {d['path']})"),
                 ("부팅 파티션 (ESP)", f"{self.esp_mb} MB · FAT32 · 새로 만듦"),
                 ("스왑", f"{self.swap_mb // 1024} GB" if self.swap_mb else "없음"),
-                ("SekaiOS", "나머지 전부 · ext4"),
+                ("SekaiOS", "나머지 전부 · " + ("btrfs (시스템 복원 지점)" if self.fs == "btrfs" else "ext4")),
                 ("부트로더", "GRUB (보안 부팅 지원) — 이 디스크의 ESP 에만"),
                 ("계정 · 지역 · 네트워크", "설치 후 처음 켤 때 설정합니다")]
         for k, v in rows:
@@ -489,7 +503,7 @@ class Installer(Gtk.Window):
 
     def _cmd(self):
         args = [BACKEND, "--disk", self.disk, "--esp-mb", str(self.esp_mb),
-                "--swap-mb", str(self.swap_mb), "--yes-erase"]
+                "--swap-mb", str(self.swap_mb), "--fs", self.fs, "--yes-erase"]
         ident = getattr(self, "disk_id", [])
         if ident:
             args += ["--expect-size", ident[0]]

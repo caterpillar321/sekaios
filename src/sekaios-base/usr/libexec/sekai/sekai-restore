@@ -1,0 +1,640 @@
+#!/usr/bin/python3
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 시스템 복원 — 복원 지점(btrfs 스냅숏, snapper) 만들기·지우기·되돌리기 (관리자 권한)
+#
+#    sekai-restore status                 JSON 한 줄 — 쓸 수 있는지, 예약된 복원, 마지막 복원·취소할 수 있는지
+#    sekai-restore list                   JSON 한 줄 — 복원 지점들 (새것 먼저)
+#    sekai-restore create <설명>          수동 복원 지점
+#    sekai-restore delete <번호>…
+#    sekai-restore restore <번호>         다음 시작 때 그 지점으로 되돌리게 예약 (설정 앱이 그다음 다시 시작한다)
+#    sekai-restore undo                   다음 시작 때 마지막 복원을 취소하게 예약
+#    sekai-restore cancel                 예약을 지운다
+#    sekai-restore auto on|off            업데이트·설치 전 자동 복원 지점
+#    sekai-restore limit <비율>           복원 지점이 쓸 수 있는 공간 상한 (디스크의 0.02~0.5, 기본 0.1)
+#    sekai-restore setup                  (설치 프로그램·패키지) snapper 설정을 만든다 — btrfs 설치본에서만, 여러 번 해도 같다
+#    sekai-restore apt-pre | apt-post     apt 훅 (/etc/apt/apt.conf.d/80sekai-restore)
+#    sekai-restore weekly                 정기 복원 지점 — 7일 안에 만든 지점이 없을 때만 (sekai-restore-weekly.timer)
+#    sekai-restore grub                   부팅 메뉴의 "복원" 항목 (/boot/grub/sekai-restore.cfg)과 목록 파일을 새로
+#
+#  공간: 복원 지점이 디스크를 마구 차지하지 않게 (윈도우의 "최대 사용량"처럼)
+#    · /home·기록·캐시·Flatpak 은 복원 지점에 넣지 않는다 (가장 많이 바뀌는 것들 — 하위 볼륨을 따로)
+#    · 업데이트 "후" 지점은 만들지 않는다 (되돌리는 데 필요 없고 공간만 붙잡는다)
+#    · 개수: 자동 지점 2~5개, 수동·설치 직후 1~3개 — 여유 공간이 FREE_LIMIT 아래면 최소 개수까지 줄인다 (snapper)
+#    · 남은 공간이 MIN_FREE 아래면 자동 지점은 만들지 않는다 (먼저 정리해 보고)
+#    · 복원 지점만 붙잡은 공간(btrfs qgroup 1/0 의 exclusive)이 SPACE_LIMIT(디스크의 10%)를 넘으면 최소 개수까지
+#      지운다 — 윈도우의 "최대 사용량". 일반 qgroup 을 쓴다: 간단 쿼터(--simple)는 데이터를 처음 쓴 하위 볼륨에
+#      매겨 복원 지점이 붙잡은 공간을 잴 수 없다 (VM 에서 확인). 지점이 10개 안팎이라 qgroup 이 느려질 일도 없다
+#
+#  설정 앱은 목록·상태를 /var/lib/sekai/restore.json 으로 읽는다 (누구나 읽을 수 있게 — 볼 때마다 암호를 묻지 않게).
+#    /.snapshots 는 관리자만 (옛 setuid 프로그램을 일반 사용자가 실행하지 못하게 — snapper 의 권장)
+#
+#  구조 (설치 프로그램이 만든다): 파일 시스템 맨 위에 하위 볼륨
+#    @ → /   @home → /home   @snapshots → /.snapshots   @log → /var/log   @cache → /var/cache
+#  복원 지점은 @ 만 (개인 파일·기록·캐시는 그대로 — 윈도우의 시스템 복원처럼).
+#
+#  되돌리기는 다음 시작 때 initramfs(scripts/local-premount/sekai-restore)가 한다 — 루트를 연결하기 전에
+#    @ → @before-restore-<시각>  으로 이름을 바꾸고, 그 지점에서 새 @ 를 만든다. 옛 @ 가 남아 "복원 취소" 가 된다.
+#    요청은 맨 위의 .sekai-restore-request (한 줄: "restore <번호>" 또는 "undo <이름>"), 결과는 .sekai-restore-log.
+#    부팅 메뉴의 복원 항목은 커널 옵션 sekai.restore=<번호> 로 같은 일을 한다 (그 지점의 커널로 켜진다).
+# ═══════════════════════════════════════════════════════════════
+import datetime
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+CONFIG = "root"
+CONF_FILE = "/etc/snapper/configs/root"
+DEFAULTS = "/etc/default/snapper"
+TEMPLATE = "/usr/share/snapper/config-templates/default"
+TOP = "/run/sekai-restore-top"            # 맨 위(subvolid=5)를 잠깐 연결하는 곳
+REQUEST = ".sekai-restore-request"
+RLOG = ".sekai-restore-log"
+PRE_FILE = "/run/sekai-restore-apt-pre"
+GRUB_CFG = "/boot/grub/sekai-restore.cfg"
+AUTO_OFF = "/etc/sekai/restore-auto-off"   # 있으면 자동 복원 지점을 만들지 않는다
+OLD_PREFIX = "@before-restore-"
+KEEP_OLD = 1                              # 복원 전 상태(@before-restore-*)는 마지막 하나만 남긴다
+MIN_FREE = 0.10                           # 이보다 여유가 적으면 자동 지점을 만들지 않는다
+WEEKLY_DAYS = 7
+GRUB_MAX = 8                              # 부팅 메뉴에 보일 지점 수
+CACHE = "/var/lib/sekai/restore.json"
+LIMIT_FILE = "/etc/sekai/restore-limit"   # 사용자가 고른 공간 상한 (없으면 CONF_SET 의 기본값)
+QGROUP = "1/0"                            # 모든 복원 지점을 묶는 qgroup (snapper 의 QGROUP)
+
+# snapper 설정 — 기본 틀에서 이것만 바꾼다
+CONF_SET = {
+    "SUBVOLUME": "/", "FSTYPE": "btrfs", "QGROUP": QGROUP,
+    "SPACE_LIMIT": "0.1", "FREE_LIMIT": "0.2",
+    "ALLOW_USERS": "", "ALLOW_GROUPS": "", "SYNC_ACL": "no",
+    "BACKGROUND_COMPARISON": "no",
+    # "최소-최대" — 여유 공간이 FREE_LIMIT 아래로 떨어지면 최소까지 지운다. 나이 제한은 두지 않는다
+    #   (업데이트를 연달아 할 때 30분 안의 지점이 쌓이지 않게 — 늘 개수대로)
+    "NUMBER_CLEANUP": "yes", "NUMBER_MIN_AGE": "0", "NUMBER_LIMIT": "2-5", "NUMBER_LIMIT_IMPORTANT": "1-3",
+    # snapper 의 시간별 지점은 쓰지 않는다 — 정기 지점은 주 1회 sekai-restore weekly
+    "TIMELINE_CREATE": "no", "TIMELINE_CLEANUP": "yes", "TIMELINE_MIN_AGE": "0",
+    "TIMELINE_LIMIT_HOURLY": "0", "TIMELINE_LIMIT_DAILY": "0", "TIMELINE_LIMIT_WEEKLY": "0",
+    "TIMELINE_LIMIT_MONTHLY": "0", "TIMELINE_LIMIT_YEARLY": "0", "TIMELINE_LIMIT_QUARTERLY": "0",
+    "EMPTY_PRE_POST_CLEANUP": "yes", "EMPTY_PRE_POST_MIN_AGE": "1800",
+}
+
+
+def out(obj):
+    print(json.dumps(obj, ensure_ascii=False))
+
+
+def die(msg, code=1):
+    print(f"ERROR {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def run(cmd, check=True, **kw):
+    r = subprocess.run(cmd, capture_output=True, text=True, **kw)
+    if check and r.returncode != 0:
+        die(f"{' '.join(cmd)}: {(r.stderr or r.stdout).strip()}")
+    return r
+
+
+def snapper(*args, check=True):
+    # snapperd 없이 — 설치 프로그램의 chroot·apt 훅에서도 같게
+    return run(["snapper", "--no-dbus", "-c", CONFIG] + list(args), check=check)
+
+
+# ── 쓸 수 있나 ──────────────────────────────────────────────
+def root_info():
+    """(파일 시스템, 루트 하위 볼륨, 장치) — 루트가 btrfs 의 @ 인지 본다"""
+    r = run(["findmnt", "-no", "FSTYPE,FSROOT,SOURCE", "/"], check=False)
+    parts = r.stdout.split()
+    if len(parts) < 3:
+        return "", "", ""
+    fs, fsroot, src = parts[0], parts[1], parts[2]
+    return fs, fsroot, re.sub(r"\[.*\]$", "", src)
+
+
+def snapshots_mounted():
+    r = run(["findmnt", "-no", "FSROOT", "/.snapshots"], check=False)
+    return r.stdout.strip() == "/@snapshots"
+
+
+def why_unsupported():
+    if os.path.isdir("/run/live/medium"):
+        return "설치 USB(라이브)로 켠 상태입니다"
+    fs, fsroot, _ = root_info()
+    if fs != "btrfs":
+        return (f"이 PC 는 {fs or '알 수 없는'} 파일 시스템에 설치되어 복원 지점을 만들 수 없습니다 "
+                "(btrfs 로 설치한 SekaiOS 에서 쓸 수 있습니다)")
+    if fsroot != "/@":
+        return "시스템이 SekaiOS 의 btrfs 구조(@ 하위 볼륨)로 설치되지 않았습니다"
+    if not snapshots_mounted():
+        return "복원 지점 저장소(/.snapshots)가 연결되지 않았습니다"
+    if not shutil.which("snapper"):
+        return "snapper 가 설치되지 않았습니다"
+    return None
+
+
+def need_supported():
+    why = why_unsupported()
+    if why:
+        die(why, 3)
+    if not os.path.isfile(CONF_FILE):
+        setup()
+
+
+# ── 맨 위 하위 볼륨 ─────────────────────────────────────────
+class Top:
+    """파일 시스템 맨 위(subvolid=5)를 잠깐 연결한다 (@, @before-restore-*, 요청 파일이 있는 곳)"""
+
+    def __enter__(self):
+        _, _, dev = root_info()
+        os.makedirs(TOP, exist_ok=True)
+        if not os.path.ismount(TOP):
+            run(["mount", "-t", "btrfs", "-o", "subvolid=5", dev, TOP])
+        return TOP
+
+    def __exit__(self, *a):
+        run(["umount", TOP], check=False)
+
+
+def old_roots(top):
+    return sorted((n for n in os.listdir(top) if n.startswith(OLD_PREFIX)), reverse=True)
+
+
+def read_request(top):
+    try:
+        with open(os.path.join(top, REQUEST)) as f:
+            parts = f.read().split()
+        return {"action": parts[0], "arg": parts[1]} if len(parts) >= 2 else None
+    except OSError:
+        return None
+
+
+def write_request(top, action, arg):
+    p = os.path.join(top, REQUEST)
+    with open(p + ".tmp", "w") as f:
+        f.write(f"{action} {arg}\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(p + ".tmp", p)
+
+
+def last_log(top):
+    """initramfs 가 남긴 마지막 결과 줄: "<시각> restore <번호> <옛 이름>" · "<시각> undo <이름> <치운 이름>" · "... fail <이유>" """
+    try:
+        with open(os.path.join(top, RLOG)) as f:
+            lines = [ln.split() for ln in f if ln.strip()]
+        return lines[-1] if lines else None
+    except OSError:
+        return None
+
+
+# ── snapper ─────────────────────────────────────────────────
+def setup():
+    """snapper 설정 (btrfs 설치본에서만). /.snapshots 는 이미 @snapshots 가 연결돼 있어 create-config 를
+    쓰지 않고(.snapshots 하위 볼륨을 새로 만들려다 실패한다) 파일을 직접 만든다"""
+    why = why_unsupported()
+    if why:
+        die(why, 3)
+    os.makedirs("/etc/snapper/configs", exist_ok=True)
+    conf_set = dict(CONF_SET)
+    try:
+        with open(LIMIT_FILE) as f:
+            v = float(f.read().strip())
+        if 0.02 <= v <= 0.5:
+            conf_set["SPACE_LIMIT"] = f"{v:g}"                 # 사용자가 고른 상한은 남긴다
+    except (OSError, ValueError):
+        pass
+    lines = []
+    if os.path.isfile(TEMPLATE):
+        with open(TEMPLATE) as f:
+            lines = f.read().splitlines()
+    seen = set()
+    for i, ln in enumerate(lines):
+        m = re.match(r"^([A-Z_]+)=", ln)
+        if m and m.group(1) in conf_set:
+            lines[i] = f'{m.group(1)}="{conf_set[m.group(1)]}"'
+            seen.add(m.group(1))
+    lines += [f'{k}="{v}"' for k, v in conf_set.items() if k not in seen]
+    tmp = CONF_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("# SekaiOS 시스템 복원 — sekai-restore setup 이 만듦\n" + "\n".join(lines) + "\n")
+    os.chmod(tmp, 0o640)
+    os.replace(tmp, CONF_FILE)
+    # 설정 목록에 root, snapper 의 apt 훅은 끈다 (우리 훅이 설명을 붙여 만든다 — 80sekai-restore)
+    text = ""
+    if os.path.isfile(DEFAULTS):
+        with open(DEFAULTS) as f:
+            text = f.read()
+    for key, val in (("SNAPPER_CONFIGS", "root"), ("DISABLE_APT_SNAPSHOT", "yes")):
+        if re.search(rf"^{key}=", text, re.M):
+            text = re.sub(rf"^{key}=.*$", f'{key}="{val}"', text, flags=re.M)
+        else:
+            text += f'\n{key}="{val}"\n'
+    with open(DEFAULTS, "w") as f:
+        f.write(text)
+    os.chmod("/.snapshots", 0o750)
+    setup_quota()
+    # snapper 가 켜 두는 "켤 때마다 지점"(snapper-boot)·시간별 지점(snapper-timeline)은 끈다 — 공간만 붙잡는다.
+    #   정리(snapper-cleanup)와 우리 주간 지점만
+    live = os.path.isdir("/run/systemd/system")
+    run(["systemctl", "disable"] + (["--now"] if live else []) + ["snapper-boot.timer", "snapper-timeline.timer"],
+        check=False)
+    run(["systemctl", "enable"] + (["--now"] if live else []) + ["snapper-cleanup.timer", "sekai-restore-weekly.timer"],
+        check=False)
+
+
+def read_conf():
+    out = {}
+    try:
+        with open(CONF_FILE) as f:
+            for ln in f:
+                m = re.match(r'^([A-Z_]+)="(.*)"\s*$', ln.strip())
+                if m:
+                    out[m.group(1)] = m.group(2)
+    except OSError:
+        pass
+    return out
+
+
+def setup_quota():
+    """일반 qgroup 을 켜고, 복원 지점을 모두 1/0 에 묶는다 (snapper 가 새 지점은 알아서 넣는다)"""
+    r = run(["btrfs", "qgroup", "show", "--raw", "/"], check=False)
+    if r.returncode != 0:
+        run(["btrfs", "quota", "enable", "/"], check=False)
+        r = run(["btrfs", "qgroup", "show", "--raw", "/"], check=False)
+        if r.returncode != 0:
+            return
+    if not re.search(r"^1/0\s", r.stdout, re.M):
+        run(["btrfs", "qgroup", "create", QGROUP, "/"], check=False)
+    try:
+        nums = [n for n in os.listdir("/.snapshots") if n.isdigit()]
+    except OSError:
+        nums = []
+    for n in nums:
+        p = f"/.snapshots/{n}/snapshot"
+        if not os.path.isdir(p):
+            continue
+        sid = run(["btrfs", "inspect-internal", "rootid", p], check=False).stdout.strip()
+        if sid.isdigit():
+            run(["btrfs", "qgroup", "assign", "--no-rescan", f"0/{sid}", QGROUP, "/"], check=False)
+    run(["btrfs", "quota", "rescan", "/"], check=False)        # 기다리지 않는다 — 다 세면 숫자가 맞아진다
+
+
+def space():
+    """(복원 지점만 붙잡은 바이트, 상한 바이트) — 모르면 None"""
+    r = run(["btrfs", "qgroup", "show", "--raw", "/"], check=False)
+    m = re.search(r"^1/0\s+(\d+)\s+(\d+)", r.stdout, re.M)
+    st = os.statvfs("/")
+    total = st.f_blocks * st.f_frsize
+    try:
+        lim = float(read_conf().get("SPACE_LIMIT", "0.1"))
+    except ValueError:
+        lim = 0.1
+    return (int(m.group(2)) if m else None), int(total * lim), lim
+
+
+KIND_TEXT = {"update": "업데이트", "install": "앱 설치", "remove": "앱 제거", "driver": "드라이버",
+             "manual": "수동", "weekly": "정기", "timeline": "정기", "apt": "패키지 변경", "first": "설치 직후"}
+
+
+def list_points():
+    r = snapper("--jsonout", "list", "--disable-used-space", check=False)
+    if r.returncode != 0:
+        r = snapper("--jsonout", "list", check=False)
+    try:
+        rows = json.loads(r.stdout).get(CONFIG, [])
+    except (ValueError, AttributeError):
+        rows = []
+    pts = []
+    for s in rows:
+        n = s.get("number", 0)
+        if not n or s.get("type") == "post":
+            continue                      # 0 은 지금 시스템, post 는 "후" — 되돌릴 자리는 "전"·단일 지점
+        ud = s.get("userdata") or {}
+        # 우리가 만들지 않은 지점: snapper 정기(timeline)·켤 때(boot)·apt 는 자동, 정리 규칙이 없으면 직접 만든 것
+        kind = ud.get("sekai") or ("timeline" if s.get("cleanup") in ("timeline", "number") else "manual")
+        date = s.get("date", "")
+        pts.append({"number": n, "date": date, "description": s.get("description") or "",
+                    "kind": kind, "kind_text": KIND_TEXT.get(kind, kind),
+                    "important": ud.get("important") == "yes",
+                    "kernel": newest_kernel(f"/.snapshots/{n}/snapshot") or ""})
+    pts.sort(key=lambda p: p["number"], reverse=True)
+    return pts
+
+
+def newest_kernel(root):
+    try:
+        ks = [f[len("vmlinuz-"):] for f in os.listdir(os.path.join(root, "boot")) if f.startswith("vmlinuz-")]
+    except OSError:
+        return None
+    if not ks:
+        return None
+
+    def key(v):
+        return [int(x) if x.isdigit() else x for x in re.split(r"[.\-+]", v)]
+    try:
+        return sorted(ks, key=key)[-1]
+    except TypeError:
+        return sorted(ks)[-1]
+
+
+IMPORTANT_KINDS = ("manual", "first", "driver")
+
+
+def free_fraction():
+    st = os.statvfs("/")
+    return st.f_bavail / st.f_blocks if st.f_blocks else 1.0
+
+
+def create(desc, kind="manual", auto=False):
+    """복원 지점 하나 (늘 단일 지점 — "후" 지점은 만들지 않는다). 모두 number 정리 대상:
+    수동·설치 직후·드라이버는 중요(important)로 따로 센다. 자동 지점은 공간이 모자라면 건너뛴다 → 0"""
+    if free_fraction() < MIN_FREE:
+        snapper("cleanup", "number", check=False)
+        if free_fraction() < MIN_FREE:
+            if auto:
+                print("디스크 여유 공간이 부족해 자동 복원 지점을 만들지 않았습니다", file=sys.stderr)
+                return 0
+            die("디스크 여유 공간이 부족해 복원 지점을 만들 수 없습니다 — 파일을 정리한 뒤 다시 해 보세요")
+    ud = f"sekai={kind}" + (",important=yes" if kind in IMPORTANT_KINDS else "")
+    r = snapper("create", "-p", "-d", desc[:120], "-u", ud, "-c", "number")
+    n = int(r.stdout.strip() or 0)
+    snapper("cleanup", "number", check=False)
+    return n
+
+
+def weekly():
+    """7일 안에 만든 지점이 없으면 정기 지점 하나 (윈도우도 한동안 지점이 없으면 만든다)"""
+    if os.path.exists(AUTO_OFF):
+        return
+    now = datetime.datetime.now()
+    for p in list_points():
+        try:
+            if now - datetime.datetime.fromisoformat(p["date"][:19]) < datetime.timedelta(days=WEEKLY_DAYS):
+                return
+        except ValueError:
+            continue
+    if create("정기 복원 지점", kind="weekly", auto=True):
+        refresh()
+
+
+# ── apt 훅 ──────────────────────────────────────────────────
+def apt_desc():
+    """이 apt 가 무엇을 하는지 — 부른 쪽(sekai-update·스토어)이 SEKAI_RESTORE_DESC 로 알려 주면 그것,
+    아니면 apt 의 명령줄로 짐작한다"""
+    desc = os.environ.get("SEKAI_RESTORE_DESC", "").strip()
+    kind = os.environ.get("SEKAI_RESTORE_KIND", "").strip()
+    if desc:
+        return desc, kind or "apt"
+    pid, argv = os.getppid(), []
+    for _ in range(4):                    # sh → apt(-get) → … 위로 올라가며 apt 를 찾는다
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                argv = [a.decode("utf-8", "replace") for a in f.read().split(b"\0") if a]
+            with open(f"/proc/{pid}/stat") as f:
+                ppid = int(f.read().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            break
+        if argv and os.path.basename(argv[0]) in ("apt", "apt-get", "aptitude"):
+            break
+        pid, argv = ppid, []
+    words = [a for a in argv[1:] if not a.startswith("-")]
+    verb, names = (words[0], words[1:]) if words else ("", [])
+    names = [os.path.basename(n) for n in names][:3]
+    more = " 등" if len(words) > 4 else ""
+    if verb in ("upgrade", "full-upgrade", "dist-upgrade"):
+        return "업데이트 전", "update"
+    if verb in ("install", "reinstall") and names:
+        return f"설치 전: {', '.join(names)}{more}", "install"
+    if verb in ("remove", "purge", "autoremove"):
+        return (f"제거 전: {', '.join(names)}{more}" if names else "패키지 정리 전"), "remove"
+    return "패키지 변경 전", "apt"
+
+
+def apt_hook_ok():
+    if os.path.exists(AUTO_OFF) or os.environ.get("SEKAI_NO_SNAPSHOT") == "1":
+        return False
+    if why_unsupported() or not os.path.isfile(CONF_FILE):
+        return False
+    # chroot(이미지 만들기·설치 프로그램)에선 하지 않는다 — 진짜 루트와 장치가 다르다
+    try:
+        return os.stat("/").st_ino == os.stat("/proc/1/root/.").st_ino
+    except OSError:
+        return False
+
+
+def apt_pre():
+    if not apt_hook_ok():
+        return
+    desc, kind = apt_desc()
+    if create(desc, kind=kind, auto=True):
+        with open(PRE_FILE, "w") as f:
+            f.write("1")
+
+
+def apt_post():
+    # "후" 지점은 만들지 않는다 — 앞에서 지점을 만들었으면 부팅 메뉴·목록만 새로
+    try:
+        os.unlink(PRE_FILE)
+    except OSError:
+        return
+    if apt_hook_ok():
+        refresh()
+
+
+# ── 부팅 메뉴 ───────────────────────────────────────────────
+def esc_grub(s):
+    return s.replace("'", "'\\''")
+
+
+def write_grub():
+    """부팅 메뉴의 "복원" 하위 메뉴가 읽는 파일 — 지점마다 그 지점의 커널로 켜면서 sekai.restore=<번호>.
+    grub.cfg 전체를 다시 만들지 않고(오래 걸린다) 이 파일만 쓴다 (/etc/grub.d/41_sekai-restore 가 source)"""
+    if why_unsupported() or not os.path.isdir("/boot/grub"):
+        return
+    _, _, dev = root_info()
+    uuid = run(["blkid", "-s", "UUID", "-o", "value", dev], check=False).stdout.strip()
+    if not uuid:
+        return
+    opts = "quiet splash"
+    try:
+        with open("/etc/default/sekai-boot") as f:
+            m = re.search(r'^SEKAI_KERNEL_OPTS="([^"]*)"', f.read(), re.M)
+            if m:
+                opts = m.group(1)
+    except OSError:
+        pass
+    blocks = []
+    for p in list_points()[:GRUB_MAX]:
+        k = p["kernel"]
+        if not k:
+            continue
+        base = f"/@snapshots/{p['number']}/snapshot/boot"
+        if not os.path.isfile(f"/.snapshots/{p['number']}/snapshot/boot/initrd.img-{k}"):
+            continue
+        when = p["date"][:16]
+        title = esc_grub(f"{when} — {p['description'] or p['kind_text']}")
+        blocks.append(
+            f"menuentry '{title}' --class sekaios --class os {{\n"
+            f"\tload_video\n\tset gfxpayload=keep\n\tinsmod gzio\n\tinsmod part_gpt\n\tinsmod btrfs\n"
+            f"\tsearch --no-floppy --fs-uuid --set=root {uuid}\n"
+            f"\techo '복원 지점 {p['number']}번으로 되돌리는 중...'\n"
+            f"\tlinux {base}/vmlinuz-{k} root=UUID={uuid} ro rootflags=subvol=@ sekai.restore={p['number']} {opts}\n"
+            f"\tinitrd {base}/initrd.img-{k}\n}}\n")
+    text = ("# SekaiOS 복원 지점 — sekai-restore grub 이 만듦 (고치지 마세요)\n"
+            + ("".join(blocks) if blocks else
+               "menuentry '복원 지점이 없습니다' --class sekaios { true }\n"))
+    fd, tmp = tempfile.mkstemp(dir="/boot/grub", prefix=".sekai-restore.")
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, GRUB_CFG)
+
+
+# ── 상태 ────────────────────────────────────────────────────
+def status():
+    why = why_unsupported()
+    st = {"supported": why is None, "reason": why or "", "auto": not os.path.exists(AUTO_OFF),
+          "pending": None, "last": None, "undo": None, "used": None, "limit": None, "limit_ratio": None}
+    if why:
+        return st
+    st["used"], st["limit"], st["limit_ratio"] = space()
+    with Top() as top:
+        st["pending"] = read_request(top)
+        olds = old_roots(top)
+        st["undo"] = olds[0] if olds else None
+        ln = last_log(top)
+        if ln and len(ln) >= 3:
+            st["last"] = {"time": ln[0], "action": ln[1], "arg": ln[2], "detail": " ".join(ln[3:])}
+    return st
+
+
+def refresh():
+    """부팅 메뉴의 복원 항목과 설정 앱이 읽는 목록 파일을 새로"""
+    write_grub()
+    try:
+        data = {"status": status(), "points": list_points() if why_unsupported() is None else []}
+    except SystemExit:
+        return
+    os.makedirs(os.path.dirname(CACHE), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(CACHE), prefix=".restore.")
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f, ensure_ascii=False)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, CACHE)
+
+
+def prune_old(top):
+    """복원 전 상태(@before-restore-*)는 마지막 KEEP_OLD 개만 — 지금 연결된 루트는 아니다"""
+    for name in old_roots(top)[KEEP_OLD:]:
+        run(["btrfs", "subvolume", "delete", os.path.join(top, name)], check=False)
+
+
+def main():
+    a = sys.argv[1:]
+    if not a:
+        die("명령이 없습니다 (status · list · create · delete · restore · undo · cancel · auto · setup · grub)", 2)
+    cmd = a[0]
+    if os.geteuid() != 0 and cmd not in ("status",):
+        die("관리자 권한이 필요합니다", 2)
+    if cmd == "status":
+        if os.geteuid() != 0:
+            out({"supported": why_unsupported() is None, "reason": why_unsupported() or "",
+                 "auto": not os.path.exists(AUTO_OFF), "pending": None, "last": None, "undo": None})
+            return
+        out(status())
+    elif cmd == "setup":
+        setup()
+        refresh()
+    elif cmd == "list":
+        need_supported()
+        out(list_points())
+    elif cmd == "create":
+        need_supported()
+        desc = " ".join(a[1:]).strip() or "수동 복원 지점"
+        kind = os.environ.get("SEKAI_RESTORE_KIND", "manual")
+        n = create(desc, kind=kind)
+        refresh()
+        out({"number": n})
+    elif cmd == "delete":
+        need_supported()
+        nums = [x for x in a[1:] if x.isdigit()]
+        if not nums:
+            die("지울 번호가 없습니다", 2)
+        snapper("delete", *nums)
+        refresh()
+    elif cmd == "restore":
+        need_supported()
+        if len(a) < 2 or not a[1].isdigit():
+            die("번호가 없습니다", 2)
+        n = a[1]
+        if not os.path.isdir(f"/.snapshots/{n}/snapshot"):
+            die(f"복원 지점 {n} 이 없습니다")
+        with Top() as top:
+            prune_old(top)
+            write_request(top, "restore", n)
+        refresh()
+    elif cmd == "undo":
+        need_supported()
+        with Top() as top:
+            olds = old_roots(top)
+            if not olds:
+                die("취소할 복원이 없습니다")
+            write_request(top, "undo", olds[0])
+        refresh()
+    elif cmd == "cancel":
+        need_supported()
+        with Top() as top:
+            try:
+                os.unlink(os.path.join(top, REQUEST))
+            except FileNotFoundError:
+                pass
+        refresh()
+    elif cmd == "auto":
+        if len(a) < 2 or a[1] not in ("on", "off"):
+            die("on 또는 off", 2)
+        if a[1] == "off":
+            os.makedirs(os.path.dirname(AUTO_OFF), exist_ok=True)
+            open(AUTO_OFF, "w").close()
+        elif os.path.exists(AUTO_OFF):
+            os.unlink(AUTO_OFF)
+        if why_unsupported() is None:
+            refresh()
+    elif cmd == "limit":
+        need_supported()
+        try:
+            v = float(a[1])
+        except (IndexError, ValueError):
+            die("비율을 주세요 (예: 0.1)", 2)
+        if not 0.02 <= v <= 0.5:
+            die("0.02 에서 0.5 사이여야 합니다", 2)
+        snapper("set-config", f"SPACE_LIMIT={v:g}")
+        os.makedirs(os.path.dirname(LIMIT_FILE), exist_ok=True)
+        with open(LIMIT_FILE, "w") as f:
+            f.write(f"{v:g}\n")
+        snapper("cleanup", "number", check=False)
+        refresh()
+    elif cmd == "apt-pre":
+        apt_pre()
+    elif cmd == "apt-post":
+        apt_post()
+    elif cmd == "weekly":
+        if why_unsupported() is None and os.path.isfile(CONF_FILE):
+            weekly()
+    elif cmd == "grub":
+        if why_unsupported() is None:
+            # 켤 때도 불린다 (sekai-restore-grub.service) — 부팅 메뉴로 되돌리면 옛 "복원 전 상태"가 쌓이니 여기서 정리
+            with Top() as top:
+                prune_old(top)
+            refresh()
+    else:
+        die(f"모르는 명령: {cmd}", 2)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(130)

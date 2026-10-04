@@ -152,7 +152,7 @@ stage_tree() {
     ( cd "$src" && find . -type f ) | while read -r f; do
         f="${f#./}"
         mode=644
-        case "$f" in usr/bin/*|usr/sbin/*|usr/libexec/*|etc/kernel/postinst.d/*|etc/initramfs/post-update.d/*|etc/grub.d/*|etc/update-motd.d/*|usr/share/initramfs-tools/hooks/*) mode=755 ;; esac
+        case "$f" in usr/bin/*|usr/sbin/*|usr/libexec/*|etc/kernel/postinst.d/*|etc/initramfs/post-update.d/*|etc/grub.d/*|etc/update-motd.d/*|usr/share/initramfs-tools/hooks/*|usr/share/initramfs-tools/scripts/*) mode=755 ;; esac
         install -Dm$mode "$src/$f" "$stage/$f"
     done
     mkdir -p "$stage/DEBIAN"
@@ -421,6 +421,16 @@ if [ "$1" = "configure" ]; then
     [ -d /run/systemd/system ] && systemctl daemon-reload >/dev/null 2>&1 || true
     # 부팅 화면·콘솔을 바탕화면과 같은 모니터 모드로 (sekai-bootmode — 모드가 바뀔 때마다 신호가 끊긴다)
     systemctl enable sekai-bootmode.path >/dev/null 2>&1 || true
+    # 시스템 복원 — btrfs 로 설치된 PC 에서만 일한다 (ext4 면 조건이 맞지 않아 그냥 지나간다)
+    #   snapper 가 스스로 켜 두는 "켤 때마다 지점"·시간별 지점 타이머는 어느 PC 에서나 끈다 — ext4 에선 설정이
+    #   없어 켤 때마다 오류를 남기고, btrfs 에선 공간만 붙잡는다 (지점은 sekai-restore 가 만든다)
+    systemctl disable --now snapper-boot.timer snapper-timeline.timer >/dev/null 2>&1 || true
+    systemctl enable sekai-restore-grub.path sekai-restore-grub.service >/dev/null 2>&1 || true
+    if [ ! -d /run/live/medium ] && [ ! -f /etc/snapper/configs/root ] \
+       && [ "$(findmnt -no FSTYPE,FSROOT / 2>/dev/null)" = "btrfs /@" ] && mountpoint -q /.snapshots; then
+        /usr/libexec/sekai/sekai-restore setup >/dev/null 2>&1 || true
+    fi
+    [ -d /run/systemd/system ] && systemctl start sekai-restore-grub.path >/dev/null 2>&1 || true
     [ -d /run/systemd/system ] && systemctl start sekai-bootmode.path >/dev/null 2>&1 || true
     # cups-browsed 는 cups 의 권장 패키지라 업데이트 때 같이 깔린다 — 실행 조건 조각(etc/systemd/system/
     #   cups-browsed.service.d)으로 막아 두고, 이미 떠 있으면 멈춘다. (Conflicts 로 막았더니 apt 가
@@ -537,7 +547,7 @@ Priority: optional
 Depends: shim-signed, grub-efi-amd64-signed, grub-efi-amd64-bin, grub2-common, os-prober,
  efibootmgr, mokutil, pciutils, openssl,
  plymouth (>= 24.004.60-5+sekai1), plymouth-themes,
- network-manager, systemd-resolved, flatpak
+ network-manager, systemd-resolved, flatpak, btrfs-progs, snapper
 Replaces: sekai-desktop (<< ${FULL})
 Breaks: sekai-desktop (<< ${FULL})
 Description: SekaiOS base system

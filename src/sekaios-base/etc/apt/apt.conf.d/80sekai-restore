@@ -1,0 +1,4 @@
+// SekaiOS 시스템 복원 — 패키지를 바꾸기 전·후에 복원 지점 (btrfs 설치본에서만, sekai-restore 가 알아서 건너뛴다)
+//   설명은 부른 쪽이 SEKAI_RESTORE_DESC 로 알려 주거나 apt 명령줄로 짐작한다. 끄기: 설정 › 시스템 › 복구
+DPkg::Pre-Invoke { "[ ! -x /usr/libexec/sekai/sekai-restore ] || /usr/libexec/sekai/sekai-restore apt-pre || true"; };
+DPkg::Post-Invoke { "[ ! -x /usr/libexec/sekai/sekai-restore ] || /usr/libexec/sekai/sekai-restore apt-post || true"; };

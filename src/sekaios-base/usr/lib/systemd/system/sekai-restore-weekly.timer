@@ -1,0 +1,10 @@
+[Unit]
+Description=SekaiOS 시스템 복원 — 정기 복원 지점
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

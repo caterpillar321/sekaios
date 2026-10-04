@@ -24,7 +24,9 @@ import subprocess
 import sys
 
 ENV = dict(os.environ, DEBIAN_FRONTEND="noninteractive", LANG="C.UTF-8", LC_ALL="C.UTF-8",
-           PATH="/usr/sbin:/usr/bin:/sbin:/bin")
+           PATH="/usr/sbin:/usr/bin:/sbin:/bin",
+           # 시스템 복원 지점의 설명 (btrfs 설치본 — apt 훅 80sekai-restore 가 이 이름으로 만든다)
+           SEKAI_RESTORE_DESC="업데이트 전", SEKAI_RESTORE_KIND="update")
 APT_OPTS = ["-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold",
             "-o", "Dpkg::Use-Pty=0"]
 

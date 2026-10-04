@@ -1,0 +1,14 @@
+[Unit]
+Description=SekaiOS 시스템 복원 — 부팅 메뉴의 복원 지점 목록
+# 복원 지점이 생기거나 지워지면(snapper 정기·정리 포함) sekai-restore-grub.path 가 부른다. 켤 때도 한 번
+#   (되돌린 시스템의 목록은 그 지점을 만들던 때의 것이라)
+ConditionPathIsMountPoint=/.snapshots
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/sekai/sekai-restore grub
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

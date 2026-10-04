@@ -151,7 +151,14 @@ class Volume:
 
     @property
     def mount(self):
-        return self.mounts[0] if self.mounts else ""
+        """대표 연결 위치 — btrfs 는 한 파티션을 하위 볼륨마다 여러 곳에 연결한다(/ · /home · /var/log …).
+        udisks 가 주는 순서는 정해져 있지 않아 첫 것을 쓰면 시스템 파티션이 "로컬 디스크 (/home)" 로 보였다 →
+        / 가 있으면 /, 아니면 가장 짧은 경로"""
+        if not self.mounts:
+            return ""
+        if "/" in self.mounts:
+            return "/"
+        return min(self.mounts, key=lambda m: (m.count("/"), len(m)))
 
     @property
     def fs_name(self):

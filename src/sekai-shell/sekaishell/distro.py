@@ -10,6 +10,7 @@ import os
 PAGE_NEEDS = {
     "graphics": "/usr/libexec/sekai/sekai-gpu",
     "update": "/usr/libexec/sekai/sekai-update",
+    "recovery": "/usr/libexec/sekai/sekai-restore",
 }
 
 

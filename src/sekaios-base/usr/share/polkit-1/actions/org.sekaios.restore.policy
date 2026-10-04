@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- SekaiOS 시스템 복원 도우미 — 설정 앱의 "복구" 페이지가 pkexec 로 부른다 -->
+<policyconfig>
+  <vendor>SekaiOS</vendor>
+  <action id="org.sekaios.restore">
+    <description>Manage system restore points</description>
+    <description xml:lang="ko">시스템 복원 지점 관리</description>
+    <message>Authentication is required to manage system restore points</message>
+    <message xml:lang="ko">시스템 복원 지점을 관리하려면 인증이 필요합니다</message>
+    <icon_name>document-revert</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/sekai/sekai-restore</annotate>
+  </action>
+</policyconfig>

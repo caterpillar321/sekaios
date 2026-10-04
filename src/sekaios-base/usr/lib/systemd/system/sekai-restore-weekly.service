@@ -1,0 +1,10 @@
+[Unit]
+Description=SekaiOS 시스템 복원 — 정기 복원 지점 (7일 안에 만든 지점이 없을 때만)
+ConditionPathIsMountPoint=/.snapshots
+ConditionPathExists=/etc/snapper/configs/root
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/sekai/sekai-restore weekly
+Nice=15
+IOSchedulingClass=idle

@@ -25,11 +25,20 @@ entry() {  # 제목 클래스 id 커널 옵션
     echo "	insmod gzio"
     echo "	insmod part_gpt"
     echo "	insmod ext2"
+    [ "x${GRUB_FS:-}" = xbtrfs ] && echo "	insmod btrfs"
     prepare_grub_to_access_device "${GRUB_DEVICE_BOOT}" | sed -e 's/^/	/'
-    echo "	linux	$rel_k root=UUID=$UUID ro $args"
+    echo "	linux	$rel_k root=UUID=$UUID ro $ROOTFLAGS $args"
     [ -f "/boot/initrd.img-$v" ] && echo "	initrd	$rel_i"
     echo "}"
 }
+
+# btrfs 하위 볼륨(@)에 설치됐으면 그 하위 볼륨을 루트로 (데비안 10_linux 와 같게 — 시스템 복원 구조)
+ROOTFLAGS=""
+if [ "x${GRUB_FS:-}" = xbtrfs ]; then
+    rootsubvol=$(make_system_path_relative_to_its_root /)
+    rootsubvol="${rootsubvol#/}"
+    [ -n "$rootsubvol" ] && ROOTFLAGS="rootflags=subvol=${rootsubvol}"
+fi
 
 # 데비안 안내대로 /etc/default/grub 에 넣은 커널 옵션도 따른다
 #   GRUB_CMDLINE_LINUX         모든 항목 (복구 모드 포함)

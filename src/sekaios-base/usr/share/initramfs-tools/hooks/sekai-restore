@@ -1,0 +1,10 @@
+#!/bin/sh
+# SekaiOS 시스템 복원 — 부팅 초기에 하위 볼륨을 바꿔치기할 도구 (scripts/local-premount/sekai-restore)
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in prereqs) prereqs; exit 0 ;; esac
+. /usr/share/initramfs-tools/hook-functions
+[ -x /usr/bin/btrfs ] || [ -x /bin/btrfs ] || exit 0
+copy_exec "$(command -v btrfs)" /bin
+manual_add_modules btrfs
+exit 0

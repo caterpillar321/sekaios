@@ -1,0 +1,14 @@
+#!/bin/sh
+# SekaiOS — 부팅 초기(initramfs)의 Plymouth 에 한글 글꼴 (테마의 Font=Pretendard)
+#   plymouth 훅은 fontconfig 기본 글꼴(DejaVu) 하나만 넣어서, initramfs 단계의 한국어 메시지
+#   (시스템 복원 "되돌리는 중…" 등)가 네모로 나왔다. Regular 하나만 (약 1.5MB)
+PREREQ="plymouth"
+prereqs() { echo "$PREREQ"; }
+case "$1" in prereqs) prereqs; exit 0 ;; esac
+. /usr/share/initramfs-tools/hook-functions
+F=/usr/share/fonts/opentype/pretendard/Pretendard-Regular.otf
+[ -f "$F" ] || exit 0
+[ -d "${DESTDIR}/etc/fonts" ] || exit 0          # plymouth 가 글꼴을 쓰지 않는 테마(text)면 넣지 않는다
+mkdir -p "${DESTDIR}/usr/share/fonts/opentype/pretendard"
+cp -p "$F" "${DESTDIR}/usr/share/fonts/opentype/pretendard/"
+exit 0

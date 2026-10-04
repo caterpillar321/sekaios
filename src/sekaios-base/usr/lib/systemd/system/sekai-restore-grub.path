@@ -1,0 +1,9 @@
+[Unit]
+Description=SekaiOS 시스템 복원 — 복원 지점이 바뀌면 부팅 메뉴를 고친다
+ConditionPathIsMountPoint=/.snapshots
+
+[Path]
+PathChanged=/.snapshots
+
+[Install]
+WantedBy=multi-user.target

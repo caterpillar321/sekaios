@@ -1,0 +1,106 @@
+#!/bin/sh
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 시스템 복원 — 루트를 연결하기 전에 btrfs 하위 볼륨 @ 를 복원 지점으로 바꿔치기한다
+#
+#  요청: 커널 옵션 sekai.restore=<번호>  (부팅 메뉴의 "복원" 항목 — 그 지점의 커널로 켜진다)
+#        또는 맨 위의 .sekai-restore-request  ("restore <번호>" · "undo <이름>" — 설정 앱이 sekai-restore 로 쓴다)
+#  결과: 맨 위의 .sekai-restore-log 에 한 줄 (설정 앱이 보여 준다)
+#  지금 @ 는 @before-restore-<시각> 으로 남는다 → "복원 취소"
+#  켜진 커널의 모듈이 되돌린 시스템에 없으면(커널 업데이트 전으로 되돌림) 한 번 더 다시 시작한다 —
+#    그러면 부팅 메뉴가 되돌린 시스템의 것이라 맞는 커널로 켜진다
+# ═══════════════════════════════════════════════════════════════
+PREREQ="btrfs"
+prereqs() { echo "$PREREQ"; }
+case "$1" in prereqs) prereqs; exit 0 ;; esac
+
+. /scripts/functions
+
+want=""; rootarg=""
+for x in $(cat /proc/cmdline); do
+    case "$x" in
+        sekai.restore=*) want="${x#sekai.restore=}" ;;
+        root=*) rootarg="${x#root=}" ;;
+    esac
+done
+
+# local_mount_root 가 장치를 기다린 뒤라 ROOT 는 장치 경로다. 넘어오지 않았으면 root= 로 찾는다
+#   (btrfs 가 아니면 아래 mount 가 실패해 그냥 지나간다)
+[ -n "${ROOT:-}" ] || ROOT=$(resolve_device "$rootarg" 2>/dev/null)
+[ -n "${ROOT:-}" ] || exit 0
+T=/sekai-top
+mkdir -p "$T"
+mount -t btrfs -o subvolid=5 "$ROOT" "$T" 2>/dev/null || exit 0
+[ -d "$T/@" ] && [ -d "$T/@snapshots" ] || { umount "$T"; exit 0; }
+
+action=""; arg=""
+if [ -n "$want" ]; then
+    action=restore; arg="$want"
+elif [ -f "$T/.sekai-restore-request" ]; then
+    read -r action arg < "$T/.sekai-restore-request" || true
+fi
+rm -f "$T/.sekai-restore-request"
+if [ -z "$action" ]; then
+    umount "$T"; exit 0
+fi
+
+# initramfs 에는 시간대가 없다 — 이름엔 UTC 시각, 기록엔 epoch 초 (설정 앱이 그 PC 의 시간대로 보인다)
+ts=$(date -u +%Y%m%d-%H%M%S 2>/dev/null || echo now)
+epoch=$(date +%s 2>/dev/null || echo 0)
+msg() {
+    log_warning_msg "$1"
+    if [ -x /bin/plymouth ] && plymouth --ping 2>/dev/null; then plymouth display-message --text="$1" || true; fi
+}
+logline() { echo "$epoch $*" >> "$T/.sekai-restore-log"; }
+
+case "$action" in
+    restore)
+        case "$arg" in ''|*[!0-9]*) logline "fail 잘못된-요청 $arg"; umount "$T"; exit 0 ;; esac
+        src="$T/@snapshots/$arg/snapshot"
+        if [ ! -d "$src" ]; then
+            msg "복원 지점 ${arg}번을 찾지 못해 되돌리지 않습니다"
+            logline "fail 지점-없음 $arg"; umount "$T"; exit 0
+        fi
+        msg "시스템을 복원 지점 ${arg}번으로 되돌리는 중..."
+        old="@before-restore-$ts"
+        if ! mv "$T/@" "$T/$old"; then
+            logline "fail 이름-바꾸기 $arg"; umount "$T"; exit 0
+        fi
+        if ! btrfs subvolume snapshot "$src" "$T/@" >/dev/null 2>&1; then
+            mv "$T/$old" "$T/@"
+            msg "되돌리지 못했습니다 — 원래 상태로 켭니다"
+            logline "fail 스냅숏 $arg"; umount "$T"; exit 0
+        fi
+        logline "restore $arg $old"
+        ;;
+    undo)
+        case "$arg" in @before-restore-*) ;; *) logline "fail 잘못된-요청 $arg"; umount "$T"; exit 0 ;; esac
+        if [ ! -d "$T/$arg" ]; then
+            logline "fail 취소할-상태-없음 $arg"; umount "$T"; exit 0
+        fi
+        msg "시스템 복원을 취소하는 중..."
+        gone="@undone-restore-$ts"
+        mv "$T/@" "$T/$gone" || { logline "fail 이름-바꾸기 $arg"; umount "$T"; exit 0; }
+        if ! mv "$T/$arg" "$T/@"; then
+            mv "$T/$gone" "$T/@"
+            logline "fail 되돌리기 $arg"; umount "$T"; exit 0
+        fi
+        # 취소한 쪽(복원했던 상태)은 지운다 — 다시 원하면 같은 지점으로 또 복원하면 된다
+        btrfs subvolume delete "$T/$gone" >/dev/null 2>&1 || true
+        logline "undo $arg $gone"
+        ;;
+    *)
+        logline "fail 모르는-요청 $action"; umount "$T"; exit 0 ;;
+esac
+
+# 켜진 커널의 모듈이 되돌린 시스템에 있나
+k=$(uname -r)
+reboot_needed=0
+[ -d "$T/@/lib/modules/$k" ] || [ -d "$T/@/usr/lib/modules/$k" ] || reboot_needed=1
+sync
+umount "$T"
+if [ "$reboot_needed" = 1 ]; then
+    msg "커널이 달라 한 번 더 다시 시작합니다..."
+    sleep 2
+    reboot -f
+fi
+exit 0

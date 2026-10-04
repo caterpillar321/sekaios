@@ -2,13 +2,15 @@
 # ═══════════════════════════════════════════════════════════════
 #  SekaiOS 설치 — 실제 작업 (관리자 권한, 라이브 세션에서만)
 #
-#    sekai-install-backend --disk /dev/sdX [--esp-mb 512] [--swap-mb 0] --yes-erase
+#    sekai-install-backend --disk /dev/sdX [--esp-mb 512] [--swap-mb 0] [--fs btrfs|ext4] --yes-erase
 #
 #  디스크 전체를 쓴다. 그 디스크에 SekaiOS 전용 ESP 를 새로 만든다
 #  (다른 디스크의 윈도우 ESP 는 건드리지 않는다 — 서로 독립).
 #    p1  ESP   FAT32  (기본 512MB)
 #    p2  swap         (선택)
-#    pN  root  ext4   나머지
+#    pN  root  btrfs  나머지 — 하위 볼륨 @(/) @home @snapshots(/.snapshots) @log(/var/log) @cache(/var/cache)
+#                      @flatpak(/var/lib/flatpak)
+#                      (시스템 복원: @ 만 복원 지점을 만든다 — sekai-restore. 나머지는 많이 바뀌어 공간만 붙잡는다)
 #
 #  계정·시간대·컴퓨터 이름은 여기서 정하지 않는다 — 첫 부팅의 OOBE 가 묻는다.
 #
@@ -25,12 +27,13 @@ TARGET=/target
 LOG=/var/log/sekai-install.log
 TOTAL=6
 
-DISK=""; ESP_MB=512; SWAP_MB=0; YES=0; EXP_SIZE=""; EXP_SERIAL=""
+DISK=""; ESP_MB=512; SWAP_MB=0; FS=btrfs; YES=0; EXP_SIZE=""; EXP_SERIAL=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --disk)      DISK="$2"; shift 2 ;;
         --esp-mb)    ESP_MB="$2"; shift 2 ;;
         --swap-mb)   SWAP_MB="$2"; shift 2 ;;
+        --fs)        FS="$2"; shift 2 ;;
         --yes-erase) YES=1; shift ;;
         --expect-size)   EXP_SIZE="$2"; shift 2 ;;
         --expect-serial) EXP_SERIAL="$2"; shift 2 ;;
@@ -45,10 +48,15 @@ prog() { out "PROGRESS $*"; }
 die()  { out "ERROR $*"; log "FATAL $*"; cleanup; exit 1; }
 run()  { log "\$ $*"; "$@" >>"$LOG" 2>&1 || die "명령 실패: $* (기록: $LOG)"; }
 
+# btrfs 하위 볼륨 — 이름 · 연결할 곳 (@ 는 루트라 따로)
+SUBVOLS="@home:/home @snapshots:/.snapshots @log:/var/log @cache:/var/cache @flatpak:/var/lib/flatpak"
+BTRFS_OPTS="noatime,compress=zstd:1"
+
 cleanup() {
     for m in "$TARGET/sys/firmware/efi/efivars" "$TARGET/boot/efi" \
              "$TARGET/dev/pts" "$TARGET/dev" "$TARGET/proc" "$TARGET/sys" \
-             "$TARGET/run" "$TARGET"; do
+             "$TARGET/run" "$TARGET/var/lib/flatpak" "$TARGET/var/cache" "$TARGET/var/log" "$TARGET/.snapshots" "$TARGET/home" \
+             "$TARGET" /run/sekai-install-top; do
         mountpoint -q "$m" && umount -l "$m" 2>/dev/null
     done
     return 0
@@ -61,7 +69,7 @@ trap 'rm -f "$INSTALLING"' EXIT
 
 : > "$LOG"
 log "SekaiOS 설치 $(date)"
-log "disk=$DISK esp=$ESP_MB swap=$SWAP_MB"
+log "disk=$DISK esp=$ESP_MB swap=$SWAP_MB fs=$FS"
 
 # ── 확인 ─────────────────────────────────────────────────
 [ "$(id -u)" -eq 0 ]            || die "관리자 권한이 필요합니다"
@@ -73,6 +81,7 @@ DISK="$(realpath "$DISK")"        # /dev/disk/by-id/… 같은 링크도 실제 
 [ "$(lsblk -dno TYPE "$DISK")" = disk ] || die "디스크가 아닙니다: $DISK"
 [[ "$ESP_MB" =~ ^[0-9]+$ ]] && [ "$ESP_MB" -ge 256 ] && [ "$ESP_MB" -le 4096 ] || die "ESP 크기가 이상합니다: $ESP_MB"
 [[ "$SWAP_MB" =~ ^[0-9]+$ ]] && [ "$SWAP_MB" -le 65536 ] || die "스왑 크기가 이상합니다: $SWAP_MB"
+case "$FS" in btrfs|ext4) ;; *) die "모르는 파일 시스템: $FS" ;; esac
 
 # 고른 뒤에 디스크가 바뀌지 않았는지 (크기·시리얼)
 if [ -n "$EXP_SIZE" ] && [ "$(lsblk -dnbo SIZE "$DISK")" != "$EXP_SIZE" ]; then
@@ -136,10 +145,26 @@ prog 2
 # ── 2. 포맷 ──────────────────────────────────────────────
 step 2 "파일 시스템 만들기"
 run mkfs.vfat -F 32 -n SEKAIESP "$ESP_DEV"
-run mkfs.ext4 -F -L SekaiOS "$ROOT_DEV"
 [ -n "$SWAP_DEV" ] && run mkswap -L SEKAISWAP "$SWAP_DEV"
 mkdir -p "$TARGET"
-run mount "$ROOT_DEV" "$TARGET"
+if [ "$FS" = ext4 ]; then
+    run mkfs.ext4 -F -L SekaiOS "$ROOT_DEV"
+    run mount "$ROOT_DEV" "$TARGET"
+else
+    run mkfs.btrfs -f -L SekaiOS "$ROOT_DEV"
+    # 하위 볼륨 — 맨 위를 잠깐 연결해서 만든다
+    mkdir -p /run/sekai-install-top
+    run mount -t btrfs -o subvolid=5 "$ROOT_DEV" /run/sekai-install-top
+    run btrfs subvolume create /run/sekai-install-top/@
+    for sv in $SUBVOLS; do run btrfs subvolume create "/run/sekai-install-top/${sv%%:*}"; done
+    run umount /run/sekai-install-top
+    run mount -o "subvol=@,$BTRFS_OPTS" "$ROOT_DEV" "$TARGET"
+    for sv in $SUBVOLS; do
+        mkdir -p "$TARGET${sv#*:}"
+        run mount -o "subvol=${sv%%:*},$BTRFS_OPTS" "$ROOT_DEV" "$TARGET${sv#*:}"
+    done
+    chmod 750 "$TARGET/.snapshots"
+fi
 mkdir -p "$TARGET/boot/efi"
 run mount "$ESP_DEV" "$TARGET/boot/efi"
 prog 4
@@ -166,7 +191,14 @@ ROOT_UUID=$(blkid -s UUID -o value "$ROOT_DEV")
 ESP_UUID=$(blkid -s UUID -o value "$ESP_DEV")
 {
     echo "# /etc/fstab — SekaiOS 설치 프로그램이 만듦"
-    echo "UUID=$ROOT_UUID  /          ext4  errors=remount-ro  0 1"
+    if [ "$FS" = ext4 ]; then
+        echo "UUID=$ROOT_UUID  /          ext4  errors=remount-ro  0 1"
+    else
+        echo "UUID=$ROOT_UUID  /          btrfs  subvol=@,$BTRFS_OPTS  0 0"
+        for sv in $SUBVOLS; do
+            echo "UUID=$ROOT_UUID  ${sv#*:}  btrfs  subvol=${sv%%:*},$BTRFS_OPTS  0 0"
+        done
+    fi
     echo "UUID=$ESP_UUID   /boot/efi  vfat  umask=0077         0 2"
     [ -n "$SWAP_DEV" ] && echo "UUID=$(blkid -s UUID -o value "$SWAP_DEV")  none  swap  sw  0 0"
     echo "tmpfs  /tmp  tmpfs  defaults,nosuid,nodev  0 0"
@@ -261,6 +293,13 @@ prog 97
 
 # ── 6. 마무리 ────────────────────────────────────────────
 step 6 "마무리"
+# 시스템 복원 — snapper 설정과 첫 복원 지점 "설치 직후" (실패해도 설치는 끝난 것 — 기록만)
+if [ "$FS" = btrfs ] && chroot "$TARGET" /usr/libexec/sekai/sekai-restore setup >>"$LOG" 2>&1; then
+    SEKAI_RESTORE_KIND=first chroot "$TARGET" /usr/libexec/sekai/sekai-restore create "SekaiOS 설치 직후" >>"$LOG" 2>&1 \
+        || log "첫 복원 지점을 만들지 못함"
+elif [ "$FS" = btrfs ]; then
+    log "시스템 복원 설정 실패 — 설치는 계속"
+fi
 cp -f "$LOG" "$TARGET/var/log/sekai-install.log" 2>/dev/null || true
 sync
 cleanup

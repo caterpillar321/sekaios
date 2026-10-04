@@ -7,7 +7,7 @@
     logo.png             두 별 로고
     select_*.png         고른 항목의 둥근 강조 상자 (9조각)
     icons/*.png          항목 아이콘 (sekaios, windows, recovery, efi, os)
-    *.pf2                Pretendard — 메뉴에 쓰는 글자만 골라 담는다 (한글 전체를 넣으면 수 MB)
+    *.pf2                Pretendard — 메뉴 글자 + 자주 쓰는 한글 2,350자 (한글 전체를 넣으면 수 MB)
 
 필요: python3-cairo, grub-mkfont, Pretendard (fonts-pretendard 또는 rootfs 안)
 사용법: scripts/gen-grub-theme.py
@@ -47,14 +47,33 @@ def fonts():
     sys.exit("Pretendard 글꼴을 찾지 못했습니다 (fonts-pretendard 또는 rootfs)")
 
 
+def ksx1001_hangul():
+    """자주 쓰는 한글 2,350자 (KS X 1001 완성형) — 부팅 메뉴엔 미리 알 수 없는 글도 나온다
+    (시스템 복원 지점의 설명·수동 지점 이름). 한글 전체(11,172자)는 수 MB 라 이것만"""
+    out = set()
+    for hi in range(0xB0, 0xC9):
+        for lo in range(0xA1, 0xFF):
+            try:
+                out.add(bytes([hi, lo]).decode("euc-kr"))
+            except UnicodeDecodeError:
+                pass
+    return out
+
+
 def mkfont(src, size, out, name):
-    # ASCII 전부 + 문구에 나오는 글자
+    # ASCII 전부 + 문구에 나오는 글자 + 자주 쓰는 한글과 기호 (복원 지점 이름 등)
     chars = set(chr(c) for c in range(0x20, 0x7f))
     for t in TEXTS:
         chars.update(t)
+    chars.update(ksx1001_hangul())
+    chars.update("—–·‘’“”…※→←")
     ranges = []
-    for c in sorted(ord(x) for x in chars):
-        ranges.append(f"0x{c:x}-0x{c:x}")
+    for c in sorted(ord(x) for x in chars):          # 이어지는 글자는 한 범위로 (명령줄이 너무 길지 않게)
+        if ranges and ranges[-1][1] == c - 1:
+            ranges[-1][1] = c
+        else:
+            ranges.append([c, c])
+    ranges = [f"0x{a:x}-0x{b:x}" for a, b in ranges]
     # 이미지(rootfs)에 든 GRUB 과 같은 판의 grub-mkfont 로 만든다.
     #   옛 판(2.06)으로 만든 글꼴은 2.12 가 보안 검사에서 거절해 기본 글꼴로 떨어진다.
     rootfs = os.path.join(P, "rootfs")
