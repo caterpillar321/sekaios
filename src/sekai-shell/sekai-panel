@@ -169,10 +169,11 @@ class Hypr:
             return []
 
     def dispatch(self, cmd: str):
+        """합성기의 답("ok" 또는 오류 글)을 돌려준다 — 못 보냈으면 None"""
         try:
-            self._request(f"/dispatch {cmd}")
+            return self._request(f"/dispatch {cmd}").decode("utf-8", "replace")
         except Exception:
-            pass
+            return None
 
     def subscribe(self, on_event):
         """이벤트 소켓을 GLib 메인루프에 연결. 끊기면 잠시 뒤 다시 붙는다
@@ -1303,7 +1304,7 @@ class TaskbarMixin:
             origins = hypr_monitor_origins(self.hypr)
 
         def mon(c):
-            # 최소화한 창(special:min)은 최소화 칸이 있는 모니터로 옮겨진다 — 원래 데스크톱의 모니터로 가린다
+            # (옛 합성기) 최소화한 창(special:min)은 최소화 칸이 있는 모니터로 옮겨진다 — 원래 데스크톱의 모니터로 가린다
             #   (안 그러면 다른 모니터에서 최소화한 창의 단추가 이 작업 표시줄로 넘어왔다)
             if ws_mon and (c.get("workspace") or {}).get("id", 0) < 0:
                 m = ws_mon.get(desktops.home(c))
@@ -1431,8 +1432,7 @@ class TaskbarMixin:
 
     @staticmethod
     def _minimized(c):
-        # 워크스페이스 id 가 음수 = 특수 워크스페이스 = 우리 기준 "최소화"
-        return (c.get("workspace", {}) or {}).get("id", 0) < 0
+        return desktops.is_minimized(c)
 
     def on_app_click(self, btn, key, app_id, wins, active_addr):
         """윈도우 작업 표시줄과 같은 동작:
@@ -1482,14 +1482,19 @@ class TaskbarMixin:
         if self._minimized(c):
             self.restore_window(addr)
         elif addr == active_addr:
-            self.hypr.dispatch(f"movetoworkspacesilent special:min,address:{addr}")
+            desktops.minimize(self.hypr, addr)
         else:
             self.hypr.dispatch(f"focuswindow address:{addr}")
         self._queue_rebuild()
 
     def restore_window(self, addr):
-        """최소화(special:min)된 창을 원래 데스크톱으로 되돌리고 초점 (모르면 지금 데스크톱으로).
-        다른 데스크톱의 창이면 그리로 간다 — 윈도우처럼 (movetoworkspace 는 창을 따라간다)"""
+        """최소화된 창을 되살리고 초점 — 다른 데스크톱의 창이면 그리로 간다 (윈도우처럼).
+        WorldLink sekai33+ 는 focuswindow 가 되살리고 데스크톱도 옮긴다. 옛 합성기는 special:min 에서 원래 데스크톱으로"""
+        c = self._fresh({"address": addr}) or {}
+        if "sekaiMinimized" in c:
+            self.hypr.dispatch(f"focuswindow address:{addr}")
+            self._queue_rebuild()
+            return
         wid = desktops.home({"address": addr})
         if not wid or wid > len(desktops.load()):
             # 모르거나 그 데스크톱이 이미 닫혔다 — 지금 데스크톱으로
@@ -1901,7 +1906,7 @@ class Panel(Gtk.Window, TaskbarMixin):
             #   제목이 계속 바뀌는 창(터미널·웹 페이지)이 있으면 누르고 떼는 사이에 버튼이 새로 만들어져 클릭이 씹혔다
             self.queue_title_refresh()
         elif name in ("openwindow", "closewindow", "activewindowv2",
-                      "movewindow", "movewindowv2",
+                      "movewindow", "movewindowv2", "sekaiminimized",
                       "workspace", "activespecial", "fullscreen", "changefloatingmode",
                       "focusedmon", "moveworkspace", "monitoradded", "monitorremoved"):
             # 창 하나를 열거나 옮기면 이벤트가 여럿 한꺼번에 온다 — 모아서 한 번에.

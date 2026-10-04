@@ -22,7 +22,7 @@ import re
 
 from gi.repository import GLib
 
-from . import dbg
+from . import dbg, desktops
 
 STATE = os.path.expanduser("~/.local/state/sekai/windows.json")
 MIN_W, MIN_H = 320, 200
@@ -53,6 +53,7 @@ class WindowManager:
         self._poll_src = 0         # 끄는 동안 커서 위치를 읽는 타이머
         self._bar_hit = None       # 바에서 가리킨 (영역, 나머지 칸들)
         self._drag_mons = []
+        self._drag_edge = None     # 지금 커서가 닿은 화면 가장자리 영역 (sekaidrag move)
         self._drag_addr = None     # 끄는 창 — 끄는 중에 닫히면 놓기 이벤트가 안 온다
         self._drag_t0 = 0          # 끌기 시작 시각 (µs)
         self._drag_pos = None      # 마지막으로 본 커서 자리와 그때부터 멈춰 있던 시각
@@ -119,7 +120,11 @@ class WindowManager:
                 w - l - r - 2 * gap, h - t - b - 2 * gap)
 
     def _bar(self, c):
-        """hyprbars 제목 표시줄 높이. 제목줄은 창 영역 바깥 위에 그려진다."""
+        """hyprbars 제목 표시줄 높이. 제목줄은 창 영역 바깥 위에 그려진다.
+        WorldLink sekai33 부터는 합성기가 실제 높이를 알려 준다(sekaiTop) — 아래 짐작은 옛 합성기(업데이트 도중)용"""
+        top = c.get("sekaiTop")
+        if isinstance(top, int):
+            return max(0, top)
         cls = c.get("class") or ""
         if c.get("sekaiCSD"):
             return 0                                      # 앱이 제목줄을 스스로 그린다 (WorldLink 가 막대를 그리지 않음)
@@ -249,7 +254,7 @@ class WindowManager:
         if c.get("sekaiFixed") and to != "min":
             return                                        # 크기 고정 창은 Win+↓(최소화)만
         if to == "min":
-            self.hypr.dispatch(f"movetoworkspacesilent special:min,address:{addr}")
+            desktops.minimize(self.hypr, addr)
         elif to == "unmax":
             self._toggle_max(addr)
         elif to == "restore":
@@ -288,12 +293,17 @@ class WindowManager:
             self.hypr.dispatch(f"movewindowpixel exact {int(nx)} {int(ny)},address:{addr}")
         return False
 
-    # ── 끌어서 스냅 (hyprbars 이벤트) ──
-    def _drag_start(self, addr):
+    # ── 끌어서 스냅 ──
+    #   WorldLink sekai33 부터: 합성기가 sekaidrag>>start·move(x,y)·end(x,y)·cancel 을 한 곳에서 보내고, 영역 판단은
+    #   여기서 한다 (_edge_zone). 옛 합성기(sekaisnapstart·sekaisnap·sekaisnapdrop)는 커서를 폴링하던 옛 길로 — 업데이트 뒤
+    #   다시 로그인할 때까지만 쓰인다
+    def _drag_start(self, addr, poll=True):
         c = self._client(addr)
         if not c:
             return False
         self._drag_addr = addr
+        self._drag_edge = None
+        self._drag_mons = self.hypr.query("monitors") or []         # 가장자리·레이아웃 바 판단에
         # 크기를 바꿀 수 없는 창(SEKAI_FIXED_SIZE)은 칸에 맞출 수 없다 — 스냅 미리보기·레이아웃 바 없이 옮기기만
         self._drag_fixed = bool(c.get("sekaiFixed"))
         if self._drag_fixed:
@@ -302,9 +312,10 @@ class WindowManager:
             # 새 끌기 — 멈추지 못한 옛 폴링이 남아 있어도 기준은 새로 잡는다
             self._drag_t0 = self._drag_still = GLib.get_monotonic_time()
             self._drag_pos = None
-            self._drag_armed = False        # 위쪽 띠 밖으로 한 번 나가야 레이아웃 바를 띄운다 (_drag_poll)
-            self._drag_mons = self.hypr.query("monitors") or []
-            if not self._poll_src:
+            self._drag_armed = False        # 위쪽 띠 밖으로 한 번 나가야 레이아웃 바를 띄운다 (_drag_at)
+            if not poll:
+                self._bar_hit = None
+            elif not self._poll_src:
                 self._bar_hit = None
                 self._poll_src = GLib.timeout_add(33, self._drag_poll)
         if c.get("fullscreen", 0) == 1:
@@ -335,7 +346,70 @@ class WindowManager:
             return False
         if not isinstance(cur, dict) or "x" not in cur:
             return True
-        x, y = cur["x"], cur["y"]
+        self._drag_at(cur["x"], cur["y"])
+        return True
+
+    def _drag_mon(self, x, y):
+        """(모니터, 논리 너비, 논리 높이) — 끌기 시작 때 받아 둔 목록에서. 커서가 화면 끝 바로 바깥(x = 너비)으로
+        오기도 해서, 어느 모니터에도 안 들면 가장 가까운 모니터 (합성기의 getMonitorFromVector 와 같게)"""
+        best = None
+        for m in self._drag_mons:
+            sc = m.get("scale", 1.0) or 1.0
+            mw, mh = m["width"] / sc, m["height"] / sc
+            if m.get("transform", 0) in (1, 3, 5, 7):
+                mw, mh = mh, mw
+            dx = max(m["x"] - x, 0, x - (m["x"] + mw - 1))
+            dy = max(m["y"] - y, 0, y - (m["y"] + mh - 1))
+            d = dx * dx + dy * dy
+            if best is None or d < best[0]:
+                best = (d, m, mw, mh)
+        return best[1:] if best else None
+
+    def _edge_zone(self, x, y):
+        """(영역, 모니터 이름) — 화면 가장자리·모서리 (윈도우의 끌어서 스냅). 예전엔 합성기와 제목줄 플러그인이 따로 셌다"""
+        found = self._drag_mon(x, y)
+        if not found:
+            return "none", ""
+        m, W, H = found
+        x = min(max(x - m["x"], 0), W - 1)          # 화면 밖이면 그 끝으로
+        y = min(max(y - m["y"], 0), H - 1)
+        E = 4                                   # 가장자리로 치는 두께
+        C = max(48, min(W, H) / 8)              # 모서리로 치는 길이
+        L, R, T, B = x <= E, x >= W - 1 - E, y <= E, y >= H - 1 - E
+        name = m.get("name", "")
+        if (L and y < C) or (T and x < C):
+            return "tl", name
+        if (R and y < C) or (T and x > W - C):
+            return "tr", name
+        if (L and y > H - C) or (B and x < C):
+            return "bl", name
+        if (R and y > H - C) or (B and x > W - C):
+            return "br", name
+        if L:
+            return "left", name
+        if R:
+            return "right", name
+        if T:
+            return "max", name
+        return "none", name
+
+    def _drag_move(self, x, y):
+        if not self._drag_addr or getattr(self, "_drag_fixed", False):
+            return False
+        edge = self._edge_zone(x, y)
+        if edge != self._drag_edge:
+            self._drag_edge = edge
+            self._drag_zone(*edge)
+        if self.topbar is not None:
+            self._drag_at(x, y)
+        return False
+
+    def _drag_end(self, addr, x, y):
+        zone, mon = self._edge_zone(x, y) if self._drag_mons else ("none", "")
+        return self._drag_drop(zone, mon, addr)
+
+    def _drag_at(self, x, y):
+        """레이아웃 바(위쪽 가운데로 끌면 내려오는 칸) — 커서 자리마다"""
         mon = None
         for m in self._drag_mons:
             sc = m.get("scale", 1.0) or 1.0
@@ -510,7 +584,20 @@ class WindowManager:
         return False
 
     def on_event(self, name, arg):
-        if name == "sekaisnapstart":
+        if name == "sekaidrag":
+            p = arg.strip().split(",")
+            try:
+                if p[0] == "start" and len(p) == 2:
+                    GLib.idle_add(self._drag_start, "0x" + p[1], False)
+                elif p[0] == "move" and len(p) == 3:
+                    GLib.idle_add(self._drag_move, int(p[1]), int(p[2]))
+                elif p[0] == "end" and len(p) == 4:
+                    GLib.idle_add(self._drag_end, "0x" + p[1], int(p[2]), int(p[3]))
+                elif p[0] == "cancel":
+                    GLib.idle_add(self._drag_drop, "none", "", "0x0")
+            except ValueError:
+                pass
+        elif name == "sekaisnapstart":
             GLib.idle_add(self._drag_start, "0x" + arg.strip())
         elif name == "sekaisnap":
             zone, _, mon = arg.partition(",")

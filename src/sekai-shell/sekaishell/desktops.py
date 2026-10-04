@@ -10,8 +10,9 @@
   그 안의 창을 옆 데스크톱으로 옮기고 뒤의 것을 한 칸씩 당긴다. 맨 뒤에 남는 빈 워크스페이스는
   keyword 로 persistent 를 풀 수 없어 다시 로그인할 때까지 남지만, 창이 없어 목록·이동에서 빠진다.
 
-  "지금 데스크톱만" 보이기 (작업 표시줄 · Alt+Tab): 최소화한 창은 special:min 에 있어 원래 데스크톱을
-  모른다 → 창을 볼 때마다 마지막 일반 워크스페이스를 기억해 둔다 (remember / visible).
+  "지금 데스크톱만" 보이기 (작업 표시줄 · Alt+Tab): WorldLink sekai33 부터 최소화는 창의 상태(sekaiMinimized)라
+  창이 제 데스크톱에 그대로 있다. 옛 합성기에선 최소화한 창이 special:min 에 있어 원래 데스크톱을 몰라
+  창을 볼 때마다 마지막 일반 워크스페이스를 기억해 둔다 (remember / visible) — 업데이트 뒤 다시 로그인할 때까지만.
 """
 import fcntl
 import json
@@ -398,6 +399,22 @@ def handle(action, arg=""):
     except (TypeError, ValueError) as e:
         dbg("[desktops] 잘못된 인자", action, arg, e)
     return None
+
+
+# ── 최소화 ─────────────────────────────────────────────────
+def is_minimized(c):
+    """최소화한 창인가 — WorldLink sekai33+ 는 sekaiMinimized, 옛 합성기는 특수 워크스페이스(special:min)"""
+    if "sekaiMinimized" in c:
+        return bool(c.get("sekaiMinimized"))
+    return ((c.get("workspace") or {}).get("id", 0) or 0) < 0
+
+
+def minimize(hypr, addr):
+    """창을 최소화 — 옛 합성기(sekaiminimize 를 모름)면 special:min 으로"""
+    r = hypr.dispatch(f"sekaiminimize on,address:{addr}")
+    # 답이 ok 가 아니면(옛 합성기는 모르는 명령, 기본 화면 모드의 wm.py 는 None) 옛 방식으로
+    if not isinstance(r, str) or r.strip().lower() != "ok":
+        hypr.dispatch(f"movetoworkspacesilent special:min,address:{addr}")
 
 
 # ── 창이 어느 데스크톱 것인가 ───────────────────────────────

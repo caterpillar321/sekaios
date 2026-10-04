@@ -532,7 +532,7 @@ class Store:
         bb, bf = hex_to_rgba(a["titlebar_bg"]), hex_to_rgba(a["fg"])
         for icon, cmd in (("sekai:close", "hyprctl dispatch killactive"),
                           ("sekai:max", "hyprctl dispatch fullscreen 1"),
-                          ("sekai:min", "hyprctl dispatch movetoworkspacesilent special:min")):
+                          ("sekai:min", "hyprctl dispatch sekaiminimize on")):
             lines.append(f"        hyprbars-button = {bb}, 16, {icon}, {cmd}, {bf}")
         lines.append("    }")
         lines.append("}")

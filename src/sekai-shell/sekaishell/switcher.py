@@ -76,11 +76,12 @@ class Switcher(Gtk.Window):
                      if (m.get("activeWorkspace") or {}).get("id")} or None
         out = []
         for c in clients:
-            if not c.get("mapped", True) or c.get("hidden"):
+            # 최소화한 창도 넣는다 (윈도우도 최소화 창을 보여 준다) — 숨김(hidden)은 최소화 말고는 뺀다
+            if not c.get("mapped", True) or (c.get("hidden") and not c.get("sekaiMinimized")):
                 continue
             ws = c.get("workspace", {}) or {}
             wname = ws.get("name", "") or ""
-            # 특수 워크스페이스 중 최소화(special:min)만 넣는다 (윈도우도 최소화 창을 보여 준다)
+            # (옛 합성기) 특수 워크스페이스 중 최소화(special:min)만
             if ws.get("id", 0) < 0 and wname != "special:min":
                 continue
             if shown is not None and not desktops.visible(c, shown, ndesk):
@@ -97,7 +98,7 @@ class Switcher(Gtk.Window):
         for c in self.items:
             card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
             card.get_style_context().add_class("switch-card")
-            if (c.get("workspace", {}) or {}).get("id", 0) < 0:
+            if desktops.is_minimized(c):
                 card.get_style_context().add_class("minimized")
             img = app_icon(c.get("class") or c.get("initialClass") or "", 48)
             img.set_margin_top(6)
@@ -163,7 +164,7 @@ class Switcher(Gtk.Window):
 
     def _focus(self, c):
         addr = c.get("address")
-        if (c.get("workspace", {}) or {}).get("id", 0) < 0:
+        if desktops.is_minimized(c):
             if self.on_restore:
                 self.on_restore(addr)
             return False

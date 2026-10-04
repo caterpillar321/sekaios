@@ -764,7 +764,8 @@ def hypr_clients():
         ws = (c.get("workspace") or {}).get("name", "")
         out.append({"pid": c["pid"], "class": c.get("class") or c.get("initialClass") or "",
                     "title": c.get("title") or c.get("initialTitle") or "",
-                    "address": c.get("address") or "", "minimized": ws == "special:min"})
+                    "address": c.get("address") or "",
+                    "minimized": bool(c.get("sekaiMinimized")) or ws == "special:min"})
     return out
 
 

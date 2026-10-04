@@ -11,6 +11,7 @@ from gi.repository import Gtk, Gdk, GLib  # noqa: E402
 
 from .layer import GtkLayerShell  # noqa: E402
 from .popup import ClickCatcher, make_translucent  # noqa: E402
+from . import desktops  # noqa: E402
 
 E = GtkLayerShell.Edge
 
@@ -89,7 +90,7 @@ class WindowMenu(Gtk.Window):
         first = [
             self._row("복원", "", maxed or snapped, restore),
             self._row("최소화", "", True,
-                      lambda: wm.hypr.dispatch(f"movetoworkspacesilent special:min,address:{addr}")),
+                      lambda: desktops.minimize(wm.hypr, addr)),
             self._row("최대화", "", not maxed and not fixed,
                       lambda: wm.snap_to(addr, "max", assist=False)),
         ]

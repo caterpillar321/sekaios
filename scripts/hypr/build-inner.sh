@@ -8,7 +8,7 @@ OUT=/build/deb
 #   예전엔 여기서 원본에 patch-*.py 를 적용했다. 이제 그 고친 것들은 포크의 커밋이다 (git log v0.50.1..sekai).
 #   재현할 수 있게 커밋을 고정한다 — 합성기를 고치면 포크에 커밋·푸시하고 여기 REF 와 rev_for 를 올린다.
 SEKAICOMP_URL="https://github.com/caterpillar321/worldlink.git"
-SEKAICOMP_REF="2d6e4f8e24881887057fdb286a3ff29efcc2b3f3"
+SEKAICOMP_REF="0d5899b195ff0d41abd9cd8a6b228c8f89652978"
 MAINT="SekaiOS <sekai@localhost>"
 REV="sekai2"
 # 패키지별 리비전 (고친 패키지만 올린다 → apt 가 그 패키지만 업그레이드)
@@ -69,7 +69,8 @@ REV="sekai2"
 #      sekai30: 접근성 — 고정 키 · 필터 키(반복 입력 무시 · 누르고 있어야 입력), Shift 다섯 번 · 오른쪽 Shift 8초 알림, setcursor 가 지금 커서를 바로 다시 그림 (포크 e9d5e71) — hyprbars sekai27 · hyprexpo sekai15
 #      sekai31: 화면 읽기(Orca)용 키보드 감시 — a11y KeyboardMonitor 의 합성기 몫, 셸의 sekai-a11yd 와 소켓으로, 돋보기가 포커스·글자 커서를 따라감, 걸린 고정 키는 클릭에도 풀림, 느린 키가 기다리던 키를 버릴 때 그 뗌도 버림 (포크 093f11d) — hyprbars sekai28 · hyprexpo sekai16
 #      sekai32: 보안 감사 — 장식 객체의 해제된 창 쓰기(UAF), 샌드박스 앱에 입력기·가상 키보드·가상 포인터 안 줌, 부모 고리 거부, 잠긴 동안 제목줄 단추·Orca 명령 키 (포크 2d6e4f8) — hyprbars sekai29 · hyprexpo sekai17
-rev_for() { case "$1" in hyprbars) echo sekai29 ;; hyprexpo) echo sekai17 ;; worldlink|sekaicomp|hyprland) echo sekai32 ;; *) echo "$REV" ;; esac; }
+#      sekai33: 정리 — 장식 규약은 앱이 고른 대로, clients 의 sekaiTop(장식 높이), plugin = 을 장식 배치기 뒤에 로드, 끌기 이벤트 한 곳(sekaidrag) — 스냅 영역은 셸이, 최소화를 창의 상태로(sekaiminimize) (포크 0d5899b) — hyprbars sekai30 · hyprexpo sekai18
+rev_for() { case "$1" in hyprbars) echo sekai30 ;; hyprexpo) echo sekai18 ;; worldlink|sekaicomp|hyprland) echo sekai33 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
