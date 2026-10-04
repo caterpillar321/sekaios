@@ -14,6 +14,10 @@
 #    sekai-firewall port add|remove <포트>/<tcp|udp> public|home
 #                                                 직접 연 포트
 #    sekai-firewall remote-login on|off           원격 로그인(SSH) — 서비스와 개인 네트워크의 구멍을 함께
+#    sekai-firewall app add <앱 id> <이름> home|all <포트/프로토콜>…
+#                                                 허용된 앱 — 그 앱의 포트를 firewalld 서비스 sekai-app-<id> 로 묶어
+#                                                 개인 네트워크(home) 또는 모든 네트워크(all)에 연다 (윈도우의 "앱 허용")
+#    sekai-firewall app remove <앱 id>            허용된 앱을 지운다 (서비스째 닫힌다)
 #    sekai-firewall setup dev|release|keep        처음 정책 (패키지 설치·ISO 만들 때). keep = 지금 SSH 상태 그대로
 #
 #  설정 앱의 "방화벽" 페이지가 부른다. 보기(상태·목록)는 사용자 권한의 firewall-cmd 로 한다.
@@ -39,6 +43,9 @@ SERVICES = {
     "steam-streaming", # Steam 리모트 플레이
     "ipp",             # 이 PC 의 프린터 공유
 }
+APP_RE = re.compile(r"[a-z0-9][a-z0-9.-]{0,47}")
+# 앱 이름 — 사람이 읽는 글 (firewalld 가 XML 로 적는다 — 제어 문자·꺾쇠는 받지 않는다)
+APP_NAME_RE = re.compile(r"[^\x00-\x1f\x7f<>&\"']{1,60}")
 UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 PORT_RE = re.compile(r"([1-9][0-9]{0,4})/(tcp|udp)")
 
@@ -62,15 +69,28 @@ def running():
     return run(["firewall-cmd", "--state"], timeout=10)[0] == 0
 
 
+_RUNNING = None
+_DIRTY = False
+
+
 def fw(*args):
-    """영구 설정을 바꾼다 — 데몬이 떠 있으면 firewall-cmd --permanent 뒤 --reload, 아니면 firewall-offline-cmd
-    (ISO 를 만드는 chroot · 꺼 둔 방화벽에서도 다음 부팅의 정책이 맞게)"""
-    if running():
-        rc, out = run(["firewall-cmd", "--permanent", *args])
-        if rc == 0:
-            rc, out = run(["firewall-cmd", "--reload"])
-        return rc, out
+    """영구 설정을 바꾼다 — 데몬이 떠 있으면 firewall-cmd --permanent, 아니면 firewall-offline-cmd
+    (ISO 를 만드는 chroot · 꺼 둔 방화벽에서도 다음 부팅의 정책이 맞게). 실제 규칙에 반영(--reload)은
+    명령이 끝날 때 한 번만 (reload_if_dirty) — 바꿀 때마다 다시 읽으면 앱 허용 하나에 수십 초 걸렸다"""
+    global _RUNNING, _DIRTY
+    if _RUNNING is None:
+        _RUNNING = running()
+    if _RUNNING:
+        _DIRTY = True
+        return run(["firewall-cmd", "--permanent", *args])
     return run(["firewall-offline-cmd", *args])
+
+
+def reload_if_dirty():
+    if _DIRTY:
+        rc, out = run(["firewall-cmd", "--reload"])
+        if rc != 0:
+            fail(f"방화벽 규칙을 다시 읽지 못했습니다: {out}")
 
 
 def ok_or_fail(rc, out, what):
@@ -132,6 +152,28 @@ def cmd_profile(uuid, zone):
         run(["nmcli", "device", "reapply", dev])
 
 
+def app_add(app, name, where, ports):
+    svc = f"sekai-app-{app}"
+    zones = ["home"] if where == "home" else ["home", "public"]
+    app_remove(app, quiet=True)                       # 같은 앱을 다시 추가하면 새 포트·범위로 바꾼다
+    for args in ([f"--new-service={svc}"], [f"--service={svc}", f"--set-short={name}"],
+                 [f"--service={svc}", "--set-description=SekaiOS 허용된 앱"],
+                 *[[f"--service={svc}", f"--add-port={p}"] for p in ports]):
+        rc, out = fw(*args)
+        ok_or_fail(rc, out, "허용된 앱을 만들지 못했습니다")
+    for z in zones:
+        set_service(svc, z, True)
+
+
+def app_remove(app, quiet=False):
+    svc = f"sekai-app-{app}"
+    for z in ZONES:
+        fw(f"--zone={z}", f"--remove-service={svc}")
+    rc, out = fw(f"--delete-service={svc}")
+    if rc != 0 and not quiet and "INVALID_SERVICE" not in (out or ""):
+        fail(f"허용된 앱을 지우지 못했습니다: {out}")
+
+
 def main():
     a = sys.argv[1:]
     if not a:
@@ -160,10 +202,18 @@ def main():
         set_service("ssh", "home", on)
         if not on:
             set_service("ssh", "public", False)
+    elif (cmd == "app" and len(a) >= 6 and a[1] == "add" and APP_RE.fullmatch(a[2]) and APP_NAME_RE.fullmatch(a[3])
+          and a[4] in ("home", "all") and len(a) - 5 <= 16 and all(PORT_RE.fullmatch(x) for x in a[5:])):
+        if not all(1 <= int(PORT_RE.fullmatch(x).group(1)) <= 65535 for x in a[5:]):
+            fail("포트 번호는 1~65535 입니다", 2)
+        app_add(a[2], a[3], a[4], a[5:])
+    elif cmd == "app" and len(a) == 3 and a[1] == "remove" and APP_RE.fullmatch(a[2]):
+        app_remove(a[2])
     elif cmd == "setup" and len(a) == 2 and a[1] in ("dev", "release", "keep"):
         cmd_setup(a[1])
     else:
         fail("잘못된 인자입니다", 2)
+    reload_if_dirty()
     print("OK", flush=True)
 
 

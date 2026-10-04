@@ -14,6 +14,8 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gtk  # noqa: E402
 
+from sekaishell.firewall import _fw_call, listening_apps  # noqa: E402
+
 from ..util import dbg, failure_reason, run_async  # noqa: E402
 from ..widgets import Page, button, combo, row, switch  # noqa: E402
 
@@ -41,18 +43,6 @@ def _out(cmd, timeout=6):
         return 1, ""
 
 
-FW_BUS, FW_PATH = "org.fedoraproject.FirewallD1", "/org/fedoraproject/FirewallD1"
-
-
-def _fw_call(method, args=None, iface="org.fedoraproject.FirewallD1.zone"):
-    """firewalld 의 D-Bus 읽기 함수를 직접 — firewall-cmd 는 실행마다 설정 변경 권한부터 청해 인증 창을 띄웠다.
-    읽기(info)는 polkit 규칙(50-sekai-firewall-info.rules)이 로그인한 사람에게 허용한다. 인증을 묻지 않는다"""
-    from gi.repository import Gio
-    bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
-    r = bus.call_sync(FW_BUS, FW_PATH, iface, method, args, None, Gio.DBusCallFlags.NONE, 4000, None)
-    return r.unpack()[0]
-
-
 def gather():
     """지금 상태 — 작업 스레드에서"""
     st = {"installed": os.path.exists("/usr/sbin/firewalld"), "running": False, "enabled": False,
@@ -70,6 +60,22 @@ def gather():
                 dbg("[방화벽] 상태를 읽지 못함", e)
                 st["unreadable"] = str(e)
             st["ssh_public"] = "ssh" in st["zones"].get("public", {}).get("services", [])
+            # 허용된 앱 — sekai-app-<id> 서비스 (이름·포트는 서비스 설정에서)
+            apps = {}
+            for z in ("home", "public"):
+                for svc in st["zones"].get(z, {}).get("services", []):
+                    if not svc.startswith("sekai-app-"):
+                        continue
+                    a = apps.setdefault(svc, {"id": svc[len("sekai-app-"):], "zones": [], "name": svc, "ports": []})
+                    a["zones"].append(z)
+            for svc, a in apps.items():
+                try:
+                    cfg = _fw_call("getServiceSettings2", GLib.Variant("(s)", (svc,)), iface="org.fedoraproject.FirewallD1")
+                    a["name"] = cfg.get("short") or a["name"]
+                    a["ports"] = [f"{p}/{proto}" for p, proto in cfg.get("ports", [])]
+                except Exception as e:
+                    dbg("[방화벽] 앱 서비스를 읽지 못함", svc, e)
+            st["apps"] = sorted(apps.values(), key=lambda a: a["name"].lower())
     # 지금 연결된 네트워크와 그 프로필
     rc, out = _out(["nmcli", "-t", "-f", "NAME,UUID,TYPE,DEVICE", "connection", "show", "--active"])
     for line in out.splitlines():
@@ -167,9 +173,61 @@ class FirewallPage:
                 row(s, "원격 로그인 (SSH)", ssub,
                     control=switch(bool(st["ssh"]), lambda v: self._do(["remote-login", "on" if v else "off"],
                                                                         "원격 로그인을 켰습니다" if v else "원격 로그인을 껐습니다")))
+            self._draw_apps(st)
             self._draw_ports(st)
         self.body.show_all()
         return False
+
+    def _draw_apps(self, st):
+        s = self._sect("허용된 앱")
+        for a in st.get("apps", []):
+            where = "모든 네트워크" if "public" in a["zones"] else "개인 네트워크"
+            row(s, a["name"], f"{', '.join(a['ports']) or '포트 없음'} · {where}에서 허용",
+                icon=["application-x-executable", "application-x-executable-symbolic"],
+                control=button("제거", lambda a=a: self._do(["app", "remove", a["id"]], f"{a['name']} 의 허용을 지웠습니다")))
+        if not st.get("apps"):
+            row(s, "허용된 앱이 없습니다", "게임 서버 · 파일 전송 앱처럼 다른 기기가 이 PC 로 연결해야 하는 앱을 추가하세요")
+        row(s, "앱 허용", "지금 연결을 기다리는 앱을 골라 그 포트를 엽니다", control=button("앱 추가…", self._add_app_dialog))
+
+    def _add_app_dialog(self):
+        """지금 연결을 기다리는(listen) 앱 — ss 로 내 프로세스의 것만 보인다 (관리자 프로세스는 이미 시스템 서비스)"""
+        items = listening_apps()
+        win = self.p.get_toplevel()
+        d = Gtk.Dialog(title="앱 허용", transient_for=win if isinstance(win, Gtk.Window) else None, modal=True)
+        d.add_buttons("취소", Gtk.ResponseType.CANCEL, "허용", Gtk.ResponseType.OK)
+        ok = d.get_widget_for_response(Gtk.ResponseType.OK)
+        box = d.get_content_area()
+        box.set_spacing(8)
+        box.set_border_width(16)
+        lab = Gtk.Label(label="다른 기기가 이 앱으로 연결할 수 있게 합니다. 지금 연결을 기다리고 있는 앱:", xalign=0)
+        lab.set_line_wrap(True)
+        box.add(lab)
+        group, radios = None, []
+        for it in items:
+            r = Gtk.RadioButton.new_with_label_from_widget(group, f"{it['name']}  —  {', '.join(it['ports'])}")
+            group = group or r
+            r.app = it
+            radios.append(r)
+            box.add(r)
+        if not items:
+            box.add(Gtk.Label(label="지금 연결을 기다리는 앱이 없습니다 — 허용할 앱을 먼저 실행하세요.", xalign=0))
+            ok.set_sensitive(False)
+        where = combo([("home", "개인 네트워크만"), ("all", "모든 네트워크 (공용 포함)")], "home")
+        acc = where.get_accessible()
+        if acc is not None:
+            acc.set_name("허용할 네트워크")
+        box.add(where)
+        d.show_all()
+
+        def responded(dlg, resp):
+            # 값은 창을 닫기 전에 읽는다 — 닫은 뒤의 콤보는 값이 없어(None) 도우미가 "잘못된 인자"로 거절했다
+            chosen = next((r.app for r in radios if r.get_active()), None)
+            scope = where.get_active_id() or "home"
+            dlg.destroy()
+            if resp == Gtk.ResponseType.OK and chosen:
+                self._do(["app", "add", chosen["id"], chosen["name"], scope, *chosen["ports"]],
+                         f"{chosen['name']} 을(를) 허용했습니다")
+        d.connect("response", responded)
 
     def _draw_ports(self, st):
         s = self._sect("직접 연 포트")

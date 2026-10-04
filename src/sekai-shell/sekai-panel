@@ -2163,6 +2163,10 @@ def main():
             desk_osd.show_name(text, focused_gdk_monitor(hypr), note=isinstance(text, desktops.Note))
 
     panel.updates = UpdateNotifier()
+    # 방화벽 "허용할까요?" — 앱이 밖에서 들어오는 연결을 처음 기다리면 묻는다 (sekaishell/fwprompt.py)
+    if os.path.exists("/usr/libexec/sekai/sekai-firewall"):
+        from sekaishell.fwprompt import FirewallPrompt
+        panel.fwprompt = FirewallPrompt()
     panel.gpuhint = GpuHint()
     panel.crashhint = CrashHint()          # 지난번 커널 패닉으로 다시 시작했으면 알린다
     # 접근성 — 돋보기 · 색 필터 · 화상 키보드 · 고정 키 표시 · Shift 다섯 번 묻기 (sekaishell/a11y.py)
