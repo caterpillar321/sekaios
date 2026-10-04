@@ -185,6 +185,17 @@ class RowBox(Gtk.Container):
         c.size_allocate(ca)
 
 
+def _name_controls(w, title):
+    """줄 제목을 그 줄의 스위치·콤보·숫자 칸·글자 없는 단추의 접근성 이름으로 — 화면 읽기가 "켬, 스위치"가 아니라
+    "투명 효과, 스위치"로 읽게 (글자 있는 단추는 제 글자 그대로)"""
+    from sekaishell import accessible
+    if isinstance(w, (Gtk.Switch, Gtk.SpinButton, Gtk.Scale, Gtk.ComboBox, Gtk.Entry)) or (
+            isinstance(w, Gtk.Button) and not isinstance(w, Gtk.ComboBox) and not (w.get_label() or "").strip()):
+        accessible.name(w, title)
+    if isinstance(w, Gtk.Container):
+        w.forall(lambda c: _name_controls(c, title))
+
+
 def row(listbox, title, subtitle=None, icon=None, control=None, activatable=False):
     """항목 한 줄을 만들어 리스트박스에 붙이고, 그 Row 를 돌려준다."""
     r = Gtk.ListBoxRow()
@@ -215,6 +226,7 @@ def row(listbox, title, subtitle=None, icon=None, control=None, activatable=Fals
     if control is not None:
         control.set_valign(Gtk.Align.CENTER)
         r.control = control
+        _name_controls(control, title)
     # 글 아래로 내릴 때는 아이콘 너비만큼 들여 글과 줄을 맞춘다
     h = RowBox(lead, control, indent=(20 + 12) if icon else 0)
     r.add(h)

@@ -304,6 +304,11 @@ def apply_contrast_css(screen=None):
     대비 테마가 꺼져 있으면 얹었던 것을 내린다 (패널은 SIGHUP 때마다 다시 부른다)"""
     global _contrast_prov
     try:
+        from . import accessible
+        accessible.install()      # 글자 없는 단추에 툴팁을 접근성 이름으로 (모든 SekaiOS 앱이 여기를 지난다)
+    except Exception:
+        pass
+    try:
         import gi
         gi.require_version("Gtk", "3.0")
         from gi.repository import Gdk, Gtk

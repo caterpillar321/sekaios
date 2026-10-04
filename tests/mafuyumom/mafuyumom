@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""MafuyuMom — SekaiOS 기능 평가 하네스 (엄격하게 다 본다)
+
+  mafuyumom golden --from ~/.cache/sekai-svm-btrfs   골든 이미지 만들기 (원본 VM 은 꺼 둔다)
+  mafuyumom list                                     시험 목록
+  mafuyumom run [-s 스위트…] [-k 낱말] [--install-latest] [--keep] [--reuse]
+        골든 위에 새 VM → 로그인 → 시험 → 보고서(~/.cache/mafuyumom/reports/<시각>/report.html)
+        --install-latest  packages/ 의 최신 SekaiOS·WorldLink 패키지를 깔고 다시 부팅한 뒤 시험
+        --keep            끝나도 VM 을 끄지 않는다 (VNC 127.0.0.1:5909 · SSH 2340)
+        --reuse           이미 켜진 시험 VM 으로 (새로 만들지 않음)
+  mafuyumom stop                                     시험 VM 끄기
+"""
+import argparse
+import glob
+import importlib
+import os
+import re
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+
+from mm import config, remote, report, runner, vm  # noqa: E402
+
+
+def load_suites():
+    for f in sorted(glob.glob(os.path.join(HERE, "suites", "s*.py"))):
+        importlib.import_module("suites." + os.path.basename(f)[:-3])
+
+
+def newest(pattern):
+    """packages/ 에서 그 이름의 가장 새 판"""
+    files = glob.glob(os.path.join(config.REPO, "packages", pattern))
+    if not files:
+        return None
+    def ver(p):
+        return os.path.basename(p).split("_")[1]
+    best = files[0]
+    for f in files[1:]:
+        if subprocess.run(["dpkg", "--compare-versions", ver(f), "gt", ver(best)]).returncode == 0:
+            best = f
+    return best
+
+
+def install_latest(q):
+    pats = ["sekai-de_*_all.deb", "sekai-shell_*_all.deb", "sekaios-base_*_all.deb", "worldlink_*_amd64.deb",
+            "sekaicomp_*_all.deb", "hyprland_*_all.deb", "hyprbars_*_amd64.deb", "hyprexpo_*_amd64.deb"]
+    debs = [d for d in (newest(p) for p in pats) if d]
+    print("  · 최신 패키지:", ", ".join(os.path.basename(d) for d in debs), flush=True)
+    remote.run("mkdir -p /tmp/mm-debs; rm -f /tmp/mm-debs/*", session=False)
+    for d in debs:
+        remote.push(d, "/tmp/mm-debs/")
+    r = remote.root("DEBIAN_FRONTEND=noninteractive apt-get install -y -q --allow-downgrades /tmp/mm-debs/*.deb "
+                    "> /tmp/mm-debs/log 2>&1; echo rc=$?", timeout=900)
+    if "rc=0" not in r.out:
+        print(remote.root("tail -20 /tmp/mm-debs/log").out)
+        raise SystemExit("패키지 설치 실패")
+    print("  · 설치됨 — 다시 부팅", flush=True)
+    if not vm.reboot_and_login(q):
+        raise SystemExit("다시 부팅한 뒤 로그인하지 못했습니다")
+
+
+def cmd_run(a):
+    load_suites()
+    sel = [t for t in runner.TESTS
+           if (not a.suite or t["suite"] in a.suite) and (not a.k or a.k in t["id"] or a.k in t["name"])]
+    if not sel:
+        raise SystemExit("고른 시험이 없습니다 (mafuyumom list)")
+    t0 = time.time()
+    if not a.reuse or not vm.running():
+        print("■ 시험 VM 을 새로 띄웁니다 (골든 위 덧씌우기)", flush=True)
+        vm.fresh()
+        vm.start()
+    if not vm.wait_ssh():
+        raise SystemExit("VM 에 SSH 로 닿지 않습니다")
+    q = vm.qmp()
+    print("■ 로그인", flush=True)
+    if not vm.login(q):
+        raise SystemExit("로그인하지 못했습니다")
+    if a.install_latest:
+        install_latest(q)
+    versions = vm.versions()
+    print("■ 판:", " · ".join(f"{k} {v}" for k, v in versions.items()), flush=True)
+    outdir = os.path.join(config.REPORTS, time.strftime("%Y%m%d-%H%M%S"))
+    os.makedirs(outdir, exist_ok=True)
+    print(f"■ 시험 {len(sel)}개", flush=True)
+    results = runner.run(sel, outdir, q)
+    meta = {"when": time.strftime("%Y-%m-%d %H:%M"), "versions": versions, "secs": int(time.time() - t0),
+            "golden": vm.golden_info()}
+    cnt = report.write(outdir, results, meta)
+    print(f"■ 결과: 통과 {cnt['pass']} · 경고 {cnt['warn']} · 실패 {cnt['fail']} · 오류 {cnt['error']} · "
+          f"건너뜀 {cnt['skip']}", flush=True)
+    print(f"■ 보고서: {outdir}/report.html", flush=True)
+    if not a.keep:
+        vm.stop(force=True)
+    return 0 if cnt["fail"] == 0 and cnt["error"] == 0 else 1
+
+
+def main():
+    p = argparse.ArgumentParser(prog="mafuyumom", description=__doc__.split("\n")[0])
+    sp = p.add_subparsers(dest="cmd", required=True)
+    g = sp.add_parser("golden")
+    g.add_argument("--from", dest="src", required=True)
+    sp.add_parser("list")
+    sp.add_parser("stop")
+    r = sp.add_parser("run")
+    r.add_argument("-s", "--suite", action="append")
+    r.add_argument("-k")
+    r.add_argument("--install-latest", action="store_true")
+    r.add_argument("--keep", action="store_true")
+    r.add_argument("--reuse", action="store_true")
+    a = p.parse_args()
+    if a.cmd == "golden":
+        vm.make_golden(os.path.expanduser(a.src))
+    elif a.cmd == "list":
+        load_suites()
+        cur = None
+        for t in runner.TESTS:
+            if t["suite"] != cur:
+                cur = t["suite"]
+                print(f"[{cur}]")
+            print(f"  {t['id']:42s} {t['name']}")
+    elif a.cmd == "stop":
+        vm.stop(force=True)
+    elif a.cmd == "run":
+        sys.exit(cmd_run(a))
+
+
+if __name__ == "__main__":
+    main()

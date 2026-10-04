@@ -313,6 +313,7 @@ def build_card(n, on_action, on_close, compact=False):
     top.pack_start(text, True, True, 0)
 
     x = Gtk.Button()
+    x.get_accessible().set_name("알림 닫기")
     xi = Gtk.Image.new_from_icon_name("window-close-symbolic", Gtk.IconSize.MENU)
     xi.set_pixel_size(14)
     x.add(xi)

@@ -1426,6 +1426,8 @@ class TaskbarMixin:
             elif all(self._minimized(c) for c in wins):
                 ctx.add_class("minimized")
         btn.set_tooltip_text(None if wins else name)       # 창이 있으면 미리보기가 대신한다
+        # 화면 읽기용 이름 — 앱 이름과 창 수 (툴팁을 끈 단추도 읽히게)
+        btn.get_accessible().set_name(name if len(wins) < 2 else f"{name} — 창 {len(wins)}개")
         if new:
             self.tasks.pack_start(btn, False, False, 0)
         self._task_btns[key] = (btn, wins)
@@ -1567,6 +1569,7 @@ class SecondaryPanel(Gtk.Window, TaskbarMixin):
         self._hook_bar_menu()
         start = Gtk.Button()
         start.get_style_context().add_class("start-btn")
+        start.get_accessible().set_name("시작")
         logo = Gtk.DrawingArea()
         logo.set_size_request(24, 24)
         logo.set_valign(Gtk.Align.CENTER)
@@ -1637,6 +1640,7 @@ class Panel(Gtk.Window, TaskbarMixin):
         # ── 시작 버튼 ──
         self.start_btn = Gtk.Button()
         self.start_btn.get_style_context().add_class("start-btn")
+        self.start_btn.get_accessible().set_name("시작")          # 화면 읽기가 "단추"라고만 읽지 않게
         logo = Gtk.DrawingArea()
         logo.set_size_request(24, 24)
         logo.set_valign(Gtk.Align.CENTER)      # 바 높이 안에서 세로 중앙
@@ -1665,6 +1669,7 @@ class Panel(Gtk.Window, TaskbarMixin):
 
         # ── 알림 ──
         self.noti_btn = Gtk.Button()
+        self.noti_btn.get_accessible().set_name("알림 센터")
         nb = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self.noti_icon = icon_image("notifications-symbolic", 16)
         nb.pack_start(self.noti_icon, False, False, 0)
@@ -1695,6 +1700,7 @@ class Panel(Gtk.Window, TaskbarMixin):
                                 on_volume=lambda: self.refresh_sys(0))
         self.qs.before_open = self._close_for_qs
         self.qs_btn = self.qs.make_button(on_scroll=self._on_vol_scroll, monitor=lambda: self.gdk_monitor)
+        self.qs_btn.get_accessible().set_name("빠른 설정 — 네트워크·소리")
         sys_box.pack_start(self.qs_btn, False, False, 0)
 
         self.cal_popup = self._build_cal_popup()

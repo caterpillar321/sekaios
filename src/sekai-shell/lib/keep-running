@@ -16,10 +16,20 @@ alive() {
 }
 #   끝난 코드가 75(EX_TEMPFAIL)면 "지금은 할 수 없다" — 1분 뒤에 다시 (에이전트: 다른 에이전트가 이미 있을 때.
 #   곧바로 다시 띄우면 5초마다 GTK 를 새로 올리며 기록을 쌓았다)
+# 출력(특히 파이썬 오류 Traceback)은 저널로 — 예전엔 합성기를 따라 /dev/null 로 버려져, 셸이 오류를 내도 어디에도
+#   남지 않았다 (journalctl --user -t sekai-panel · 이벤트 뷰어 · MafuyuMom 불변식이 본다)
+tag=$(basename "$1")
+run() {
+    if command -v systemd-cat >/dev/null 2>&1; then
+        systemd-cat -t "$tag" -- "$@"
+    else
+        "$@"
+    fi
+}
 fails=0
 while alive; do
     started=$(date +%s)
-    "$@" && exit 0
+    run "$@" && exit 0
     if [ $? -eq 75 ]; then
         sleep 60
         continue
