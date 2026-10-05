@@ -27,6 +27,8 @@ def log(*a):
 
 # ── 골든 이미지 ──────────────────────────────────────────
 def golden_info():
+    if config.REAL:
+        return {"from": f"실기 {config.REAL}", "made": "-"}
     try:
         with open(os.path.join(config.GOLDEN, "info.json")) as f:
             return json.load(f)
@@ -56,6 +58,8 @@ def make_golden(src_dir):
 
 # ── 실행 VM ──────────────────────────────────────────────
 def running():
+    if config.REAL:
+        return True                          # 실기 모드 — 그 PC 는 늘 "켜져 있다" (fresh·start·stop 은 하지 않는다)
     try:
         os.kill(int(open(PIDF).read()), 0)
         return True
@@ -65,6 +69,8 @@ def running():
 
 def fresh():
     """골든 위에 새 덧씌우기 디스크"""
+    if config.REAL:
+        return
     if running():
         stop(force=True)
     if not os.path.exists(os.path.join(config.GOLDEN, "disk.qcow2")):
@@ -78,6 +84,8 @@ def fresh():
 
 
 def start():
+    if config.REAL:
+        return
     subprocess.run([
         "qemu-system-x86_64", "-name", "mafuyumom", "-enable-kvm", "-cpu", "host", "-smp", "4", "-m", "8192",
         "-machine", "q35",
@@ -95,7 +103,7 @@ def start():
 
 
 def stop(force=False):
-    if not running():
+    if config.REAL or not running():
         return
     pid = int(open(PIDF).read())
     if not force:
@@ -117,6 +125,9 @@ def stop(force=False):
 
 
 def qmp():
+    if config.REAL:
+        from .realio import RealIO
+        return RealIO().connect()
     return QMP(QMP_SOCK).connect()
 
 
@@ -192,6 +203,8 @@ def s3_used():
 
 def cold_restart(q):
     """디스크를 비우고(sync) QEMU 를 끈 뒤 같은 디스크로 다시 띄워 로그인. q 는 새 QEMU 에 다시 붙는다"""
+    if config.REAL:
+        return reboot_and_login(q)
     remote.root("sync", timeout=30)
     q.close()
     stop(force=True)

@@ -17,4 +17,12 @@ USER = os.environ.get("MM_USER", "miku")
 PASSWORD = os.environ.get("MM_PASSWORD", "miku1234")
 
 SCREEN = (1920, 1080)
+
+# 실기 모드 — VM 대신 실제 PC 를 시험한다 (그 PC 는 real/setup-target.sh 로 한 번 준비)
+#   MM_REAL=miku@192.168.0.56  MM_REAL_JUMP=homedesktop (집 공유기 안이면 거쳐 갈 곳)
+REAL = os.environ.get("MM_REAL", "")
+REAL_JUMP = os.environ.get("MM_REAL_JUMP", "")
+REAL_UINPUT = os.path.join(HERE, "real", "mm-uinput.py")
+if REAL:
+    SCREEN = tuple(int(x) for x in os.environ.get("MM_REAL_SCREEN", "1920x1080").split("x"))
 OVMF_CODE = "/usr/share/OVMF/OVMF_CODE_4M.fd"

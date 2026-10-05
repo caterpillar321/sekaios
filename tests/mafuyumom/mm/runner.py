@@ -215,7 +215,10 @@ def _run(selected, outdir, q, ui, results):
         except Skip as e:
             status, msg = "skip", str(e)
         except Exception as e:
-            status, msg = "error", f"{type(e).__name__}: {e}\n{traceback.format_exc(limit=4)}"
+            if type(e).__name__ == "RealOnly":          # VM 에만 있는 동작 (실기 모드) — 실패가 아니라 건너뜀
+                status, msg = "skip", str(e)
+            else:
+                status, msg = "error", f"{type(e).__name__}: {e}\n{traceback.format_exc(limit=4)}"
         dt = time.time() - t0
         if status in ("fail", "error"):
             t.shot("끝")                                # 정리하기 전 화면

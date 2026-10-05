@@ -22,7 +22,19 @@ class Result:
         return f"<rc={self.rc} out={self.out[:200]!r} err={self.err[:200]!r}>"
 
 
+def _ssh_target():
+    """(ssh 앞부분 옵션, 사용자@주소) — VM 이면 127.0.0.1:포트, 실기 모드면 그 PC (거쳐 갈 곳 포함)"""
+    if config.REAL:
+        return (["-J", config.REAL_JUMP] if config.REAL_JUMP else []), config.REAL
+    return ["-p", str(config.SSH_PORT)], f"{config.USER}@127.0.0.1"
+
+
 def _ssh_base(port=None):
+    if config.REAL:
+        pre, tgt = _ssh_target()
+        return ["ssh", *pre, "-i", config.KEY, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=15",
+                "-o", "ServerAliveInterval=5", tgt]
     return ["ssh", "-p", str(port or config.SSH_PORT), "-i", config.KEY, "-o", "IdentitiesOnly=yes",
             "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
             "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=5", f"{config.USER}@127.0.0.1"]
@@ -50,16 +62,20 @@ def root(cmd, timeout=300):
 
 
 def push(local, remote):
-    p = subprocess.run(["scp", "-q", "-P", str(config.SSH_PORT), "-i", config.KEY, "-o", "IdentitiesOnly=yes",
+    pre, tgt = _ssh_target()
+    pre = ["-P" if x == "-p" else x for x in pre]
+    p = subprocess.run(["scp", "-q", *pre, "-i", config.KEY, "-o", "IdentitiesOnly=yes",
                         "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
-                        local, f"{config.USER}@127.0.0.1:{remote}"], capture_output=True, text=True, timeout=300)
+                        local, f"{tgt}:{remote}"], capture_output=True, text=True, timeout=300)
     return p.returncode == 0
 
 
 def pull(remote, local):
-    p = subprocess.run(["scp", "-q", "-P", str(config.SSH_PORT), "-i", config.KEY, "-o", "IdentitiesOnly=yes",
+    pre, tgt = _ssh_target()
+    pre = ["-P" if x == "-p" else x for x in pre]
+    p = subprocess.run(["scp", "-q", *pre, "-i", config.KEY, "-o", "IdentitiesOnly=yes",
                         "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
-                        f"{config.USER}@127.0.0.1:{remote}", local], capture_output=True, text=True, timeout=300)
+                        f"{tgt}:{remote}", local], capture_output=True, text=True, timeout=300)
     return p.returncode == 0
 
 
