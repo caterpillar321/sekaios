@@ -81,6 +81,20 @@ button.wiz-next.danger:disabled label { color: alpha(#ffffff, 0.45); }
 .plan-seg.esp  { background: #f0c66e; }
 .plan-seg.swap { background: #9aa4ff; }
 .plan-seg.root { background: @accent; }
+.plan-seg.keep { background: alpha(@fg, 0.14); }               /* 그대로 두는 파티션 (Windows · 복구 …) */
+.plan-seg.keep label { color: @fg; font-weight: 500; }
+.plan-seg.win  { background: #5b8def; }
+.plan-seg.win label { color: #ffffff; }
+.plan-seg.free { background: transparent; border: 1px dashed alpha(@fg, 0.35); }
+.plan-seg.free label { color: @text2; font-weight: 500; }
+.plan-seg.gone { background: alpha(#ff6b81, 0.30); }             /* 지울 파티션 */
+.plan-seg.gone label { color: #ffd0d8; text-decoration: line-through; }
+.howto { font-size: 9.75pt; color: @fg; }
+/* 직접 나누기 — 파티션 표 */
+list.part-table { background: @card; border: 1px solid @line; border-radius: 10px; }
+list.part-table row { padding: 6px 12px; border-bottom: 1px solid alpha(@line, 0.6); }
+list.part-table row:selected { background: alpha(@accent, 0.16); }
+list.part-table row.disk-head { background: alpha(@fg, 0.05); padding: 9px 12px; }
 .plan-legend { font-size: 9pt; color: @text2; }
 
 /* 설치 중 */
@@ -255,13 +269,14 @@ class Wizard(Gtk.Box):
         self.stack.add_named(sw, pid)
 
     def show_page(self, pid, back=None, next_label="다음", next_enabled=True,
-                  danger=False, hint="", footer=True, forward=True):
+                  danger=False, hint="", footer=True, forward=True, step=None):
+        """step: 단계 표시에서 강조할 단계 (이름 없는 하위 페이지가 어느 단계에 속하는지 — 없으면 pid)"""
         self.stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT if forward
                                        else Gtk.StackTransitionType.SLIDE_RIGHT)
         self.stack.set_visible_child_name(pid)
         # 단계 표시 — 지금 단계 강조, 지난 단계는 조금 밝게
         order = [p for p, n in self.steps]
-        cur = order.index(pid) if pid in order else -1
+        cur = order.index(step or pid) if (step or pid) in order else -1
         for p, lb in self.step_labels.items():
             ctx = lb.get_style_context()
             i = order.index(p)

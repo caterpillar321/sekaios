@@ -677,6 +677,8 @@ ISRC="$P/src/sekai-installer"
 install -Dm755 "$ISRC/sekai-installer"         "$STAGE_I/usr/bin/sekai-installer"
 install -Dm755 "$ISRC/sekai-install"           "$STAGE_I/usr/sbin/sekai-install"
 install -Dm755 "$ISRC/sekai-install-backend"   "$STAGE_I/usr/lib/sekai-installer/sekai-install-backend"
+install -Dm755 "$ISRC/sekai-partition"         "$STAGE_I/usr/lib/sekai-installer/sekai-partition"
+install -Dm644 "$ISRC/sekai_manual.py"         "$STAGE_I/usr/lib/sekai-installer/sekai_manual.py"
 install -Dm644 "$ISRC/sekai-installer.desktop" "$STAGE_I/usr/share/applications/sekai-installer.desktop"
 copyright "$STAGE_I" sekai-installer
 mkdir -p "$STAGE_I/DEBIAN"
@@ -692,8 +694,9 @@ Depends: sekai-shell (= ${FULL}), sekai-desktop (= ${FULL}),
  util-linux, whiptail, sudo, python3-gi
 Description: SekaiOS installer
  Graphical installer used from the SekaiOS live session. Installs the
- system to a whole disk with its own EFI system partition. Account,
- region and network are configured on first boot (OOBE).
+ system to a whole disk with its own EFI system partition, or into free
+ space next to another operating system (sharing its EFI system
+ partition). Account, region and network are configured on first boot.
 CTRL
 dpkg-deb --root-owner-group --build "$STAGE_I" "$OUT/sekai-installer_${FULL}_all.deb" > /dev/null
 ls -lh "$OUT/sekai-installer_${FULL}_all.deb" | awk '{print "    "$5"  "$9}'

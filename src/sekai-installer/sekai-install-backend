@@ -4,6 +4,9 @@
 #
 #    sekai-install-backend --disk /dev/sdX [--esp-mb 512] [--swap-mb 0] [--fs btrfs|ext4]
 #                          [--encrypt [--tpm] [--pin]] --yes-erase
+#    sekai-install-backend --plan 계획.json [--encrypt [--tpm] [--pin]] --yes-erase
+#        "다른 운영체제 옆에 설치"·"직접 나누기" — 파티션은 sekai-partition 이 계획대로 바꾸고 (계획 밖은 건드리지 않는다)
+#        여기서는 그 결과(MOUNT 줄)대로 포맷·연결한다. ESP 는 다른 OS 와 같이 쓸 수 있다 (포맷하지 않으면).
 #
 #  디스크 전체를 쓴다. 그 디스크에 SekaiOS 전용 ESP 를 새로 만든다
 #  (다른 디스크의 윈도우 ESP 는 건드리지 않는다 — 서로 독립).
@@ -37,12 +40,14 @@ TARGET=/target
 LOG=/var/log/sekai-install.log
 TOTAL=6
 
+PLAN=""; PARTITION=/usr/lib/sekai-installer/sekai-partition
 DISK=""; ESP_MB=512; BOOT_MB=1024; SWAP_MB=0; FS=btrfs; YES=0; EXP_SIZE=""; EXP_SERIAL=""
 ENCRYPT=0; USE_TPM=0; USE_PIN=0; EXTRA_DEBS=""; TEST_USER=""
 LUKS_NAME=sekai-root
 while [ $# -gt 0 ]; do
     case "$1" in
         --disk)      DISK="$2"; shift 2 ;;
+        --plan)      PLAN="$2"; shift 2 ;;
         --esp-mb)    ESP_MB="$2"; shift 2 ;;
         --swap-mb)   SWAP_MB="$2"; shift 2 ;;
         --fs)        FS="$2"; shift 2 ;;
@@ -73,7 +78,7 @@ BTRFS_OPTS="noatime,compress=zstd:1"
 cleanup() {
     for m in "$TARGET/sys/firmware/efi/efivars" "$TARGET/boot/efi" "$TARGET/boot" \
              "$TARGET/dev/pts" "$TARGET/dev" "$TARGET/proc" "$TARGET/sys" \
-             "$TARGET/run" "$TARGET/var/lib/flatpak" "$TARGET/var/cache" "$TARGET/var/log" "$TARGET/.snapshots" "$TARGET/home" \
+             "$TARGET/run/udev" "$TARGET/run" "$TARGET/var/lib/flatpak" "$TARGET/var/cache" "$TARGET/var/log" "$TARGET/.snapshots" "$TARGET/home" \
              "$TARGET" /run/sekai-install-top; do
         mountpoint -q "$m" && umount -l "$m" 2>/dev/null
     done
@@ -103,9 +108,16 @@ fi
 [ -d /run/live/medium ]         || die "라이브 세션(설치 USB)에서만 실행할 수 있습니다"
 [ -d /sys/firmware/efi ]        || die "UEFI 모드로 부팅해야 합니다 (BIOS/레거시 모드는 지원하지 않음)"
 [ "$YES" = 1 ]                  || die "--yes-erase 없이는 디스크를 지우지 않습니다"
+if [ -n "$PLAN" ]; then
+    [ -z "$DISK" ]              || die "--disk 와 --plan 은 같이 쓸 수 없습니다"
+    [ -f "$PLAN" ]              || die "계획 파일이 없습니다: $PLAN"
+    DISK=/dev/null              # 아래 디스크 확인은 계획 경로에선 건너뛴다 (sekai-partition 이 한다)
+fi
+if [ -z "$PLAN" ]; then
 [ -b "$DISK" ]                  || die "디스크가 없습니다: $DISK"
 DISK="$(realpath "$DISK")"        # /dev/disk/by-id/… 같은 링크도 실제 장치 이름으로 (비교·파티션 이름용)
 [ "$(lsblk -dno TYPE "$DISK")" = disk ] || die "디스크가 아닙니다: $DISK"
+fi
 [[ "$ESP_MB" =~ ^[0-9]+$ ]] && [ "$ESP_MB" -ge 256 ] && [ "$ESP_MB" -le 4096 ] || die "ESP 크기가 이상합니다: $ESP_MB"
 [[ "$SWAP_MB" =~ ^[0-9]+$ ]] && [ "$SWAP_MB" -le 65536 ] || die "스왑 크기가 이상합니다: $SWAP_MB"
 case "$FS" in btrfs|ext4) ;; *) die "모르는 파일 시스템: $FS" ;; esac
@@ -126,24 +138,26 @@ if [ "$ENCRYPT" = 1 ]; then
 fi
 
 # 고른 뒤에 디스크가 바뀌지 않았는지 (크기·시리얼)
-if [ -n "$EXP_SIZE" ] && [ "$(lsblk -dnbo SIZE "$DISK")" != "$EXP_SIZE" ]; then
+if [ -z "$PLAN" ] && [ -n "$EXP_SIZE" ] && [ "$(lsblk -dnbo SIZE "$DISK")" != "$EXP_SIZE" ]; then
     die "고른 디스크가 바뀌었습니다 (크기가 다름) — 디스크를 다시 골라 주세요"
 fi
-if [ -n "$EXP_SERIAL" ] && [ "$(lsblk -dno SERIAL "$DISK" | tr -d ' ')" != "$EXP_SERIAL" ]; then
+if [ -z "$PLAN" ] && [ -n "$EXP_SERIAL" ] && [ "$(lsblk -dno SERIAL "$DISK" | tr -d ' ')" != "$EXP_SERIAL" ]; then
     die "고른 디스크가 바뀌었습니다 (시리얼이 다름) — 디스크를 다시 골라 주세요"
 fi
 
 # 설치 USB 자체는 안 된다. 장치 매퍼(Ventoy 등)를 거쳐도 맨 아래 디스크까지 따라간다
 LIVE_DEV="$(findmnt -n -o SOURCE /run/live/medium 2>/dev/null | sed 's/\[.*//')"
-if [ -n "$LIVE_DEV" ]; then
+if [ -z "$PLAN" ] && [ -n "$LIVE_DEV" ]; then
     for d in $(lsblk -snlpo NAME,TYPE "$LIVE_DEV" 2>/dev/null | awk '$2=="disk"{print $1}') "$LIVE_DEV"; do
         [ "$DISK" = "$(realpath "$d" 2>/dev/null)" ] && die "지금 켜져 있는 설치 USB 에는 설치할 수 없습니다"
     done
 fi
 
+if [ -z "$PLAN" ]; then
 SIZE_MB=$(( $(lsblk -dnbo SIZE "$DISK") / 1024 / 1024 ))
 NEED_MB=$(( ESP_MB + BOOT_MB + SWAP_MB + 10240 ))
 [ "$SIZE_MB" -ge "$NEED_MB" ] || die "디스크가 너무 작습니다 (${SIZE_MB}MB, 최소 ${NEED_MB}MB)"
+fi
 
 SQUASH=""
 for p in /run/live/medium/live/filesystem.squashfs /lib/live/mount/medium/live/filesystem.squashfs; do
@@ -157,6 +171,45 @@ prog 1 "디스크를 비우는 중"
 : > "$INSTALLING"
 cleanup
 swapoff -a 2>/dev/null || true
+EXTRA_MOUNTS=()          # 계획 경로: "대상 장치 fs 포맷 이름" (/home·/var … — 루트·/boot·ESP·스왑 말고)
+SWAPS=()
+ESP_FORMAT=1; BOOT_FORMAT=1; ROOT_LABEL=SekaiOS
+if [ -n "$PLAN" ]; then
+    log "계획 $(tr -d '\n' < "$PLAN")"
+    APPLY=$("$PARTITION" apply "$PLAN" 2>>"$LOG")
+    printf '%s\n' "$APPLY" >> "$LOG"
+    if ! printf '%s\n' "$APPLY" | grep -qx OK; then
+        die "$(printf '%s\n' "$APPLY" | sed -n 's/^ERROR //p' | head -1 | sed 's/^$/파티션을 나누지 못했습니다/')"
+    fi
+    ESP_DEV=""; BOOT_DEV=""; SWAP_DEV=""; ROOT_DEV=""; ROOT_ENC=0
+    while read -r tag tgt dev fs fmt enc label; do
+        [ "$tag" = MOUNT ] || continue
+        [ "$label" = - ] && label=""
+        case "$tgt" in
+            /boot/efi) ESP_DEV="$dev"; ESP_FORMAT="$fmt"; [ "$fs" = vfat ] || die "EFI 시스템 파티션은 FAT32 여야 합니다" ;;
+            /boot)     BOOT_DEV="$dev"; BOOT_FORMAT="$fmt"; [ "$fs" = ext4 ] || die "/boot 는 ext4 여야 합니다" ;;
+            /)         ROOT_DEV="$dev"; FS="$fs"; ROOT_ENC="$enc"; [ -n "$label" ] && ROOT_LABEL="$label"
+                       [ "$fmt" = 1 ] || die "/ (SekaiOS) 는 포맷해야 합니다" ;;
+            swap)      SWAPS+=("$dev $fmt") ;;
+            *)         EXTRA_MOUNTS+=("$tgt $dev $fs $fmt ${label:--}") ;;
+        esac
+    done <<<"$APPLY"
+    case "$FS" in btrfs|ext4) ;; *) die "/ 는 btrfs 나 ext4 여야 합니다" ;; esac
+    [ "$ROOT_ENC" = 1 ] && [ "$ENCRYPT" = 0 ] && die "계획은 암호화인데 --encrypt 가 없습니다"
+    [ "$ENCRYPT" = 1 ] && [ "$ROOT_ENC" = 0 ] && die "--encrypt 인데 계획의 / 는 암호화가 아닙니다"
+    [ "$ENCRYPT" = 1 ] && [ "$FS" != btrfs ] && die "드라이브 암호화는 btrfs 에서만 됩니다"
+    [ "$ENCRYPT" = 1 ] && [ -z "$BOOT_DEV" ] && die "암호화하려면 /boot 를 따로 두어야 합니다 (암호화하지 않는 ext4)"
+    [ "${#SWAPS[@]}" -gt 0 ] && SWAP_DEV="${SWAPS[0]%% *}"
+    ROOT_MB=$(( $(lsblk -dnbo SIZE "$ROOT_DEV") / 1024 / 1024 ))
+    [ "$ROOT_MB" -ge 10240 ] || die "SekaiOS 자리가 너무 작습니다 (${ROOT_MB}MB, 최소 10GB)"
+    # ESP 가 있는 디스크·번호 — 부트로더를 거기에 (다른 OS 와 같이 쓰는 ESP 면 우리 폴더 EFI/sekai 만 쓴다)
+    DISK="/dev/$(lsblk -no PKNAME "$ESP_DEV" | head -1)"
+    ESP_PART=$(cat "/sys/class/block/$(basename "$ESP_DEV")/partition")
+    # 포맷할 기존 파티션이 연결돼 있으면 내린다
+    for p in "$ESP_DEV" ${BOOT_DEV:+"$BOOT_DEV"} "$ROOT_DEV"; do umount -f "$p" 2>/dev/null || true; done
+    for p in "$BOOT_DEV" "$ROOT_DEV"; do [ -n "$p" ] && run wipefs -a "$p"; done
+    [ "$ESP_FORMAT" = 1 ] && run wipefs -a "$ESP_DEV"
+else
 for p in $(lsblk -ln -o NAME "$DISK" | tail -n +2); do umount -f "/dev/$p" 2>/dev/null || true; done
 
 run wipefs -a "$DISK"
@@ -185,19 +238,59 @@ for p in "$ESP_DEV" "$BOOT_DEV" ${SWAP_DEV:+"$SWAP_DEV"} "$ROOT_DEV"; do
     umount -f "$p" 2>/dev/null || true
     run wipefs -a "$p"
 done
+ESP_PART=1
+[ -n "$SWAP_DEV" ] && SWAPS=("$SWAP_DEV 1")
+fi
 prog 2
 
 # ── 2. 포맷 ──────────────────────────────────────────────
 step 2 "파일 시스템 만들기"
-run mkfs.vfat -F 32 -n SEKAIESP "$ESP_DEV"
-run mkfs.ext4 -F -q -L SEKAIBOOT "$BOOT_DEV"
-if [ -n "$SWAP_DEV" ]; then
-    if [ "$ENCRYPT" = 1 ]; then
-        :   # 암호화하면 스왑은 부팅마다 새 무작위 키 (crypttab) — 서명을 남기지 않는다
-    else
-        run mkswap -L SEKAISWAP "$SWAP_DEV"
-    fi
+if [ "$ESP_FORMAT" = 1 ]; then
+    run mkfs.vfat -F 32 -n SEKAIESP "$ESP_DEV"
+else
+    log "ESP $ESP_DEV 는 포맷하지 않고 같이 쓴다"
+    # 같이 쓰는 ESP 가 가득 차 있으면 부트로더(shim·GRUB 약 6MB)가 들어가지 않는다
+    mkdir -p /run/sekai-install-esp
+    run mount -o ro "$ESP_DEV" /run/sekai-install-esp
+    ESP_FREE_KB=$(df -Pk /run/sekai-install-esp | awk 'NR==2{print $4}')
+    umount /run/sekai-install-esp
+    [ "${ESP_FREE_KB:-0}" -ge 16384 ] || die "EFI 시스템 파티션의 남은 공간이 부족합니다 (${ESP_FREE_KB}KB, 16MB 이상 필요)"
 fi
+[ -n "$BOOT_DEV" ] && [ "$BOOT_FORMAT" = 1 ] && run mkfs.ext4 -F -q -L SEKAIBOOT "$BOOT_DEV"
+for sw in "${SWAPS[@]}"; do
+    dev="${sw%% *}"; fmt="${sw##* }"
+    if [ "$ENCRYPT" = 1 ] && [ "$dev" = "$SWAP_DEV" ]; then
+        :   # 암호화하면 스왑은 부팅마다 새 무작위 키 (crypttab) — 서명을 남기지 않는다
+    elif [ "$fmt" = 1 ]; then
+        run mkswap -L SEKAISWAP "$dev"
+    fi
+done
+for em in "${EXTRA_MOUNTS[@]}"; do
+    read -r tgt dev fs fmt label <<<"$em"; [ "$label" = - ] && label=""
+    [ "$fmt" = 1 ] || continue
+    umount -f "$dev" 2>/dev/null || true
+    case "$fs" in
+        ext4)  run mkfs.ext4 -F -q ${label:+-L "$label"} "$dev" ;;
+        btrfs) run mkfs.btrfs -f ${label:+-L "$label"} "$dev" ;;
+        xfs)   run mkfs.xfs -f ${label:+-L "$label"} "$dev" ;;
+        vfat)  run mkfs.vfat -F 32 ${label:+-n "${label:0:11}"} "$dev" ;;
+        exfat) run mkfs.exfat ${label:+-L "$label"} "$dev" ;;
+        ntfs)  run mkntfs -Q ${label:+-L "$label"} "$dev" ;;
+        *)     die "포맷할 수 없는 파일 시스템: $fs" ;;
+    esac
+done
+# 따로 둔 위치(/home · /var …)와 그 아래에 들어가는 btrfs 하위 볼륨은 만들지 않는다
+#   (/var 를 따로 두면 @log·@cache·@flatpak 이 먼저 연결된 위를 /var 파티션이 덮어 버린다)
+for em in "${EXTRA_MOUNTS[@]}"; do
+    read -r tgt _ <<<"$em"
+    keep=""
+    for sv in $SUBVOLS; do
+        mp="${sv#*:}"
+        [ "$mp" = "$tgt" ] || [ "${mp#"$tgt"/}" != "$mp" ] || keep="$keep $sv"
+    done
+    SUBVOLS="${keep# }"
+done
+log "하위 볼륨: $SUBVOLS"
 mkdir -p "$TARGET"
 RECOVERY=""
 if [ "$ENCRYPT" = 1 ]; then
@@ -219,10 +312,10 @@ if [ "$ENCRYPT" = 1 ]; then
     out "RECOVERY $RECOVERY"
 fi
 if [ "$FS" = ext4 ]; then
-    run mkfs.ext4 -F -L SekaiOS "$ROOT_DEV"
+    run mkfs.ext4 -F -L "$ROOT_LABEL" "$ROOT_DEV"
     run mount "$ROOT_DEV" "$TARGET"
 else
-    run mkfs.btrfs -f -L SekaiOS "$ROOT_DEV"
+    run mkfs.btrfs -f -L "$ROOT_LABEL" "$ROOT_DEV"
     # 하위 볼륨 — 맨 위를 잠깐 연결해서 만든다
     mkdir -p /run/sekai-install-top
     run mount -t btrfs -o subvolid=5 "$ROOT_DEV" /run/sekai-install-top
@@ -237,9 +330,18 @@ else
     chmod 750 "$TARGET/.snapshots"
 fi
 mkdir -p "$TARGET/boot"
-run mount "$BOOT_DEV" "$TARGET/boot"
+[ -n "$BOOT_DEV" ] && run mount "$BOOT_DEV" "$TARGET/boot"
 mkdir -p "$TARGET/boot/efi"
 run mount "$ESP_DEV" "$TARGET/boot/efi"
+# 그 밖에 연결할 곳 (/home · /var …) — 얕은 것부터
+while read -r tgt dev fs fmt label; do
+    [ -n "$tgt" ] || continue
+    mkdir -p "$TARGET$tgt"
+    case "$fs" in
+        btrfs) run mount -o "$BTRFS_OPTS" "$dev" "$TARGET$tgt" ;;
+        *)     run mount "$dev" "$TARGET$tgt" ;;
+    esac
+done < <(for em in "${EXTRA_MOUNTS[@]}"; do echo "$em"; done | awk '{print gsub("/","/",$1), $0}' | sort -n | cut -d" " -f2-)
 prog 4
 
 # ── 3. 파일 복사 (설치의 대부분) ─────────────────────────
@@ -262,7 +364,7 @@ prog 76
 step 4 "시스템 설정"
 ROOT_UUID=$(blkid -s UUID -o value "$ROOT_DEV")
 ESP_UUID=$(blkid -s UUID -o value "$ESP_DEV")
-BOOT_UUID=$(blkid -s UUID -o value "$BOOT_DEV")
+BOOT_UUID=$([ -n "$BOOT_DEV" ] && blkid -s UUID -o value "$BOOT_DEV")
 {
     echo "# /etc/fstab — SekaiOS 설치 프로그램이 만듦"
     if [ "$FS" = ext4 ]; then
@@ -273,15 +375,24 @@ BOOT_UUID=$(blkid -s UUID -o value "$BOOT_DEV")
             echo "UUID=$ROOT_UUID  ${sv#*:}  btrfs  subvol=${sv%%:*},$BTRFS_OPTS  0 0"
         done
     fi
-    echo "UUID=$BOOT_UUID  /boot      ext4  defaults,nodev,nosuid  0 2"
+    [ -n "$BOOT_DEV" ] && echo "UUID=$BOOT_UUID  /boot      ext4  defaults,nodev,nosuid  0 2"
     echo "UUID=$ESP_UUID   /boot/efi  vfat  umask=0077         0 2"
-    if [ -n "$SWAP_DEV" ]; then
-        if [ "$ENCRYPT" = 1 ]; then
+    for em in "${EXTRA_MOUNTS[@]}"; do
+        read -r tgt dev fs fmt label <<<"$em"
+        u=$(blkid -s UUID -o value "$dev")
+        case "$fs" in
+            btrfs) o="$BTRFS_OPTS" ;; vfat|exfat) o="umask=0022,nofail" ;; ntfs) o="nofail" ;; *) o="defaults" ;;
+        esac
+        echo "UUID=$u  $tgt  $([ "$fs" = ntfs ] && echo ntfs3 || echo "$fs")  $o  0 $([ "$fs" = ext4 ] || [ "$fs" = xfs ] && echo 2 || echo 0)"
+    done
+    for sw in "${SWAPS[@]}"; do
+        dev="${sw%% *}"
+        if [ "$ENCRYPT" = 1 ] && [ "$dev" = "$SWAP_DEV" ]; then
             echo "/dev/mapper/sekai-swap  none  swap  sw  0 0"
         else
-            echo "UUID=$(blkid -s UUID -o value "$SWAP_DEV")  none  swap  sw  0 0"
+            echo "UUID=$(blkid -s UUID -o value "$dev")  none  swap  sw  0 0"
         fi
-    fi
+    done
     echo "tmpfs  /tmp  tmpfs  defaults,nosuid,nodev  0 0"
 } > "$TARGET/etc/fstab"
 
@@ -291,6 +402,10 @@ mount -t sysfs sysfs "$TARGET/sys"
 mount --bind /dev     "$TARGET/dev"
 mount --bind /dev/pts "$TARGET/dev/pts"
 mount -t tmpfs tmpfs  "$TARGET/run"
+# os-prober(부팅 메뉴의 Windows 항목)는 udev 데이터베이스로 ESP 를 알아본다 — 비어 있는 /run 이면 ESP 를 못 알아봐
+#   설치 직후 첫 부팅 메뉴에 Windows 가 빠졌다 (첫 설정이 메뉴를 다시 만들 때에야 들어갔다)
+mkdir -p "$TARGET/run/udev"
+mount --bind /run/udev "$TARGET/run/udev" 2>/dev/null || true
 mkdir -p "$TARGET/sys/firmware/efi/efivars"
 mount --bind /sys/firmware/efi/efivars "$TARGET/sys/firmware/efi/efivars" 2>/dev/null || true
 
@@ -443,7 +558,7 @@ fi
 
 # ── 5. 부트로더 ──────────────────────────────────────────
 step 5 "부팅 준비"
-chroot "$TARGET" /usr/sbin/sekai-bootloader install --disk "$DISK" --part 1 >>"$LOG" 2>&1 \
+chroot "$TARGET" /usr/sbin/sekai-bootloader install --disk "$DISK" --part "$ESP_PART" >>"$LOG" 2>&1 \
     || die "부트로더를 설치하지 못했습니다 (기록: $LOG)"
 [ -f "$TARGET/boot/efi/EFI/sekai/shimx64.efi" ] && [ -s "$TARGET/boot/grub/grub.cfg" ] \
     || die "부팅 메뉴를 만들지 못했습니다"

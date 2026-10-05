@@ -1,0 +1,330 @@
+#!/usr/bin/env python3
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 설치 — 파티션 도우미 (관리자 권한, 라이브 세션)
+#
+#    sekai-partition probe              디스크·파티션·빈 공간을 JSON 으로
+#    sekai-partition apply 계획.json     계획대로 파티션 표를 바꾼다 (지우기·만들기·새 표)
+#
+#  설치 화면의 "다른 운영체제 옆에 설치"와 "직접 나누기"가 계획을 만들고, 설치 백엔드(--plan)가
+#  apply 를 부른 뒤 나온 MOUNT 줄대로 포맷·연결한다. 계획에 적히지 않은 파티션은 건드리지 않는다.
+#
+#  계획 (JSON, version 1):
+#    disks   [{path, size, serial, ptuuid, newtable}]   고른 디스크 — 크기·시리얼·표 ID 가 그대로여야 한다
+#                                                      newtable 이면 그 디스크를 새 GPT 로 (모두 지워짐)
+#    delete  [{disk, number}]                           지울 파티션
+#    create  [{id, disk, start, end, type, name}]       만들 파티션 (섹터, end 포함). type = GPT 코드(ef00 …)
+#    mounts  [{target, dev, fs, format, encrypt, label}] dev 는 /dev/… 이거나 "@<create id>"
+#  apply 출력 (한 줄에 하나):  MOUNT <target> <장치> <fs> <format 0|1> <encrypt 0|1> <label|->
+#                              ERROR <설명>   ·   OK
+# ═══════════════════════════════════════════════════════════════
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+
+GUID_ESP = "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"
+GUID_MSR = "E3C9E316-0B5C-4DB8-817D-F92DF00215AE"
+GUID_WINRE = "DE94BBA4-06D1-4D40-A16A-BFD50179D6AC"
+GUID_BASIC = "EBD0A0A2-B9E5-4433-87C0-68B6B72699C7"
+MIB = 1024 * 1024
+TARGETS_OK = re.compile(r"^(/|/boot|/boot/efi|/home|/var|/srv|/opt|/tmp|/usr/local|/var/log|/var/lib|swap|/[A-Za-z0-9_./-]+)$")
+FS_OK = {"btrfs", "ext4", "xfs", "vfat", "swap", "ntfs", "exfat"}
+
+
+class Fail(Exception):
+    pass
+
+
+def sh(cmd, check=True, timeout=120):
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    if check and r.returncode != 0:
+        raise Fail(f"명령 실패: {' '.join(cmd)}: {(r.stderr or r.stdout).strip()[:300]}")
+    return r
+
+
+def live_disks():
+    """지금 켜져 있는 설치 USB (와 그 아래 디스크) — 건드리면 안 된다"""
+    out = set()
+    src = sh(["findmnt", "-no", "SOURCE", "/run/live/medium"], check=False).stdout.strip().split("[")[0]
+    if src:
+        for line in sh(["lsblk", "-snlpo", "NAME,TYPE", src], check=False).stdout.splitlines():
+            p = line.split()
+            if len(p) == 2 and p[1] == "disk":
+                out.add(os.path.realpath(p[0]))
+        out.add(os.path.realpath(src))
+    return out
+
+
+def disk_name(d):
+    """설치 화면(sekai-installer 의 disk_name)과 같은 규칙 — 제조사 자리의 ATA·장치 번호(0x1af4)는 뺀다"""
+    vendor = (d.get("vendor") or "").strip().rstrip(",").strip()
+    model = (d.get("model") or "").strip().replace("_", " ")
+    if vendor and model.lower().startswith(vendor.lower()):
+        vendor = ""
+    if vendor.upper() == "ATA" or re.fullmatch(r"0x[0-9a-fA-F]+", vendor):
+        vendor = ""
+    name = " ".join(x for x in (vendor, model) if x)
+    if name:
+        return name
+    tran = (d.get("tran") or "").lower()
+    if tran == "virtio" or d.get("name", "").startswith("vd"):
+        return "가상 디스크"
+    if tran == "nvme":
+        return "NVMe SSD"
+    if tran == "usb":
+        return "USB 드라이브" if d.get("rm") in (True, 1, "1") else "외장 디스크"
+    return "SSD" if d.get("rota") in (False, 0, "0") else "하드 디스크"
+
+
+def esp_info(dev, mounts):
+    """ESP 의 남은 바이트와 윈도우 부트로더가 있는지 — 연결돼 있지 않으면 잠깐 읽기 전용으로 연결해 본다"""
+    path = next((m for m in mounts if m), None)
+    tmp = None
+    try:
+        if not path:
+            tmp = tempfile.mkdtemp(prefix="sekai-probe-")
+            if sh(["mount", "-o", "ro", "-t", "vfat", dev, tmp], check=False).returncode != 0:
+                return None, False
+            path = tmp
+        st = os.statvfs(path)
+        win = os.path.isfile(os.path.join(path, "EFI", "Microsoft", "Boot", "bootmgfw.efi"))
+        return st.f_bavail * st.f_frsize, win
+    except OSError:
+        return None, False
+    finally:
+        if tmp:
+            sh(["umount", tmp], check=False)
+            os.rmdir(tmp)
+
+
+def probe():
+    lsj = json.loads(sh(["lsblk", "-J", "-b", "-o",
+                         "NAME,PATH,SIZE,MODEL,VENDOR,SERIAL,TRAN,ROTA,RM,TYPE,FSTYPE,LABEL,PARTLABEL,"
+                         "PARTTYPE,PARTUUID,UUID,PTUUID,PTTYPE,MOUNTPOINTS,FSAVAIL"]).stdout)["blockdevices"]
+    live = live_disks()
+    disks = []
+    for d in lsj:
+        skip = ("zram", "sr", "fd") if os.environ.get("SEKAI_PARTITION_LOOP") == "1" else ("zram", "loop", "sr", "fd")
+        if d.get("type") not in ("disk", "loop") or d["name"].startswith(skip):
+            continue                         # 루프 장치는 시험할 때만 (SEKAI_PARTITION_LOOP=1)
+        path = d["path"]
+        info = {"path": path, "size": int(d.get("size") or 0), "model": disk_name(d),
+                "serial": (d.get("serial") or "").replace(" ", ""), "tran": (d.get("tran") or "").lower(),
+                "ssd": d.get("rota") in (False, 0, "0"), "removable": d.get("rm") in (True, 1, "1"),
+                "live": os.path.realpath(path) in live, "table": d.get("pttype") or "",
+                "ptuuid": (d.get("ptuuid") or "").lower(), "sector": 512, "first": 0, "last": 0,
+                "parts": [], "free": []}
+        # 파티션 위치는 커널(/sys, 512바이트 단위)에서, GPT 의 쓸 수 있는 범위는 sgdisk 에서 —
+        #   sfdisk(fdisk 패키지)는 라이브 이미지에 없다
+        info["sector"] = int(sh(["blockdev", "--getss", path], check=False).stdout.strip() or 512)
+        info["first"], info["last"] = 2048, info["size"] // info["sector"] - 34
+        if info["table"] == "gpt":
+            m = re.search(r"First usable sector is (\d+), last usable sector is (\d+)",
+                          sh(["sgdisk", "-p", path], check=False).stdout)
+            if m:
+                info["first"], info["last"] = int(m.group(1)), int(m.group(2))
+        for c in d.get("children") or []:
+            if c.get("type") != "part":
+                continue
+            sysd = f"/sys/class/block/{os.path.basename(c['path'])}"
+            try:
+                k = 512 / info["sector"]
+                s = {"start": int(int(open(sysd + "/start").read()) * k),
+                     "size": int(int(open(sysd + "/size").read()) * k)}
+            except (OSError, ValueError):
+                s = {}
+            typ = (c.get("parttype") or "").upper()
+            fs = c.get("fstype") or ""
+            mnts = [m for m in (c.get("mountpoints") or []) if m]
+            part = {"path": c["path"], "number": int(re.search(r"(\d+)$", c["name"]).group(1)),
+                    "start": int(s.get("start", 0)), "sectors": int(s.get("size", 0)),
+                    "size": int(c.get("size") or 0), "type": typ, "fs": fs,
+                    "label": c.get("label") or "", "partlabel": c.get("partlabel") or "",
+                    "uuid": c.get("uuid") or "", "mounts": mnts,
+                    "esp": typ == GUID_ESP, "msr": typ == GUID_MSR, "winre": typ == GUID_WINRE,
+                    "bitlocker": fs.lower() == "bitlocker", "windows": fs == "ntfs" or fs.lower() == "bitlocker"}
+            if part["esp"] and fs == "vfat":
+                part["esp_free"], part["esp_windows"] = esp_info(c["path"], mnts)
+            info["parts"].append(part)
+        info["parts"].sort(key=lambda p: p["start"])
+        info["free"] = free_regions(info)
+        disks.append(info)
+    return {"disks": disks, "esp_min_free": 16 * MIB}
+
+
+def free_regions(d):
+    """파티션 사이·앞뒤의 빈 공간 — 1MiB 경계에 맞춘 [start, end] (섹터, end 포함), 8MiB 이상만"""
+    if d["table"] not in ("gpt", ""):
+        return []
+    align = max(1, MIB // d["sector"])
+    used = sorted((p["start"], p["start"] + p["sectors"] - 1) for p in d["parts"] if p["sectors"])
+    out, cur = [], max(d["first"], align)
+    for s, e in used + [(d["last"] + 1, d["last"] + 1)]:
+        a = -(-cur // align) * align
+        b = ((s // align) * align) - 1
+        if b - a + 1 >= 8 * MIB // d["sector"]:
+            out.append({"start": a, "end": b, "bytes": (b - a + 1) * d["sector"]})
+        cur = max(cur, e + 1)
+    return out
+
+
+def emit(*a):
+    print(*a, flush=True)
+
+
+def apply(plan_path):
+    with open(plan_path) as f:
+        plan = json.load(f)
+    if plan.get("version") != 1:
+        raise Fail("계획 형식이 맞지 않습니다")
+    now = {d["path"]: d for d in probe()["disks"]}
+    pdisks = {}
+    for pd in plan.get("disks", []):
+        path = os.path.realpath(pd["path"])
+        d = now.get(path)
+        if not d:
+            raise Fail(f"디스크가 없습니다: {path}")
+        if d["live"]:
+            raise Fail("지금 켜져 있는 설치 USB 에는 설치할 수 없습니다")
+        if int(pd.get("size", -1)) != d["size"] or (pd.get("serial") or "") != d["serial"]:
+            raise Fail(f"고른 디스크가 바뀌었습니다 ({path}) — 디스크를 다시 골라 주세요")
+        if not pd.get("newtable") and (pd.get("ptuuid") or "").lower() != d["ptuuid"]:
+            raise Fail(f"{path} 의 파티션 표가 고른 뒤에 바뀌었습니다 — 다시 골라 주세요")
+        if not pd.get("newtable") and d["table"] != "gpt" and (plan.get("create") or
+                                                                any(x["disk"] == pd["path"] for x in plan.get("delete", []))):
+            raise Fail(f"{path} 는 GPT 가 아닙니다 (MBR) — 새 파티션 표를 만들어야 합니다")
+        pdisks[path] = (pd, d)
+
+    # 쓰기 전에 머릿속으로 먼저 — 지운 뒤의 빈 공간에 만들 것들이 겹치지 않고 다 들어가는가
+    sim = {}
+    for path, (pd, d) in pdisks.items():
+        gone = {int(x["number"]) for x in plan.get("delete", []) if os.path.realpath(x["disk"]) == path}
+        parts = [] if pd.get("newtable") else [p for p in d["parts"] if p["number"] not in gone]
+        sim[path] = dict(d, parts=parts, table="gpt" if pd.get("newtable") else d["table"])
+        if pd.get("newtable"):
+            align = max(1, MIB // d["sector"])
+            sim[path]["first"] = max(d["first"], align)
+        sim[path]["free"] = free_regions(sim[path])
+    for c in sorted(plan.get("create", []), key=lambda c: int(c["start"])):
+        path = os.path.realpath(c["disk"])
+        if path not in sim:
+            raise Fail("계획에 없는 디스크에 파티션을 만들려 합니다")
+        a, b = int(c["start"]), int(c["end"])
+        if b < a or not any(r["start"] <= a and b <= r["end"] for r in sim[path]["free"]):
+            raise Fail(f"{path} 의 {a}–{b} 섹터는 빈 공간이 아닙니다 (계획을 다시 만들어 주세요)")
+        sim[path]["parts"].append({"number": 0, "start": a, "sectors": b - a + 1})
+        sim[path]["free"] = free_regions(sim[path])
+
+    # 연결돼 있는 것을 바꾸려 하지 않는가 (라이브 세션이 쓰는 스왑·자동 연결 등)
+    touched = set()
+    for x in plan.get("delete", []):
+        touched.add((os.path.realpath(x["disk"]), int(x["number"])))
+    for path, (pd, d) in pdisks.items():
+        for p in d["parts"]:
+            if pd.get("newtable") or (path, p["number"]) in touched:
+                for m in p["mounts"]:
+                    sh(["umount", "-l", m], check=False)
+                if p["fs"] == "swap":
+                    sh(["swapoff", p["path"]], check=False)
+
+    # 1) 새 표 · 지우기
+    for path, (pd, d) in pdisks.items():
+        if pd.get("newtable"):
+            sh(["wipefs", "-a", path])
+            sh(["sgdisk", "--zap-all", path])
+            sh(["sgdisk", "-o", path])
+    for x in plan.get("delete", []):
+        path = os.path.realpath(x["disk"])
+        if path not in pdisks:
+            raise Fail("계획에 없는 디스크의 파티션을 지우려 합니다")
+        if pdisks[path][0].get("newtable"):
+            continue
+        if not any(p["number"] == int(x["number"]) for p in pdisks[path][1]["parts"]):
+            raise Fail(f"{path} 에 {x['number']}번 파티션이 없습니다")
+        sh(["sgdisk", "-d", str(int(x["number"])), path])
+
+    # 2) 만들기 — 바뀐 표에서 다시 빈 공간을 계산해, 그 안에 들어가는지 본다
+    for path in pdisks:
+        sh(["partprobe", path], check=False)
+    sh(["udevadm", "settle"], check=False)
+    ids = {}
+    after = {d["path"]: d for d in probe()["disks"]}
+    for c in plan.get("create", []):
+        path = os.path.realpath(c["disk"])
+        if path not in pdisks:
+            raise Fail("계획에 없는 디스크에 파티션을 만들려 합니다")
+        d = after[path]
+        start, end = int(c["start"]), int(c["end"])
+        if not any(r["start"] <= start and end <= r["end"] for r in d["free"]):
+            raise Fail(f"{path} 의 {start}–{end} 섹터는 빈 공간이 아닙니다 (계획을 다시 만들어 주세요)")
+        used = {p["number"] for p in d["parts"]}
+        num = next(n for n in range(1, 129) if n not in used)
+        typ = c.get("type", "8300")
+        if not re.fullmatch(r"[0-9a-fA-F]{4}", typ):
+            raise Fail(f"파티션 종류가 이상합니다: {typ}")
+        name = re.sub(r"[^A-Za-z0-9 _.-]", "", c.get("name", ""))[:36] or "SEKAI"
+        sh(["sgdisk", f"--new={num}:{start}:{end}", f"--typecode={num}:{typ}", f"--change-name={num}:{name}", path])
+        sh(["partprobe", path], check=False)
+        sh(["udevadm", "settle"], check=False)
+        d["parts"].append({"number": num, "start": start, "sectors": end - start + 1})
+        d["free"] = free_regions(d)
+        pfx = path + ("p" if re.search(r"(nvme|mmcblk|loop)", path) else "")
+        dev = f"{pfx}{num}"
+        for _ in range(20):
+            if os.path.exists(dev):
+                break
+            time.sleep(0.25)
+        if not os.path.exists(dev):
+            raise Fail(f"파티션을 만들지 못했습니다: {dev}")
+        sh(["wipefs", "-a", dev])            # 그 자리에 남아 있던 옛 서명 (자동 연결·mkfs 가 헷갈리지 않게)
+        ids[c["id"]] = dev
+
+    # 3) 연결할 곳 — 장치를 풀어 알린다
+    targets = set()
+    for m in plan.get("mounts", []):
+        t, fs = m["target"], m["fs"]
+        if not TARGETS_OK.match(t) or ".." in t:
+            raise Fail(f"연결할 곳이 이상합니다: {t}")
+        if t in targets and t != "swap":
+            raise Fail(f"{t} 가 두 번 나옵니다")
+        targets.add(t)
+        if fs not in FS_OK:
+            raise Fail(f"모르는 파일 시스템: {fs}")
+        dev = m["dev"]
+        if dev.startswith("@"):
+            dev = ids.get(dev[1:]) or ""
+        if not dev or not os.path.exists(dev):
+            raise Fail(f"{t} 의 장치를 찾지 못했습니다")
+        emit("MOUNT", t, dev, fs, "1" if m.get("format") else "0", "1" if m.get("encrypt") else "0",
+             re.sub(r"\s", "_", m.get("label") or "") or "-")
+    if "/" not in targets:
+        raise Fail("/ (SekaiOS) 를 연결할 곳이 없습니다")
+    if "/boot/efi" not in targets:
+        raise Fail("EFI 시스템 파티션(/boot/efi) 이 없습니다")
+    emit("OK")
+
+
+def main():
+    if os.geteuid() != 0:
+        print("관리자 권한이 필요합니다", file=sys.stderr)
+        return 1
+    a = sys.argv[1:]
+    try:
+        if a[:1] == ["probe"]:
+            print(json.dumps(probe(), ensure_ascii=False))
+            return 0
+        if a[:1] == ["apply"] and len(a) == 2:
+            apply(a[1])
+            return 0
+    except Fail as e:
+        emit("ERROR", str(e))
+        return 1
+    print(__doc__ if __doc__ else "사용법: sekai-partition probe | apply 계획.json", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
