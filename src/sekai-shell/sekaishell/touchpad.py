@@ -3,12 +3,20 @@
 Hyprland 엔 "터치패드 전부" 스위치가 없어 장치마다 device[<이름>]:enabled 를 건다 (다음 로그인용은
 sekaisettings.store 의 조각 파일에 device { } 묶음으로). 터치패드인지는 udev 가 붙인 ID_INPUT_TOUCHPAD 로 —
 /run/udev/data 는 누구나 읽을 수 있다. 이름은 Hyprland 가 쓰는 꼴(소문자, 빈칸 → -)로.
+
+합성기는 그 장치의 device { } 묶음이 이미 있을 때만 device[<이름>]:enabled 를 듣는다 — 묶음이 없으면(새로 설치한
+PC 의 첫 끄기, 나중에 꽂은 터치패드) 조용히 무시돼 다시 로그인할 때까지 안 꺼졌다. 그래서 지금 세션엔 묶음만 담은
+파일을 $XDG_RUNTIME_DIR 에 써서 hyprctl keyword source 로 읽힌다 (전체 reload 는 keyword 로 건 설정을 지운다).
 """
 import glob
 import os
+import re
 import subprocess
 
 from . import dbg
+
+
+_SAFE = re.compile(r"^[a-z0-9:._+-]{1,96}$")       # 설정 파일에 쓰는 이름 — 장치가 이름에 설정 문법({ } # =)을 넣어 끼어들지 못하게
 
 
 def hypr_name(name):
@@ -29,14 +37,36 @@ def touchpads():
                 n = hypr_name(f.read())
         except OSError:
             continue
-        if n and n not in out:
+        if n and _SAFE.match(n) and n not in out:
             out.append(n)
     return out
 
 
+def _blocks(names, enabled):
+    lines = []
+    for n in names:
+        lines += ["device {", f"    name = {n}", f"    enabled = {'true' if enabled else 'false'}", "}", ""]
+    return lines
+
+
 def apply(enabled):
     """지금 세션에 바로 — 끈 터치패드는 커서를 움직이지 않는다"""
-    for n in touchpads():
+    names = touchpads()
+    if not names:
+        return
+    run = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    path = os.path.join(run, "sekai", "touchpads.conf")
+    try:
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            f.write("\n".join(_blocks(names, enabled)))
+        os.replace(tmp, path)
+        subprocess.run(["hyprctl", "keyword", "source", path],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
+    except Exception as e:
+        dbg("[터치패드] 묶음 읽히기 실패", e)
+    for n in names:                                    # 묶음이 이미 있던 장치는 이것만으로도 (예전 방식 그대로)
         try:
             subprocess.run(["hyprctl", "keyword", f"device[{n}]:enabled", "true" if enabled else "false"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
@@ -48,7 +78,4 @@ def hypr_lines(enabled):
     """다음 로그인용 조각 — 켜져 있으면 아무것도 쓰지 않는다 (기본이 켜짐)"""
     if enabled:
         return []
-    lines = []
-    for n in touchpads():
-        lines += ["device {", f"    name = {n}", "    enabled = false", "}", ""]
-    return lines
+    return _blocks(touchpads(), False)
