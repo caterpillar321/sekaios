@@ -781,7 +781,8 @@ class StartMenu(Gtk.Window):
         by_id = {a["id"].lower(): a for a in self.apps}
         ids, labels = [], {}
         for label, cands, icons in DEFAULT_PINS:
-            aid = next((c for c in cands if c in by_id), None)
+            # 후보도 소문자로 — 예전엔 "org.sekaios.Nenerobo" 가 안 맞아 새 설치의 "터미널" 타일이 kitty 였다
+            aid = next((c.lower() for c in cands if c.lower() in by_id), None)
             if aid and aid not in ids:
                 ids.append(aid)
                 labels[aid] = (label, icons[0])

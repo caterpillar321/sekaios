@@ -13,7 +13,8 @@ export XDG_SESSION_TYPE=x11
 export XDG_CURRENT_DESKTOP=SekaiOS
 # Hyprland 세션(hyprland.conf env)과 같은 SekaiOS 설정·데이터 계층 — 없으면 이 모드에서만
 #   메뉴에서 숨긴 항목(다른 DE 의 설정 창 등, /usr/share/sekai/data/applications)이 다시 보였다
-export XDG_CONFIG_DIRS=/etc/xdg/sekai:/etc/xdg
+#   맨 앞 x11-xdg 는 이 모드의 포털 설정 (화면 찍기·나누기를 웨이랜드 전용 wlr 로 찾지 않게)
+export XDG_CONFIG_DIRS=/usr/share/sekai/x11-xdg:/etc/xdg/sekai:/etc/xdg
 export XDG_DATA_DIRS=/usr/share/sekai/data:/usr/local/share:/usr/share:/var/lib/flatpak/exports/share   # 끝: Flathub 앱
 unset WAYLAND_DISPLAY
 export GDK_BACKEND=x11
@@ -26,6 +27,8 @@ X=/usr/lib/sekai/x11
 
 dbus-update-activation-environment --systemd DISPLAY XAUTHORITY XDG_SESSION_TYPE \
     XDG_CURRENT_DESKTOP GDK_BACKEND GTK_IM_MODULE QT_IM_MODULE XMODIFIERS XDG_CONFIG_DIRS XDG_DATA_DIRS 2>/dev/null
+# 앞 세션(Hyprland)에서 떠 있던 포털은 그 설정 그대로라 내린다 — 처음 부를 때 이 환경으로 다시 뜬다
+systemctl --user stop xdg-desktop-portal.service xdg-desktop-portal-gtk.service xdg-desktop-portal-wlr.service 2>/dev/null
 
 xsetroot -cursor_name left_ptr -solid '#151517' 2>/dev/null
 xset s off 2>/dev/null
