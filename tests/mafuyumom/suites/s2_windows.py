@@ -3,12 +3,20 @@
 import random
 import time
 
+from mm import config
 from mm.runner import test
 
 NP = "org.sekaios.Notepad"
 
 
-def fresh_notepad(t, x=400, y=200, w=900, h=640):
+def px(v):
+    """1920×1080 기준 좌표·크기를 지금 화면에 맞게 (실기 노트북 1280×800 등) — VM 에선 그대로"""
+    k = min(1.0, config.SCREEN[0] / 1920, config.SCREEN[1] / 1080)
+    return round(v * k)
+
+
+def fresh_notepad(t, x=None, y=None, w=None, h=None):
+    x, y, w, h = (px(400) if x is None else x), (px(200) if y is None else y), (px(900) if w is None else w), (px(640) if h is None else h)
     t.kill("sekai-notepad")
     t.gone(NP, 5)
     c = t.launch("sekai-notepad", NP)
@@ -29,8 +37,9 @@ def fresh_notepad(t, x=400, y=200, w=900, h=640):
 
 
 def main_win(t):
-    m = [c for c in t.clients(NP) if c["size"][0] > 500]
-    return m[0] if m else None
+    # 대화상자(폭 500 아래)가 아닌 것 중 가장 큰 창 — 작은 화면에선 본 창도 600 쯤이라 크기로 고른다
+    m = [c for c in t.clients(NP) if c["size"][0] > px(500)]
+    return max(m, key=lambda c: c["size"][0] * c["size"][1]) if m else None
 
 
 def bar(c):
@@ -84,7 +93,7 @@ def button_cancel(t):
         t.q.button(True)
         time.sleep(0.1)
         for i in range(1, 11):
-            t.q.move(x + (900 - x) * i / 10, by + (500 - by) * i / 10)
+            t.q.move(x + (px(900) - x) * i / 10, by + (px(500) - by) * i / 10)
             time.sleep(0.02)
         t.q.button(False)
         time.sleep(0.8)
@@ -106,7 +115,7 @@ def maximize(t):
     t.click(c["at"][0] + 300, c["at"][1] - 17, n=2)
     t.expect(t.wait(lambda: state(t) == "보통", 3), "제목줄 두 번 → 복원")
     c = main_win(t)
-    t.expect(abs(c["size"][0] - 900) <= 4 and abs(c["size"][1] - 640) <= 4, f"원래 크기로 ({c['size']})")
+    t.expect(abs(c["size"][0] - px(900)) <= 4 and abs(c["size"][1] - px(640)) <= 4, f"원래 크기로 ({c['size']})")
 
 
 @test("최소화하고 작업 표시줄로 되살리기 — 데스크톱은 그대로", suite="windows", quick=True)
@@ -120,7 +129,7 @@ def minimize(t):
     t.expect(c["workspace"]["name"] == ws, f"데스크톱 그대로 ({c['workspace']['name']})")
     btn = t.ui.find(app="sekai-panel", role="button", all=True)
     # 작업 표시줄 단추에 이름이 없어(접근성 발견) 자리로 — 메모장은 실행 중 앱 단추들 가운데 마지막
-    tasks = [b for b in btn if 40 < (b["x"] or 0) < 1600 and b["y"] and b["y"] > 1000]
+    tasks = [b for b in btn if 40 < (b["x"] or 0) < config.SCREEN[0] - 320 and b["y"] and b["y"] > config.SCREEN[1] - 80]
     t.expect(tasks, "작업 표시줄에 창 단추")
     t.click(tasks[-1]["cx"], tasks[-1]["cy"])
     t.expect(t.wait(lambda: state(t) == "보통", 3), f"작업 표시줄 → 되살아남 ({state(t)})")
@@ -129,32 +138,32 @@ def minimize(t):
 
 @test("끌어서 스냅 — 왼쪽·오른쪽 절반, 레이아웃 바, Esc 취소", suite="windows", quick=True)
 def snap(t):
-    c = fresh_notepad(t, 500, 250)
+    c = fresh_notepad(t, px(500), px(250))
     by = c["at"][1] - 17
     t.drag(c["at"][0] + 300, by, 1, 600, steps=25)
     time.sleep(1.2)
     c = main_win(t)
-    t.expect(c["at"][0] <= 2 and abs(c["size"][0] - 960) <= 8, f"왼쪽 절반 ({c['at']}, {c['size']})")
-    t.sh(f"hyprctl dispatch resizewindowpixel exact 900 640,class:{NP} >/dev/null; "
-         f"hyprctl dispatch movewindowpixel exact 500 250,class:{NP} >/dev/null")
+    t.expect(c["at"][0] <= 2 and abs(c["size"][0] - config.SCREEN[0] / 2) <= 8, f"왼쪽 절반 ({c['at']}, {c['size']})")
+    t.sh(f"hyprctl dispatch resizewindowpixel exact {px(900)} {px(640)},class:{NP} >/dev/null; "
+         f"hyprctl dispatch movewindowpixel exact {px(500)} {px(250)},class:{NP} >/dev/null")
     time.sleep(0.8)
     c = main_win(t)
-    t.drag(c["at"][0] + 300, c["at"][1] - 17, 1919, 600, steps=25)
+    t.drag(c["at"][0] + 300, c["at"][1] - 17, config.SCREEN[0] - 1, config.SCREEN[1] // 2, steps=25)
     time.sleep(1.2)
     c = main_win(t)
-    t.expect(c["at"][0] >= 955 and abs(c["size"][0] - 960) <= 8, f"오른쪽 절반 ({c['at']}, {c['size']})")
-    t.sh(f"hyprctl dispatch resizewindowpixel exact 900 640,class:{NP} >/dev/null; "
-         f"hyprctl dispatch movewindowpixel exact 500 250,class:{NP} >/dev/null")
+    t.expect(c["at"][0] >= config.SCREEN[0] / 2 - 5 and abs(c["size"][0] - config.SCREEN[0] / 2) <= 8, f"오른쪽 절반 ({c['at']}, {c['size']})")
+    t.sh(f"hyprctl dispatch resizewindowpixel exact {px(900)} {px(640)},class:{NP} >/dev/null; "
+         f"hyprctl dispatch movewindowpixel exact {px(500)} {px(250)},class:{NP} >/dev/null")
     time.sleep(0.8)
     c = main_win(t)
     x0, y0 = c["at"][0] + 300, c["at"][1] - 17
     t.q.move(x0, y0)
     t.q.button(True)
     for i in range(1, 16):
-        t.q.move(x0 + (960 - x0) * i / 15, y0 + (400 - y0) * i / 15)
+        t.q.move(x0 + (config.SCREEN[0] / 2 - x0) * i / 15, y0 + (400 - y0) * i / 15)
         time.sleep(0.02)
     for i in range(1, 16):
-        t.q.move(960, 400 - 340 * i / 15)
+        t.q.move(config.SCREEN[0] / 2, 400 - 340 * i / 15)
         time.sleep(0.02)
     time.sleep(0.8)
     t.shot("레이아웃바")
@@ -163,7 +172,7 @@ def snap(t):
     t.q.button(False)
     time.sleep(0.8)
     c = main_win(t)
-    t.expect(tuple(c["at"]) == (500, 250) and tuple(c["size"]) == (900, 640), f"Esc → 원래 자리 ({c['at']}, {c['size']})")
+    t.expect(tuple(c["at"]) == (px(500), px(250)) and tuple(c["size"]) == (px(900), px(640)), f"Esc → 원래 자리 ({c['at']}, {c['size']})")
 
 
 @test("빠른 크기 조절 — 모서리가 놓은 자리에", suite="windows")
@@ -171,11 +180,12 @@ def resize(t):
     c = fresh_notepad(t)
     x, y = c["at"]
     w, h = c["size"]
-    t.drag(x + w - 1, y + h - 1, 1500, 950, steps=8)
+    tx, ty = px(1500), px(950)
+    t.drag(x + w - 1, y + h - 1, tx, ty, steps=8)
     time.sleep(0.8)
     c = main_win(t)
-    dx = c["at"][0] + c["size"][0] - 1 - 1500
-    dy = c["at"][1] + c["size"][1] - 1 - 950
+    dx = c["at"][0] + c["size"][0] - 1 - tx
+    dy = c["at"][1] + c["size"][1] - 1 - ty
     t.expect(abs(dx) <= 6 and abs(dy) <= 6, f"모서리 오차 ({dx},{dy})")
 
 
@@ -282,7 +292,7 @@ def drag_restore(t):
     r = main_win(t)
     t.shot("끌어복원")
     t.expect(state(t) == "보통", f"끌면 복원 ({state(t)})")
-    t.expect(abs(r["size"][0] - 900) <= 4 and abs(r["size"][1] - 640) <= 4, f"원래 크기 ({r['size']})")
+    t.expect(abs(r["size"][0] - px(900)) <= 4 and abs(r["size"][1] - px(640)) <= 4, f"원래 크기 ({r['size']})")
     cx, cy = gx + 40, gy + 260
     rx = (cx - r["at"][0]) / r["size"][0]
     t.expect(r["at"][1] - top <= cy <= r["at"][1] and abs(rx - 0.3) < 0.08,
@@ -302,7 +312,7 @@ def drag_restore(t):
     t.q.button(False)
     t.expect(t.wait(lambda: state(t) == "최대화" and fits_work(t, main_win(t))[0], 3), f"Esc → 다시 최대화 ({state(t)})")
     t.sh(f"hyprctl dispatch sekaimaximize off,address:{r['address']} >/dev/null")
-    t.expect(t.wait(lambda: (lambda w: abs(w['size'][0] - 900) <= 4)(main_win(t)), 3), "그 뒤 복원하면 처음 크기 (Esc 가 복원할 자리를 지켰다)")
+    t.expect(t.wait(lambda: (lambda w: abs(w['size'][0] - px(900)) <= 4)(main_win(t)), 3), "그 뒤 복원하면 처음 크기 (Esc 가 복원할 자리를 지켰다)")
 
 
 @test("최대화 → F11 전체 화면 → F11 → 다시 최대화", suite="windows")
@@ -315,7 +325,7 @@ def fullscreen_roundtrip(t):
     t.key("f11")
     t.expect(t.wait(lambda: state(t) == "전체 화면", 3), f"F11 → 전체 화면 ({state(t)})")
     f = main_win(t)
-    t.expect(f["at"] == [0, 0] and f["size"] == [1920, 1080], f"화면 전체 ({f['at']} {f['size']})")
+    t.expect(f["at"] == [0, 0] and f["size"] == list(config.SCREEN), f"화면 전체 ({f['at']} {f['size']})")
     t.key("f11")
     t.expect(t.wait(lambda: state(t) == "최대화" and fits_work(t, main_win(t))[0], 3), f"F11 → 최대화로 돌아왔다 ({state(t)})")
 
@@ -330,4 +340,4 @@ def win_keys(t):
     t.key("meta_l-down")
     t.expect(t.wait(lambda: state(t) == "보통", 3), f"Win+↓ → 복원 ({state(t)})")
     r = main_win(t)
-    t.expect(abs(r["size"][0] - 900) <= 4 and abs(r["size"][1] - 640) <= 4, f"원래 크기 ({r['size']})")
+    t.expect(abs(r["size"][0] - px(900)) <= 4 and abs(r["size"][1] - px(640)) <= 4, f"원래 크기 ({r['size']})")

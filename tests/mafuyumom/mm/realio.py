@@ -1,6 +1,7 @@
 """실기 모드 (MM_REAL) — QMP 대신 실제 PC 의 가상 입력(real/mm-uinput.py)과 화면 찍기(grim).
 QMP 와 같은 함수 이름이라 시험 스위트를 그대로 쓴다. VM 에만 있는 것(cmd: 절전·전원 단추)은 RealOnly 로 알린다."""
 import subprocess
+import threading
 import time
 
 from . import config, remote
@@ -47,9 +48,30 @@ class RealOnly(Exception):
     """VM(QEMU)에만 있는 동작 — 실기 모드에선 그 시험을 건너뛴다"""
 
 
+KEEPAWAKE_KEY = 240          # KEY_UNKNOWN — 글자·단축키·고정 키 어디에도 안 걸리는 키
+KEEPAWAKE_EVERY = 60         # 이만큼 입력이 없으면 한 번 (자리 비움 → 화면 끄기·잠금·절전 타이머를 되돌린다)
+
+
 class RealIO:
-    def __init__(self):
+    """keepawake=True 면 입력이 뜸할 때 KEEPAWAKE_KEY 를 눌러 시험대가 잠들지 않게 한다 —
+    SSH 명령은 입력으로 치지 않아, 시험 사이·조사하는 동안 15분 뒤 절전에 들어갔다 (2026-10-06 노트북)."""
+    def __init__(self, keepawake=True):
         self.p = None
+        self.lock = threading.Lock()
+        self.last = time.time()
+        if keepawake:
+            threading.Thread(target=self._keepawake, daemon=True).start()
+
+    def _keepawake(self):
+        while True:
+            time.sleep(10)
+            if self.p is None or self.p.poll() is not None or time.time() - self.last < KEEPAWAKE_EVERY:
+                continue
+            try:
+                self._send(f"k {KEEPAWAKE_KEY} 1")
+                self._send(f"k {KEEPAWAKE_KEY} 0")
+            except Exception:
+                pass
 
     def connect(self, timeout=20):
         if not config.REAL_SCREEN_SET:
@@ -74,12 +96,14 @@ class RealIO:
                 self.p.kill()
 
     def _send(self, line):
-        if self.p is None or self.p.poll() is not None:
-            self.connect()
-        self.p.stdin.write(line + "\n")
-        self.p.stdin.flush()
-        if self.p.stdout.readline().strip() != "ok":
-            raise RuntimeError(f"가상 입력이 답하지 않습니다: {line}")
+        with self.lock:
+            if self.p is None or self.p.poll() is not None:
+                self.connect()
+            self.p.stdin.write(line + "\n")
+            self.p.stdin.flush()
+            if self.p.stdout.readline().strip() != "ok":
+                raise RuntimeError(f"가상 입력이 답하지 않습니다: {line}")
+            self.last = time.time()
 
     def cmd(self, name, **args):
         raise RealOnly(f"QMP 명령 {name} 은 VM 에서만 (실기 모드)")

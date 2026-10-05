@@ -1,6 +1,7 @@
 """세션·셸 — 작업 표시줄, 시작 메뉴, 빠른 설정, 알림, Alt+Tab, 가상 데스크톱, 잠금."""
 import time
 
+from mm import config
 from mm.runner import test
 
 PANEL = "sekai-panel"
@@ -13,7 +14,7 @@ def active(t):
 @test("작업 표시줄이 떠 있고 시작 단추가 있다", suite="session", quick=True)
 def taskbar(t):
     bar = t.ui.find(app=PANEL, role="frame")
-    t.expect(bar and bar["y"] is not None and bar["y"] >= 1000, f"작업 표시줄 자리 {bar and (bar['y'], bar['h'])}")
+    t.expect(bar and bar["y"] is not None and bar["y"] >= config.SCREEN[1] - 80, f"작업 표시줄 자리 {bar and (bar['y'], bar['h'])}")
     start = t.ui.find(app=PANEL, role="button")
     t.expect(start and start["x"] < 60, "왼쪽 끝에 시작 단추")
     nameless = t.ui.unnamed(PANEL)
@@ -110,7 +111,7 @@ def lock_unlock(t):
     t.expect(t.wait(lambda: t.sh(f"test -e {mark}").ok, 8), "잠금 화면이 걸렸다 (잠김 표시)")
     time.sleep(1)
     t.shot("잠금")
-    t.click(960, 540)                                  # 암호 칸을 띄운다
+    t.click(config.SCREEN[0] // 2, config.SCREEN[1] // 2)  # 암호 칸을 띄운다
     time.sleep(1)
     t.type("miku1234")
     t.key("ret")

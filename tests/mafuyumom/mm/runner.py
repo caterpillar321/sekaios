@@ -15,7 +15,7 @@ import os
 import time
 import traceback
 
-from . import checks, remote, vm
+from . import checks, config, remote, vm
 from .ui import UI
 
 TESTS = []
@@ -200,8 +200,30 @@ def run(selected, outdir, q):
         ui.stop()
 
 
+LOW_BATTERY = 25                  # 실기 모드: 충전기 없이 이보다 낮으면 멈춘다 (%)
+
+
+def real_battery():
+    """실기 시험대의 진짜 배터리 (잔량 %, 충전기 꽂힘) — 배터리가 없으면 None.
+    노트북 시험(s9)은 가짜 배터리를 따로 만들어 쓰니 /sys 를 직접 읽으면 진짜 값이다."""
+    r = remote.run("b=$(ls -d /sys/class/power_supply/BAT* 2>/dev/null | head -1); [ -n \"$b\" ] || exit 3; "
+                   "cat $b/capacity; cat /sys/class/power_supply/A*/online 2>/dev/null | head -1", session=False, timeout=20)
+    if r.rc == 3 or not r.out.strip():
+        return None
+    lines = r.out.split()
+    try:
+        return int(lines[0]), (len(lines) > 1 and lines[1] == "1")
+    except ValueError:
+        return None
+
+
 def _run(selected, outdir, q, ui, results):
     for tc in selected:
+        if config.REAL:
+            bat = real_battery()
+            if bat and bat[0] < LOW_BATTERY and not bat[1]:
+                print(f"■ 멈춤: 시험대 배터리 {bat[0]}% · 충전기 없음 — 충전기를 꽂고 다시 돌려 주세요", flush=True)
+                break
         print(f"▶ {tc['id']} — {tc['name']}", flush=True)
         t = T(q, outdir, tc["id"], ui)
         since = time.time()

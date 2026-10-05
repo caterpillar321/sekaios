@@ -7,7 +7,7 @@ import json
 import os
 import time
 
-from mm import remote, vm
+from mm import config, remote, vm
 from mm.config import PASSWORD
 from mm.runner import test
 
@@ -127,7 +127,14 @@ LID, FIFO = "/tmp/vlid.py", "/tmp/vlid.fifo"
 LOCK_MARK = "$XDG_RUNTIME_DIR/sekai-lock.pid.locked"
 
 
-def qstatus(t):
+def qstatus(t, since=None):
+    """VM 은 QEMU 상태. 실기는 원격으로 상태를 볼 수 없으니 since(시각) 뒤 커널 로그에 절전 진입이 있었는지로 —
+    있었으면 "suspended"(이미 깨어났더라도), 없으면 "running"."""
+    if config.REAL:
+        if since is None:
+            return "running"
+        r = t.root(f"journalctl -k -q --no-pager --since @{int(since)} -g 'PM: suspend entry'", timeout=20)
+        return "suspended" if r.out.strip() else "running"
     return (t.q.cmd("query-status") or {}).get("status")
 
 
@@ -146,6 +153,8 @@ def logind_lid(t):
 
 
 def wake_if_asleep(t):
+    if config.REAL:                                       # 실기는 원격으로 깨울 수 없다 — 잠들게 하는 단계는 건너뛴다
+        return
     if qstatus(t) == "suspended":
         t.q.cmd("system_wakeup")
         t.wait(lambda: t.sh("true").ok, 30)
@@ -155,7 +164,7 @@ def unlock(t):
     """절전 직전에 잠긴 화면을 푼다"""
     if t.wait(lambda: t.sh(f"test -e {LOCK_MARK}").ok, 8):
         time.sleep(1)
-        t.click(960, 540)
+        t.click(config.SCREEN[0] // 2, config.SCREEN[1] // 2)
         time.sleep(1)
         t.type(PASSWORD)
         t.key("ret")
@@ -171,6 +180,9 @@ def restart_after_s3(t):
 
 
 def sleep_and_wake(t, trigger, what):
+    if config.REAL:
+        from mm.realio import RealOnly
+        raise RealOnly(f"{what} → 절전: 실기는 하네스가 깨울 수 없어 VM 에서만")
     vm.mark_s3()                                         # 이 QEMU 는 이제 다시 부팅하지 못한다 — 하네스가 새로 띄운다
     trigger()
     t.expect(t.wait(lambda: qstatus(t) == "suspended", 30, every=1), f"{what} → 절전 (QEMU suspended)")
@@ -213,8 +225,11 @@ def power_button(t):
 @test("덮개 — 가짜 덮개를 닫으면 설정대로: 아무 것도 안 함 · 절전 (늦게 생긴 덮개도 억제)", suite="laptop", timeout=300)
 def lid_switch(t):
     t.after(lambda: restart_after_s3(t))
-    t.after(lambda: (wake_if_asleep(t), t.root(f"test -p {FIFO} && echo quit > {FIFO}; true", timeout=10),
-                     setting(t, "power", "lid_ac", "")))
+    # 뒷정리는 따로따로 — 묶어 두면 앞의 것이 실패할 때(실기의 QMP 등) 가짜 덮개가 '닫힘'으로 남아,
+    #   작업 표시줄이 다시 뜨며 덮개 억제가 잠깐 풀리는 순간 logind 가 실제 PC 를 재웠다 (2026-10-06 노트북)
+    t.after(lambda: setting(t, "power", "lid_ac", ""))
+    t.after(lambda: t.root(f"test -p {FIFO} && {{ echo open > {FIFO}; sleep 0.5; echo quit > {FIFO}; }}; true", timeout=15))
+    t.after(lambda: wake_if_asleep(t))
     remote.push(LID_LOCAL, LID)
     t.root(f"rm -f {FIFO}; (setsid python3 {LID} serve {FIFO} >/tmp/vlid.log 2>&1 < /dev/null &)")
     t.expect(t.wait(lambda: t.root(f"test -p {FIFO}").ok, 5), "가짜 덮개를 만들었다")
@@ -223,10 +238,11 @@ def lid_switch(t):
     t.expect("Lid Switch" in json.dumps(t.hypr("devices") or {}), "합성기가 덮개 스위치를 본다")
 
     setting(t, "power", "lid_ac", "nothing")
+    closed_at = time.time() - 1
     t.root(f"echo close > {FIFO}")
     t.expect(t.wait(lambda: logind_lid(t) == "b true", 5), "logind 가 덮개 닫힘을 본다")
     time.sleep(6)
-    t.expect(qstatus(t) == "running", "아무 것도 안 함 — 그대로 켜져 있다")
+    t.expect(qstatus(t, closed_at) == "running", "아무 것도 안 함 — 그대로 켜져 있다")
     t.root(f"echo open > {FIFO}")
     t.expect(t.wait(lambda: logind_lid(t) == "b false", 5), "덮개를 열었다")
     time.sleep(3)                                        # 작업 표시줄도 열린 것을 본다 (2초마다)

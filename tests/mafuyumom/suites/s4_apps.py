@@ -98,6 +98,19 @@ def remove_installed(t):
                          if b["cy"] is not None and (b["cx"], b["cy"]) != (rm[0]["cx"], rm[0]["cy"])
                          and "sensitive" in b["states"]], 30)
     if ok:
+        # 단추가 켜지는 순간 "함께 제거되는 구성 요소" 줄이 들어오며 창이 한 줄 커진다 — 자리가 멈출 때까지
+        #   (노트북 배율 200% 에서 커지기 전 좌표를 눌러 한 줄(27px) 아래를 눌렀다)
+        def settled():
+            a = ok[0]
+            time.sleep(0.5)
+            b = [x for x in (t.ui.find(app="sekai-settings", role="button", name=a["name"], all=True) or [])
+                 if x["cy"] is not None and abs(x["cx"] - a["cx"]) < 40 and abs(x["cy"] - a["cy"]) < 80]
+            if b and (b[0]["cx"], b[0]["cy"]) == (a["cx"], a["cy"]):
+                return True
+            if b:
+                ok[0] = b[0]
+            return False
+        t.wait(settled, 5)
         t.shot("확인창")
         t.click(ok[0]["cx"], ok[0]["cy"])
     t.auth()
