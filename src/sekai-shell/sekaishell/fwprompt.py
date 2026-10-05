@@ -23,7 +23,7 @@ EVERY = 4                       # 초
 
 class FirewallPrompt:
     def __init__(self):
-        self.asked = set()          # 묻는 중이거나, 고르지 않고 창을 닫은 (exe, 포트들) — 이번 세션엔 다시 띄우지 않게.
+        self.asked = set()          # 묻는 중이거나, 고르지 않고 창을 닫은 exe — 이번 세션엔 다시 띄우지 않게 (포트가 바뀌어도).
         #   허용한 앱은 넣어 두지 않는다 — 나중에 허용을 지워(설정 › 방화벽) 포트가 다시 막히면 다시 묻는다
         self.busy = False
         self.dialog = None
@@ -69,7 +69,8 @@ class FirewallPrompt:
                 self.decisions = self._load()
             if firewall.running():
                 apps = [a for a in firewall.listening_apps()
-                        if self.decisions.get(a["exe"]) != "deny" and (a["exe"], tuple(a["ports"])) not in self.asked]
+                        # 허용·거부를 이미 고른 앱은 다시 묻지 않는다 (예전엔 허용한 앱도 포트가 늘면 또 물었다)
+                        if a["exe"] not in self.decisions and a["exe"] not in self.asked]
                 if apps:
                     zones = firewall.active_zones()
                     opened = set().union(*(firewall.zone_ports(z) for z in zones))
@@ -85,7 +86,7 @@ class FirewallPrompt:
     def _found(self, a):
         self.busy = False
         if a:
-            self.asked.add((a["exe"], tuple(a["ports"])))
+            self.asked.add(a["exe"])
             self._ask(a)
         return False
 
@@ -152,7 +153,7 @@ class FirewallPrompt:
             if p.get_successful():
                 self.decisions[a["exe"]] = "allow"
                 self._save()
-                self.asked.discard((a["exe"], tuple(a["ports"])))   # 열렸다 — 나중에 다시 막히면 다시 묻는다
+                self.asked.discard(a["exe"])
             else:
                 dbg("[방화벽] 허용하지 못함 (인증 취소?)", (out or "").strip()[-200:])
         proc.communicate_utf8_async(None, None, done)

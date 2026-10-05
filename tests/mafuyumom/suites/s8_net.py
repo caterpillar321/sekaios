@@ -230,6 +230,18 @@ def firewall_prompt(t):
     t.expect(t.wait(lambda: "sekai-app-python3" in fw(t, "--zone=public", "--list-services"), 30, every=1),
              "모든 네트워크에 허용됐다")
     t.expect(t.wait(probe, 10, every=1), "밖에서 8765 에 닿는다")
+    # 허용한 앱이 포트를 더 열어도, 임시 포트 범위의 UDP(브라우저의 QUIC·WebRTC 같은 나가는 쪽)도 다시 묻지 않는다
+    #   (예전엔 유튜브 하나에 Chrome "허용할까요?"가 두 번씩 떴다 — 2026-10-05 메인 PC)
+    t.sh("cd /tmp && setsid python3 -m http.server 8766 >/dev/null 2>&1 < /dev/null &")
+    t.after("pkill -f '[h]ttp.server 8766'; true")
+    t.sh("setsid perl -MIO::Socket::INET -e 'my $s=IO::Socket::INET->new(LocalPort=>45123,Proto=>q(udp)) or die; sleep 40' "
+         ">/dev/null 2>&1 < /dev/null &")
+    t.after("pkill -f '[L]ocalPort=>45123'; true")
+    t.expect(t.wait(lambda: t.sh("ss -lunH | grep -q ':45123 '").ok, 5), "perl 이 UDP 45123 을 열었다")
+    time.sleep(10)
+    t.expect(not t.ui.find(app="sekai-panel", role="button", name="모든 네트워크에서 허용"),
+             "허용한 앱의 새 포트·임시 포트 UDP 에는 묻지 않는다")
+    t.sh("pkill -f '[h]ttp.server 8766'; pkill -f '[L]ocalPort=>45123'; true")
     # 허용 안 함 — 서비스를 지우고 기억도 지운 뒤 다시
     t.root("for z in home public; do firewall-cmd --permanent --zone=$z --remove-service=sekai-app-python3; done; "
            "firewall-cmd --permanent --delete-service=sekai-app-python3; firewall-cmd --reload")

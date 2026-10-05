@@ -33,8 +33,26 @@ def _fw_call(method, args=None, iface="org.fedoraproject.FirewallD1.zone"):
     return r.unpack()[0]
 
 
+def _ephemeral():
+    """임시 포트 범위 (커널이 나가는 연결에 붙여 주는 번호)"""
+    try:
+        with open("/proc/sys/net/ipv4/ip_local_port_range") as f:
+            lo, hi = (int(x) for x in f.read().split()[:2])
+        return lo, hi
+    except (OSError, ValueError):
+        return 32768, 60999
+
+
+# 기기 찾기(mDNS·LLMNR·SSDP) — 앱마다 묻지 않는다. 네트워크 프로필이 정한다 (개인 = 열림, 공용 = 닫힘).
+#   브라우저가 크롬캐스트 등을 찾느라 여는 것에 "허용할까요?"를 띄우지 않게
+DISCOVERY_UDP = {5353, 5355, 1900}
+
+
 def listening_apps():
-    """밖에서 들어오는 연결을 기다리는 내 앱들 — [{id, name, ports}] (127.0.0.1·::1 에만 묶인 것은 빼고)"""
+    """밖에서 들어오는 연결을 기다리는 내 앱들 — [{id, name, ports}] (127.0.0.1·::1 에만 묶인 것은 빼고).
+    임시 포트 범위의 UDP 는 뺀다 — 브라우저가 서버에 붙을 때(QUIC·WebRTC) 쓰는 나가는 쪽 소켓이라
+    방화벽을 열지 않아도 응답은 들어온다. 그런데도 물어서 유튜브 하나에 "허용할까요?"가 두 번씩 떴다"""
+    lo, hi = _ephemeral()
     _, out = _out(["ss", "-ltnupH"])
     apps = {}
     for line in out.splitlines():
@@ -45,6 +63,8 @@ def listening_apps():
         local = parts[4]
         addr, _, port = local.rpartition(":")
         if not port.isdigit() or addr.strip("[]") in ("127.0.0.1", "::1") or addr.startswith("127."):
+            continue
+        if proto == "udp" and (lo <= int(port) <= hi or int(port) in DISCOVERY_UDP):
             continue
         m = re.search(r'users:\(\("([^"]+)",pid=(\d+)', line)
         if not m:
