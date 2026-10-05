@@ -122,8 +122,8 @@ class FirewallPrompt:
         b_all.connect("clicked", lambda *_: self._allow(a, "all"))
         b_no.connect("clicked", lambda *_: self._deny(a))
         d.connect("delete-event", lambda *_: (self._close(), False)[1])
+        b_home.grab_focus()                 # 띄우기 전에 — 초점이 정해져 있지 않으면 GTK 가 첫 위젯(선택 가능한 안내 글)에 줘 글이 선택된다
         d.show_all()
-        b_home.grab_focus()
 
     def _close(self):
         if self.dialog is not None:
