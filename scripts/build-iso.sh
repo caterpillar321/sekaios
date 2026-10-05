@@ -68,6 +68,11 @@ cp "$GRUBEFI"                 "$P/iso/EFI/BOOT/grubx64.efi"
 cp "$SHIM/mmx64.efi.signed"   "$P/iso/EFI/BOOT/mmx64.efi"
 cp "$STUB" "$P/iso/EFI/debian/grub.cfg"
 cp "$STUB" "$P/iso/EFI/BOOT/grub.cfg"
+# Secured-core PC(타사 CA 가 빠진 펌웨어)용 — BIOS 의 Key Management 에서 USB 의 이 파일을 바로 고를 수 있게
+CERTS="$P/config/secureboot-certs"
+( cd "$CERTS" && sha256sum -c --quiet SHA256SUMS ) || { echo "E: secureboot-certs 해시가 다릅니다"; exit 1; }
+mkdir -p "$P/iso/EFI/certs"
+cp "$CERTS"/MSCA2023.CER "$CERTS"/MSCA2011.CER "$CERTS"/README.TXT "$P/iso/EFI/certs/"
 cp "$P/config/grub-live.cfg" "$P/iso/boot/grub/grub.cfg"
 # 시험용: SEKAI_ISO_DEFAULT=1 이면 기본 선택을 두 번째 항목(기본 화면 모드)으로
 if [ -n "${SEKAI_ISO_DEFAULT:-}" ]; then
@@ -84,12 +89,13 @@ cp "$P"/src/sekaios-base/usr/share/grub/themes/sekai/*.pf2 "$P/iso/boot/grub/fon
 IMG="$P/build/efiboot.img"
 rm -f "$IMG"
 mkfs.vfat -C -n SEKAIEFI "$IMG" 8192 > /dev/null
-mmd   -i "$IMG" ::/EFI ::/EFI/BOOT ::/EFI/debian
+mmd   -i "$IMG" ::/EFI ::/EFI/BOOT ::/EFI/debian ::/EFI/certs
 mcopy -i "$IMG" "$P/iso/EFI/BOOT/BOOTX64.EFI" ::/EFI/BOOT/BOOTX64.EFI
 mcopy -i "$IMG" "$P/iso/EFI/BOOT/grubx64.efi" ::/EFI/BOOT/grubx64.efi
 mcopy -i "$IMG" "$P/iso/EFI/BOOT/mmx64.efi"   ::/EFI/BOOT/mmx64.efi
 mcopy -i "$IMG" "$STUB" ::/EFI/debian/grub.cfg
 mcopy -i "$IMG" "$STUB" ::/EFI/BOOT/grub.cfg
+mcopy -i "$IMG" "$P"/iso/EFI/certs/* ::/EFI/certs/
 cp "$IMG" "$P/iso/boot/grub/efiboot.img"
 
 # ── 4. ISO 굽기 ──────────────────────────────────────
