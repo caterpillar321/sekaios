@@ -1,0 +1,26 @@
+Description: Don't abort when the compositor re-sends linux-dmabuf feedback
+ zwp_linux_dmabuf_feedback_v1 may be sent again at any time (the protocol
+ allows it). WorldLink/Hyprland re-sends it when outputs come and go, e.g. when
+ the screen is turned off by the idle daemon and back on. The main_device event
+ then hits assert(ctx->gbm == NULL) and the portal aborts — every 10 minutes on
+ a multi-GPU PC with "turn off the screen after 10 minutes".
+ The compositor's render device does not change while it runs, so keep the
+ GBM device that is already open and ignore the repeated main_device.
+Author: SekaiOS <https://github.com/caterpillar321/sekaios>
+Forwarded: no
+--- a/src/screencast/wlr_screencast.c
++++ b/src/screencast/wlr_screencast.c
+@@ -642,7 +642,12 @@ static void linux_dmabuf_feedback_handle_main_device(void *data,
+ 
+ 	logprint(DEBUG, "wlroots: linux_dmabuf_feedback_handle_main_device called");
+ 
+-	assert(ctx->gbm == NULL);
++	if (ctx->gbm != NULL) {
++		// Feedback re-sent (outputs changed) — the render device is the same
++		// for the compositor's lifetime, keep the one already in use.
++		logprint(DEBUG, "wlroots: main device sent again, keeping the current render node");
++		return;
++	}
+ 
+ 	dev_t device;
+ 	assert(device_arr->size == sizeof(device));
