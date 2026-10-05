@@ -28,6 +28,7 @@ install -Dm755 "$SRC/sekai-admin"     "$STAGE/usr/bin/sekai-admin"
 install -Dm755 "$SRC/sekai-files"     "$STAGE/usr/bin/sekai-files"
 install -Dm755 "$SRC/sekai-notepad"   "$STAGE/usr/bin/sekai-notepad"
 install -Dm755 "$SRC/sekai-appinstall" "$STAGE/usr/bin/sekai-appinstall"
+install -Dm755 "$SRC/sekai-wine"      "$STAGE/usr/bin/sekai-wine"
 install -Dm755 "$SRC/sekai-store"     "$STAGE/usr/bin/sekai-store"
 install -Dm755 "$SRC/sekai-calc"      "$STAGE/usr/bin/sekai-calc"
 install -Dm755 "$SRC/sekai-photos"    "$STAGE/usr/bin/sekai-photos"
@@ -72,7 +73,7 @@ mkdir -p "$DIST/sekaiadmin/pages"
 for f in "$SRC/sekaiadmin"/*.py;        do install -Dm644 "$f" "$DIST/sekaiadmin/$(basename "$f")"; done
 for f in "$SRC/sekaiadmin/pages"/*.py;  do install -Dm644 "$f" "$DIST/sekaiadmin/pages/$(basename "$f")"; done
 # 파일 탐색기 (sekai-files) · 메모장 (sekai-notepad) · 계산기 (sekai-calc) · 사진 (sekai-photos) · 앱 설치 관리자 (sekai-appinstall) · 스토어 (sekai-store)
-for pkg in sekaifiles sekainotepad sekaicalc sekaiphotos sekaiappinstall sekaistore nenerobo; do
+for pkg in sekaifiles sekainotepad sekaicalc sekaiphotos sekaiappinstall sekaistore sekaiwine nenerobo; do
     mkdir -p "$DIST/$pkg"
     for f in "$SRC/$pkg"/*.py; do install -Dm644 "$f" "$DIST/$pkg/$(basename "$f")"; done
 done
@@ -626,7 +627,7 @@ Depends: sekai-de (= ${FULL}), sekaios-base (= ${FULL}), sekai-shell (= ${FULL})
  qt6-wayland, wayland-utils, fonts-dejavu, fonts-symbola, locales,
  libgl1-mesa-dri, libegl-mesa0, mesa-utils
 Recommends: htop, tmux, tree, ncdu, vim, nano, git, curl, wget,
- bash-completion, less, man-db,
+ bash-completion, less, man-db, sekai-wine-11.0,
  chromium, cups-pk-helper,
  webp-pixbuf-loader, heif-gdk-pixbuf, libavif-gdk-pixbuf,
  poppler-utils

@@ -85,6 +85,11 @@ if [ -n "${best[worldlink]:-}" ]; then
     done
 fi
 for name in "${!best[@]}"; do cp "${best[$name]}" "$REPO.tmp/pool/main/"; done
+# (L)GPL 로 고치지 않고 빌드한 것의 소스 (예: Wine — scripts/wine/) — 저장소의 sources/ 에 같이
+if ls "$P"/packages/sources/* >/dev/null 2>&1; then
+    mkdir -p "$REPO.tmp/sources"
+    cp "$P"/packages/sources/* "$REPO.tmp/sources/"
+fi
 
 cd "$REPO.tmp"
 apt-ftparchive packages pool/main > "dists/$SUITE/main/binary-amd64/Packages"

@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Windows Program
+Name[ko]=Windows 프로그램
+Comment=Install or run a Windows program with Wine
+Comment[ko]=Windows 프로그램을 설치하거나 실행합니다 (Wine)
+Exec=sekai-wine open %F
+Icon=application-x-ms-dos-executable
+Terminal=false
+NoDisplay=true
+StartupWMClass=org.sekaios.WineOpen
+Categories=System;Emulator;
+MimeType=application/x-ms-dos-executable;application/x-msdownload;application/x-msdos-program;application/x-ms-executable;application/vnd.microsoft.portable-executable;application/x-msi;application/x-ms-installer;application/x-ole-storage;
+Keywords=exe;msi;wine;windows;윈도우;설치;

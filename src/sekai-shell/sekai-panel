@@ -467,7 +467,11 @@ def icon_image(names, size):
         if not n:
             continue
         if n.startswith("/") and os.path.exists(n):
-            img.set_from_file(n)
+            try:                                     # 절대 경로 (Windows 앱 아이콘 등) — 크기를 맞춘다
+                from gi.repository import GdkPixbuf
+                img.set_from_pixbuf(GdkPixbuf.Pixbuf.new_from_file_at_size(n, size, size))
+            except GLib.Error:
+                img.set_from_file(n)
             return img
         if theme.has_icon(n):
             img.set_from_icon_name(n, Gtk.IconSize.MENU)

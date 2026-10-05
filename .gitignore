@@ -1,5 +1,6 @@
 # ── 빌드 결과물 (다시 만들 수 있다, 수 GB) ──
 /buildroot/
+/buildroot-wine/
 /rootfs/
 /rootfs.new/
 /rootfs.old/

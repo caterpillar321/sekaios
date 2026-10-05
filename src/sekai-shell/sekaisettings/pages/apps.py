@@ -174,7 +174,9 @@ def build_installed(store):
         r = row(lb, name, fn, icon=[icon] if icon else ["application-x-executable"], control=ctl)
         r.search_key = (name + " " + fn).lower()
         r.app_name, r.app_path, r.rm_btn, r.pkg, r.flatpak = name, path, rm, None, None
-        rm.connect("clicked", lambda _b, r=r: _remove_dialog(p, r, rows, rows_count))
+        r.wine = _wine_env_of(path)              # Windows 앱 (sekai-wine) — 제거 = 그 환경을 통째로
+        rm.connect("clicked", lambda _b, r=r: _remove_wine(p, r, rows, rows_count) if r.wine
+                   else _remove_dialog(p, r, rows, rows_count))
         rows[path] = r
 
     def filt(w):
@@ -190,6 +192,10 @@ def build_installed(store):
         GLib.idle_add(got, found, fps)
 
     def got(found, fps):
+        for path, r in rows.items():
+            if r.wine:
+                r.rm_btn.set_tooltip_text("이 Windows 앱의 환경(C: 드라이브)을 통째로 지웁니다")
+                r.rm_btn.show()
         # Flathub 앱 — 바로 가기가 flatpak 의 내보내기 자리에 있다 (앱 id.desktop)
         for path, r in rows.items():
             if path.startswith(FLATPAK_EXPORTS):
@@ -213,6 +219,35 @@ def build_installed(store):
         return False
     threading.Thread(target=find, daemon=True).start()
     return p
+
+
+def _wine_env_of(path):
+    if not os.path.basename(path).startswith("sekaiwine-"):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("X-Sekai-Wine-Env="):
+                    return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return None
+
+
+def _remove_wine(page, r, rows, recount):
+    from . import wineapps
+    env = wineapps.core.load(r.wine)
+    if not env:
+        return
+
+    def gone():
+        for path in [x for x, rr in rows.items() if getattr(rr, "wine", None) == env["id"]]:
+            rr = rows.pop(path)
+            if rr.get_parent():
+                rr.get_parent().remove(rr)
+        recount()
+        return False
+    wineapps.remove_env(page.get_toplevel(), env, gone)
 
 
 def _remove_dialog(page, r, rows, recount):

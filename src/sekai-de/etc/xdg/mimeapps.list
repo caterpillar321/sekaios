@@ -38,6 +38,13 @@ application/zstd=sekai-files-extract.desktop
 application/vnd.debian.binary-package=sekai-appinstall.desktop
 application/x-deb=sekai-appinstall.desktop
 application/x-debian-package=sekai-appinstall.desktop
+# Windows 프로그램(.exe · .msi) → Windows 프로그램 열기 (sekai-wine — Wine)
+application/x-ms-dos-executable=sekai-wine-open.desktop
+application/x-msdownload=sekai-wine-open.desktop
+application/x-msdos-program=sekai-wine-open.desktop
+application/vnd.microsoft.portable-executable=sekai-wine-open.desktop
+application/x-msi=sekai-wine-open.desktop
+application/x-ms-installer=sekai-wine-open.desktop
 # 텍스트 → 메모장
 text/plain=sekai-notepad.desktop
 text/x-log=sekai-notepad.desktop
