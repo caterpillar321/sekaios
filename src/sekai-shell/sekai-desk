@@ -1710,11 +1710,20 @@ def main():
     from sekaishell import theme as _sekai_theme
     _sekai_theme.apply_contrast_css()   # 대비 테마면 테두리·초점을 앱 CSS 위에
     st = Gtk.Settings.get_default()
-    if st and os.path.isdir("/usr/share/icons/Papirus-Dark"):
-        st.set_property("gtk-icon-theme-name", "Papirus-Dark")
+
+    def set_icons():
+        """바탕화면 글씨는 늘 밝아 어두운 쪽 아이콘(Papirus-Dark) — 폴더를 강조색으로 칠한 테마가 있으면 그것
+        (sekaishell/foldercolor.py). 강조색을 바꾸면(SIGHUP) 다시 — 아이콘 테마가 바뀌면 아래에서 다시 그린다"""
+        if st and os.path.isdir("/usr/share/icons/Papirus-Dark"):
+            name = _sekai_theme.icon_theme("dark")
+            if st.get_property("gtk-icon-theme-name") != name:
+                st.set_property("gtk-icon-theme-name", name)
+    set_icons()
 
     disp = Gdk.Display.get_default()
     desks = []
+    Gtk.IconTheme.get_default().connect(
+        "changed", lambda *_: [d._refresh_later(150) for d in desks if hasattr(d, "_refresh_later")])
 
     def build():
         """모니터마다 바탕화면 하나. 아이콘은 주 모니터에만."""
@@ -1749,6 +1758,7 @@ def main():
 
     def apply_hup():
         hup["src"] = 0
+        set_icons()                       # 강조색·폴더 색이 바뀌었을 수 있다
         # 주 디스플레이가 바뀌었으면 아이콘을 옮긴다 (다시 만든다)
         prim = primary_gdk(disp)
         if any(d.primary != (d.monitor == prim) for d in desks if hasattr(d, "primary")):

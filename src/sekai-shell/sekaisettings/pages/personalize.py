@@ -255,6 +255,9 @@ def build_appearance(store):
             _set_color_button(accent_btn, v)))
         pal.pack_start(b, False, False, 0)
     row(s, "프리셋", "자주 쓰는 색", control=pal)
+    row(s, "폴더 색", "탐색기·바탕 화면의 폴더를 강조색으로 칠합니다 (끄면 기본 파란 폴더)",
+        icon=["folder", "inode-directory"],
+        control=switch(a.get("folder_accent", True), lambda v: store.set("appearance", "folder_accent", v)))
 
     color_btns = {
         "surface": color_button(a["surface"], lambda v: store.set("appearance", "surface", v)),

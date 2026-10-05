@@ -2,7 +2,7 @@
 
 SETTINGS_PAGES = ["about", "power", "display", "graphics", "sound", "wallpaper", "appearance", "multitasking", "input",
                   "shortcuts", "bluetooth", "printers", "network", "firewall", "notifications", "locale", "defaults", "installed",
-                  "account", "users", "a11y", "update", "recovery"]
+                  "wineapps", "account", "users", "a11y", "update", "recovery", "encryption"]
 
 TARGETS = []
 for _p in SETTINGS_PAGES:

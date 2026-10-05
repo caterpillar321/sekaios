@@ -59,6 +59,18 @@ def _compositor():
     return f"WorldLink {v.split('-')[0]}" if v else "WorldLink"
 
 
+def image_build():
+    """설치 이미지의 빌드 번호 (/etc/sekai/build — ISO 를 구울 때 들어간다) → "0001" · "0001 (개발용)" 또는 None"""
+    try:
+        d = dict(ln.strip().split("=", 1) for ln in open("/etc/sekai/build", encoding="utf-8") if "=" in ln)
+    except OSError:
+        return None
+    b = d.get("BUILD", "")
+    if not b.isdigit():
+        return None
+    return b + (" (개발용)" if d.get("KIND") == "dev" else "")
+
+
 def build_about(store):
     osr = _os_release()
     p = Page("시스템 정보", "이 컴퓨터와 SekaiOS 에 대한 정보입니다.")
@@ -67,6 +79,9 @@ def build_about(store):
     row(s, "이름", icon=["sekaios", "distributor-logo", "computer"],
         control=info(osr.get("PRETTY_NAME", "SekaiOS")))
     row(s, "버전", control=info(osr.get("VERSION", "-")))
+    b = image_build()
+    if b:
+        row(s, "빌드", "이 PC 를 설치한 이미지", control=info(b))
     row(s, "코드네임", control=info(osr.get("VERSION_CODENAME", "-")))
     row(s, "기반", control=info("Debian %s (%s)" % (
         osr.get("DEBIAN_VERSION_ID", "?"), osr.get("DEBIAN_VERSION_CODENAME", "?"))))

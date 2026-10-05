@@ -26,7 +26,8 @@ sys.path.insert(0, os.path.join(P, "tests", "mafuyumom"))
 from mm.qmp import QMP  # noqa: E402
 
 RUN = os.path.expanduser("~/.cache/ken/run")
-ISO = os.environ.get("KEN_ISO", os.path.join(P, "build", "sekaios-1.0-amd64-dev.iso"))
+ISO = os.environ.get("KEN_ISO") or (sorted(glob.glob(os.path.join(P, "build", "sekaios-1.0-*amd64-dev.iso")),
+                                           key=os.path.getmtime) or [os.path.join(P, "build", "sekaios-1.0-amd64-dev.iso")])[-1]
 PORT = int(os.environ.get("KEN_SSH_PORT", "2350"))
 VNC = int(os.environ.get("KEN_VNC", "6"))
 KEY = os.path.expanduser("~/.ssh/sekaios-dev")

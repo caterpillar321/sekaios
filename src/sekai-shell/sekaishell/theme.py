@@ -50,7 +50,15 @@ def mode_of(appearance):
 
 
 def icon_theme(mode):
-    """쓸 수 있는 아이콘 테마 (모드에 맞는 것 → 없으면 대체)"""
+    """쓸 수 있는 아이콘 테마 (모드에 맞는 것 → 없으면 대체). 폴더를 강조색으로 칠한 테마가 있으면 그것
+    (~/.local/share/icons/Sekai-Folders-* — Papirus 를 이어받는다, sekaishell/foldercolor.py)"""
+    try:
+        from . import foldercolor
+        name = foldercolor.theme_name(mode)
+        if name and os.path.isdir(f"/usr/share/icons/{GTK[mode]['icons']}"):
+            return name
+    except Exception:
+        pass
     for cand in (GTK[mode]["icons"], "Papirus", "Adwaita"):
         if os.path.isdir(f"/usr/share/icons/{cand}"):
             return cand

@@ -100,6 +100,12 @@ FW_KIND="$(cat "$P/build/overlay.kind" 2>/dev/null || echo release)"
 inroot "/usr/libexec/sekai/sekai-firewall setup $FW_KIND && mkdir -p /var/lib/sekai && touch /var/lib/sekai/firewall-v1
         systemctl enable firewalld.service 2>/dev/null || true"
 ok "방화벽 정책: $FW_KIND"
+# 설치 이미지 빌드 번호 (config/build-number — 출시용으로 구울 때 손으로 올린다). 패키지 파일이 아니라
+#   업데이트에 덮이지 않고, 설치본엔 "어느 이미지로 깔았나"로 남는다 (설정 › 시스템 정보)
+BUILD="$(tr -dc 0-9 < "$P/config/build-number" 2>/dev/null)"; BUILD="${BUILD:-0000}"
+mkdir -p "$R/etc/sekai"
+printf 'BUILD=%s\nKIND=%s\nDATE=%s\n' "$BUILD" "$FW_KIND" "$(date +%Y-%m-%d)" > "$R/etc/sekai/build"
+ok "빌드 $BUILD ($FW_KIND)"
 ok "NetworkManager 활성화, systemd-networkd 비활성화"
 
 say "언마운트"

@@ -31,6 +31,7 @@ DEFAULTS = {
     "appearance": {
         "mode": "dark",           # dark / light — 아래 네 색을 sekaishell/theme.py 의 묶음으로 바꾼다
         "accent": "#39c5bb",      # 미쿠 틸
+        "folder_accent": True,    # 폴더 아이콘을 강조색으로 (sekaishell/foldercolor.py)
         "bg": "#151517",
         "surface": "#1e1e22",     # 작업 표시줄·메뉴·팝업의 면
         "fg": "#f1f1f3",
@@ -405,6 +406,7 @@ class Store:
         a.update(theme.PALETTES[mode])
         self.save()                         # 조각 파일 다시 쓰기 + 패널·바탕화면에 SIGHUP
         theme.apply_system(mode)            # GTK·Chromium 등
+        self.apply_folders()
         _apply_wm_mode(mode)
         for cb in self._listeners:
             try:
@@ -444,6 +446,7 @@ class Store:
             # 색·모드가 바뀌었다 — 창의 CSS·GTK 설정과 일반 앱이 따라오게 (set_mode 와 같은 알림)
             mode = theme.mode_of(self.get("appearance"))
             theme.apply_system(mode)
+            self.apply_folders()
             if mode != old_mode:
                 _apply_wm_mode(mode)
             for key in ("accent", "mode"):
@@ -681,6 +684,8 @@ class Store:
             self.apply_display()
         elif section == "a11y":
             self.apply_a11y(key)
+        elif section == "appearance" and key in ("accent", "folder_accent"):
+            self.apply_folders()
         elif section == "appearance" and key == "cursor_size":
             self.apply_a11y("cursor_size")           # 다시 로그인하지 않아도 바로 (hyprctl setcursor)
         elif section == "power":
@@ -690,6 +695,24 @@ class Store:
                     os.kill(int(pid), signal.SIGHUP)
                 except Exception:
                     pass
+
+    # ── 폴더 색 (강조색) ─────────────────────────────────
+    def apply_folders(self):
+        """폴더 아이콘 테마를 강조색으로 다시 칠하고(바뀌었을 때만) 아이콘 테마 이름을 일반 앱에도 — 백그라운드로"""
+        import threading
+        a = self.get("appearance")
+        on, accent, mode = bool(a.get("folder_accent", True)), a.get("accent"), theme.mode_of(a)
+
+        def work():
+            from sekaishell import foldercolor
+            try:
+                changed = foldercolor.generate(accent) if on else (foldercolor.remove() or True)
+                theme.apply_system(mode)
+                if changed:
+                    self.notify_panel()          # 작업 표시줄·바탕화면도 새 아이콘 테마로 (저장 때 보낸 신호는 만들기 전이었다)
+            except Exception as e:
+                dbg("폴더 색 실패", e)
+        threading.Thread(target=work, daemon=True).start()
 
     # ── 접근성 즉시 반영 ────────────────────────────────
     def apply_a11y(self, key=None):

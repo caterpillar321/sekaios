@@ -2079,6 +2079,23 @@ def main():
                                   _theme.mode_of(sekai_settings().get("appearance", {})))
     apply_mode()
 
+    # 폴더 색 — 강조색으로 칠한 폴더 아이콘 테마가 없거나 색이 바뀌었으면 만든다 (처음 로그인 · 업데이트로 처음 받았을 때).
+    #   만들었으면 일반 앱(gsettings)과 이 프로그램의 아이콘 테마도 그것으로
+    def _folders():
+        try:
+            from sekaishell import foldercolor
+            a = sekai_settings().get("appearance", {})
+            if a.get("folder_accent", True) and foldercolor.generate(a.get("accent", "#39c5bb")):
+                mode = _theme.mode_of(a)
+                _theme.apply_system(mode)
+                GLib.idle_add(lambda: (apply_mode(), False)[1])
+                # 바탕화면(sekai-desk)은 먼저 떠서 옛 아이콘 테마다 — 다시 읽게
+                subprocess.run(["pkill", "-HUP", "-f", r"^\S*python3\S* \S*sekai-desk( |$)"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            dbg("[폴더 색]", e)
+    threading.Thread(target=_folders, daemon=True).start()
+
     # Wayland(Hyprland) 이면 IPC 소켓, X11 기본 화면 모드면 libwnck 로 흉내
     if _layer.WAYLAND:
         hypr = Hypr()

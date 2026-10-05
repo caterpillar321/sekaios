@@ -23,7 +23,8 @@ EVERY = 4                       # 초
 
 class FirewallPrompt:
     def __init__(self):
-        self.asked = set()          # 이번 세션에 이미 물은 (exe, 포트들) — 창을 닫아도 다시 띄우지 않게
+        self.asked = set()          # 묻는 중이거나, 고르지 않고 창을 닫은 (exe, 포트들) — 이번 세션엔 다시 띄우지 않게.
+        #   허용한 앱은 넣어 두지 않는다 — 나중에 허용을 지워(설정 › 방화벽) 포트가 다시 막히면 다시 묻는다
         self.busy = False
         self.dialog = None
         self.decisions = self._load()
@@ -77,7 +78,6 @@ class FirewallPrompt:
                         if closed:
                             found = dict(a, closed=closed, zones=sorted(zones))
                             break
-                        self.asked.add((a["exe"], tuple(a["ports"])))      # 이미 열려 있다 — 다시 보지 않는다
         except Exception as e:
             dbg("[방화벽] 살피기 실패", e)
         GLib.idle_add(self._found, found)
@@ -152,6 +152,7 @@ class FirewallPrompt:
             if p.get_successful():
                 self.decisions[a["exe"]] = "allow"
                 self._save()
+                self.asked.discard((a["exe"], tuple(a["ports"])))   # 열렸다 — 나중에 다시 막히면 다시 묻는다
             else:
                 dbg("[방화벽] 허용하지 못함 (인증 취소?)", (out or "").strip()[-200:])
         proc.communicate_utf8_async(None, None, done)

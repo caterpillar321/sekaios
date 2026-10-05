@@ -129,6 +129,7 @@ class SettingsWindow(Gtk.Window):
 
         sc = Gtk.ScrolledWindow()
         sc.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.side_sc = sc
         both = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.list = Gtk.ListBox()
         self.list.get_style_context().add_class("side-list")
@@ -157,7 +158,9 @@ class SettingsWindow(Gtk.Window):
             self.list.add(r)
             self._rows[pg["id"]] = r
 
-        ver = Gtk.Label(label="SekaiOS 1.0 (Hatsune)", xalign=0)
+        from .pages.about import image_build
+        b = image_build()
+        ver = Gtk.Label(label="SekaiOS 1.0 (Hatsune)" + (f" · 빌드 {b.split()[0]}" if b else ""), xalign=0)
         ver.get_style_context().add_class("side-foot")
         side.pack_start(ver, False, False, 0)
         return side
@@ -286,6 +289,23 @@ class SettingsWindow(Gtk.Window):
         r = self._rows.get(page_id)
         if r and self.list.get_selected_row() is not r:
             self.list.select_row(r)
+        if r:
+            self._reveal_row(r)
+
+    def _reveal_row(self, r, tries=20):
+        """옆 목록에서 고른 항목이 보이게 — --page= 로 바로 열거나 글자가 커서 목록이 길 때 (윈도우 설정처럼).
+        처음 열 때는 아직 자리가 안 잡혀서 잡힐 때까지 잠깐 기다린다"""
+        def go(left=[tries]):
+            al = r.get_allocation()
+            adj = self.side_sc.get_vadjustment()
+            if (al.height <= 1 or adj.get_page_size() <= 1) and left[0] > 0:
+                left[0] -= 1
+                return True
+            top, page = adj.get_value(), adj.get_page_size()
+            if al.y < top or al.y + al.height > top + page:
+                adj.set_value(max(0, min(al.y - page / 3, adj.get_upper() - page)))
+            return False
+        GLib.timeout_add(50, go)
 
     # ── 페이지 다시 그리기 ──────────────────────────────
     #   페이지는 처음 열 때 한 번 만들어진다. 되돌리기(reset_section)나 모니터를 켜고 끄는 것처럼

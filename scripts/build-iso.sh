@@ -9,7 +9,8 @@ P="$(dirname "$SELF")"
 
 # 개발 빌드(SSH 키 포함)는 이름부터 다르게 — 배포용과 헷갈려 남에게 주지 않게
 KIND="$(cat "$P/build/overlay.kind" 2>/dev/null || echo release)"
-if [ "$KIND" = dev ]; then ISO_NAME="sekaios-1.0-amd64-dev.iso"; else ISO_NAME="sekaios-1.0-amd64.iso"; fi
+BUILD="$(tr -dc 0-9 < "$P/config/build-number" 2>/dev/null)"; BUILD="${BUILD:-0000}"    # 설치 이미지 빌드 번호
+if [ "$KIND" = dev ]; then ISO_NAME="sekaios-1.0-$BUILD-amd64-dev.iso"; else ISO_NAME="sekaios-1.0-$BUILD-amd64.iso"; fi
 VOLID="SEKAIOS"
 SQUASH="$P/build/filesystem.zstd.squashfs"
 # ISO 를 복사할 Windows 폴더 (--win) — 이 컴퓨터 전용 설정 local/env 의 SEKAI_WINDIR

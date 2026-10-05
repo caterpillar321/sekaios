@@ -29,6 +29,8 @@ from sekaishell.layer import GtkLayerShell  # noqa: E402  (X11 기본 화면 모
 from sekaishell import wizard as W  # noqa: E402
 
 DEMO = os.environ.get("SEKAI_OOBE_DEMO") == "1"
+# 시작 애니메이션 때 틀 소리 — 있을 때만 (개발 ISO 는 local/overlay-dev 로 넣을 수 있다. 공개 이미지엔 없다)
+INTRO_SOUNDS = ("/usr/share/sekai/oobe/intro.wav", "/usr/share/sekai/oobe/intro.ogg")
 SOCK = "/run/sekai-oobe.sock"
 WALLDIR = "/usr/share/backgrounds/sekai"
 SESSION_CMD = ["/usr/bin/sekai-session"]
@@ -136,6 +138,7 @@ class Oobe(Gtk.Window):
         ov.add(back)
 
         card = Gtk.Box()
+        self.card = card
         card.get_style_context().add_class("oobe-card")
         card.set_size_request(1000, 660)
         card.set_halign(Gtk.Align.CENTER)
@@ -151,8 +154,60 @@ class Oobe(Gtk.Window):
                         ("style", self.build_style), ("setup", self.build_setup), ("error", self.build_error)):
             self.wz.add_page(pid, fn())
 
+        # 시작 애니메이션 — "세카이로 들어가기" (끝나면 설정 카드가 서서히). SEKAI_OOBE_NOINTRO=1 이면 건너뛴다
+        self.sound = None
+        self.intro = None
+        if os.environ.get("SEKAI_OOBE_NOINTRO") != "1":
+            from sekaishell.oobe_intro import Intro
+            self.intro = Intro(self._intro_done, background=self._paint_bg)
+            ov.add_overlay(self.intro)
+            card.set_opacity(0.0)
+            self.connect("key-press-event", lambda *_: (self.intro.skip(), True)[1] if self.intro else False)
+            self._play_intro_sound()
+        self.connect("destroy", lambda *_: self._stop_sound())
+
+    def _play_intro_sound(self):
+        import shutil
+        import subprocess
+        path = next((p for p in INTRO_SOUNDS if os.path.isfile(p)), None)
+        if not path:
+            return
+        for cmd in (["pw-play", path], ["paplay", path], ["aplay", "-q", path]):
+            if shutil.which(cmd[0]):
+                try:
+                    self.sound = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return
+                except OSError:
+                    continue
+
+    def _stop_sound(self):
+        if self.sound and self.sound.poll() is None:
+            self.sound.terminate()
+
+    def _intro_done(self):
+        """애니메이션이 끝났다 — 걷어 내고 카드를 서서히 (0.5초)"""
+        if self.intro is not None:
+            self.intro.get_parent().remove(self.intro)
+            self.intro = None
+        t0 = GLib.get_monotonic_time()
+
+        def fade():
+            x = min(1.0, (GLib.get_monotonic_time() - t0) / 5e5)
+            self.card.set_opacity(x)
+            return x < 1.0
+        GLib.timeout_add(16, fade)
+
+    def _paint_bg(self, cr, width, height):
+        class _A:
+            pass
+        a = _A()
+        a.width, a.height = width, height
+        self._draw_bg_alloc(cr, a)
+
     def _draw_bg(self, w, cr):
-        a = w.get_allocation()
+        return self._draw_bg_alloc(cr, w.get_allocation())
+
+    def _draw_bg_alloc(self, cr, a):
         if self.bg is not None:
             bw, bh = self.bg.get_width(), self.bg.get_height()
             s = max(a.width / bw, a.height / bh)
@@ -578,6 +633,7 @@ def main():
     win.show_all()
     win.go_lang()
     Gtk.main()
+    win._stop_sound()                 # 설정이 끝나면 소리도 (사용자 세션까지 이어지지 않게)
 
 
 if __name__ == "__main__":
