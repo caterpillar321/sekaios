@@ -1910,7 +1910,11 @@ class Panel(Gtk.Window, TaskbarMixin):
         same_focus = (name == "activewindowv2" and bool(_arg.strip())
                       and "0x" + _arg.strip() == getattr(self, "_last_active", None))
         # 폴백: 사용자가 다른 창을 클릭하면 포커스 이벤트가 온다 → 메뉴 닫기
-        if name in ("activewindowv2", "openwindow") and not same_focus and self.menu.get_visible():
+        #   Wayland 의 빈 activewindowv2 는 "초점이 창이 아닌 곳(레이어)으로 갔다" — 시작 메뉴를 처음 누르면 메뉴가
+        #   키보드 초점을 가져가며 이렇게 온다. 그걸 다른 창으로 옮겨 간 것으로 봐서, 다른 창에서 작업하다 와서
+        #   전원 단추 등을 처음 누르면 메뉴가 닫혔다 (2026-10-05 메인 PC). X11 흉내(wm.py)는 주소 없이 보내니 그대로
+        to_layer = (name == "activewindowv2" and not _arg.strip() and os.environ.get("XDG_SESSION_TYPE") != "x11")
+        if name in ("activewindowv2", "openwindow") and not same_focus and not to_layer and self.menu.get_visible():
             GLib.idle_add(self.menu.close)
         if name in ("windowtitle", "windowtitlev2") or same_focus:
             # 제목만 바뀌었다 — 버튼은 아이콘뿐이라 다시 만들지 않고 제목을 쓰는 곳(미리보기)만 고친다.
