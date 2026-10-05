@@ -784,7 +784,10 @@ class Store:
         return changed
 
     def _fit_scale(self, name, m):
-        """저장된 배율을 그 모니터·모드에서 합성기가 받는 값으로 (monscale) — 예전에 저장한 150% 등도 여기서 맞춘다"""
+        """저장된 배율을 그 모니터·모드에서 합성기가 받는 값으로 (monscale) — 예전에 저장한 150% 등도 여기서 맞춘다.
+        배율을 고른 적이 없으면 auto — 합성기가 화면 크기(PPI)로 권장 배율을 고른다 (윈도우의 "권장")"""
+        if m.get("scale") is None:
+            return "auto"
         size = monscale.mode_size(m.get("mode"))
         if size is None:                            # "preferred" — 모니터의 기본 모드 크기
             mon = next((x for x in (hyprctl("monitors", "all", js=True) or [])

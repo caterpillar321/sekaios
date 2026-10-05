@@ -171,7 +171,10 @@ def build(store):
                     w["res"].set_active_id("preferred")
                 w["fill"](w["rate"], w["res"].get_active_id(), hz)
                 w["vrr"].set_active_id(str(int(d.get("vrr", 0))))
-                w["fill_scale"](w["scale"], w["res"].get_active_id(), d.get("scale", 1.0))
+                live = next((m.get("scale") for m in (hyprctl("monitors", js=True) or [])
+                             if n in (m.get("name"), display_key(m))), 1.0)
+                # 고른 적이 없으면(auto) 합성기가 고른 지금 배율을 보인다
+                w["fill_scale"](w["scale"], w["res"].get_active_id(), d.get("scale") or live)
                 w["tr"].set_active_id(str(int(d.get("transform", 0))))
         finally:
             quiet["on"] = False
@@ -208,7 +211,7 @@ def build(store):
         # 이번에 처음 설정한 모니터는 설정이 없던 상태(권장 모드)로
         for n in cur:
             if n not in snap:
-                keyword("monitor", f"{n}, preferred, auto, 1")
+                keyword("monitor", f"{n}, preferred, auto, auto")
         sync_widgets()
         if arrange["view"] is not None:          # 배치 그림도 실제 위치로
             GLib.timeout_add(400, refresh_arrange)
@@ -403,7 +406,7 @@ def build(store):
             # 해상도를 바꾸면 그 해상도의 가장 높은 주사율로 (윈도우와 같게)
             fill_rates(rc, v)
             # 배율 목록도 새 해상도에 맞게 (지금 배율이 안 되면 가장 가까운 값 — 적용할 때 store 가 똑같이 맞춘다)
-            ctl[n]["fill_scale"](ctl[n]["scale"], v, entry(n).get("scale", 1.0))
+            ctl[n]["fill_scale"](ctl[n]["scale"], v, entry(n).get("scale") or float(ctl[n]["scale"].get_active_id() or 1.0))
             apply_mode(n, v, rc.get_active_id())
 
         def on_rate(v, n=name):
@@ -535,7 +538,7 @@ def build(store):
         # 설정이 비면 apply_display 는 아무것도 안 보낸다 → 지금 화면에도 직접 권장값을
         for n in dict.fromkeys(names):
             if n:
-                keyword("monitor", f"{n}, preferred, auto, 1")
+                keyword("monitor", f"{n}, preferred, auto, auto")
         sync_widgets()
         # reset_section 도 다시 그리기를 요청하지만, 꺼 뒀던 모니터가 켜지기까지 틈이 있다 — 그 요청을
         #   조금 뒤로 미룬다 (같은 페이지 요청은 나중 것만 남는다. 그동안 칸은 위 sync_widgets 가 맞춘다)

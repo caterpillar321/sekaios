@@ -8,7 +8,7 @@ OUT=/build/deb
 #   예전엔 여기서 원본에 patch-*.py 를 적용했다. 이제 그 고친 것들은 포크의 커밋이다 (git log v0.50.1..sekai).
 #   재현할 수 있게 커밋을 고정한다 — 합성기를 고치면 포크에 커밋·푸시하고 여기 REF 와 rev_for 를 올린다.
 SEKAICOMP_URL="https://github.com/caterpillar321/worldlink.git"
-SEKAICOMP_REF="d69fd76060aaf162ab7c0c1b06fbbc14b3d78def"
+SEKAICOMP_REF="fa13ff3fa7b3b76944d3fa379429b19ab82bfb6c"
 MAINT="SekaiOS <sekai@localhost>"
 REV="sekai2"
 # 패키지별 리비전 (고친 패키지만 올린다 → apt 가 그 패키지만 업그레이드)
@@ -75,7 +75,8 @@ REV="sekai2"
 #   ── 2026-10-04: WorldLink 기능 동결 (sekai34) — 1차 마일스톤까지 새 기능 없이 버그 수정·보안 백포트만
 #      sekai35: 레이어 창의 부분 표면도 damage — 시작 메뉴 안 GTK3 팝오버(전원 메뉴) 강조가 조각으로만 보이던 것 (포크 46e5384) — hyprbars sekai32 · hyprexpo sekai20
 #      sekai36: 사용자에게 보이는 글의 "Hyprland" 를 WorldLink 로 — 설정 오류 막대·알림·충돌 보고서·X11 창 관리자 이름 (포크 d69fd76) — hyprbars sekai33 · hyprexpo sekai21
-rev_for() { case "$1" in hyprbars) echo sekai33 ;; hyprexpo) echo sekai21 ;; worldlink|sekaicomp|hyprland) echo sekai36 ;; *) echo "$REV" ;; esac; }
+#      sekai37: 자동 배율 — 고른 모드로 계산(첫 적용 때 늘 1 이던 것), 물리 크기를 모르면(TV·프로젝터·VM) 1, 짧은 변 논리 720px 이상 (포크 fa13ff3) — hyprbars sekai34 · hyprexpo sekai22
+rev_for() { case "$1" in hyprbars) echo sekai34 ;; hyprexpo) echo sekai22 ;; worldlink|sekaicomp|hyprland) echo sekai37 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
