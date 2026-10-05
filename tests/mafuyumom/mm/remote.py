@@ -1,6 +1,9 @@
 """VM 안에서 명령 — SSH (사용자 세션 환경으로, 또는 sudo 로 root)."""
 import shlex
+import socket
+import atexit
 import subprocess
+import time
 
 from . import config
 
@@ -77,6 +80,40 @@ def pull(remote, local):
                         "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
                         f"{tgt}:{remote}", local], capture_output=True, text=True, timeout=300)
     return p.returncode == 0
+
+
+_probe_fwd = None
+_probe_port = None
+
+
+def probe_url():
+    """방화벽 시험의 '밖에서 들어오는 연결' 주소 — VM 은 QEMU 포트 연결, 실기는 다른 PC 에서 LAN 으로
+    (거쳐 갈 곳이 있으면 그 PC 에서 ssh -L 로 — 시험대 입장에선 LAN 의 다른 기계가 붙는 것)"""
+    global _probe_fwd, _probe_port
+    if not config.REAL:
+        return f"http://127.0.0.1:{config.PROBE_PORT}/"
+    host = config.REAL.split("@")[-1]
+    if not config.REAL_JUMP:
+        return f"http://{host}:8765/"
+    if _probe_fwd is None or _probe_fwd.poll() is not None:
+        # 빈 포트를 따로 — PROBE_PORT 는 남아 있는 MafuyuMom VM 이 쥐고 있을 수 있다 (그럼 VM 을 찔러 놓고 통과로 본다)
+        with socket.socket() as so:
+            so.bind(("127.0.0.1", 0))
+            _probe_port = so.getsockname()[1]
+        _probe_fwd = subprocess.Popen(["ssh", "-N", "-o", "ExitOnForwardFailure=yes", "-o", "LogLevel=ERROR",
+                                       "-L", f"127.0.0.1:{_probe_port}:{host}:8765", config.REAL_JUMP],
+                                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        atexit.register(_probe_fwd.terminate)
+        for _ in range(30):
+            if _probe_fwd.poll() is not None:
+                break
+            with socket.socket() as so:
+                if so.connect_ex(("127.0.0.1", _probe_port)) == 0:
+                    break
+            time.sleep(0.5)
+        if _probe_fwd.poll() is not None:
+            raise RuntimeError(f"{config.REAL_JUMP} 을 거친 포트 연결(→ {host}:8765)을 열지 못했습니다")
+    return f"http://127.0.0.1:{_probe_port}/"
 
 
 def alive(timeout=3):

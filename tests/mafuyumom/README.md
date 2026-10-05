@@ -69,4 +69,20 @@ def start_menu_list(t):
 | use | 메모장 저장·다시 열기, 계산기, 탐색기(새 폴더·이름 바꾸기·휴지통), 사진, 터미널, Chromium, 작업 관리자(끝내기), 컴퓨터 관리 |
 | system | 복원 지점 만들기·삭제, 계정 추가·삭제, (느림) 복원하고 다시 시작 → 복원 취소 |
 
-다음: 업데이트, 사용자 전환, Flathub(느림), 접근성·보안 회귀. 실기(노트북·SFF)용 입력(uinput)도.
+다음: 업데이트, 사용자 전환, Flathub(느림), 접근성·보안 회귀.
+
+## 실기 모드 (MM_REAL)
+
+VM 대신 실제 PC 를 시험한다. 입력은 그 PC 의 가상 키보드·태블릿(`real/mm-uinput.py`, root), 화면은 `grim`.
+
+```sh
+# 시험할 PC 에서 한 번 (miku 계정·개발 키·uinput 모듈)
+sudo sh real/setup-target.sh
+# 서버에서 — 집 공유기 안이면 거쳐 갈 곳을 MM_REAL_JUMP 로
+MM_REAL=miku@192.168.0.56 MM_REAL_JUMP=homedesktop ./mafuyumom run -s session -s windows --reuse --keep
+```
+
+- 화면 크기가 1920x1080 이 아니면 `MM_REAL_SCREEN=2560x1440`.
+- VM 에만 있는 동작(QEMU 의 전원 단추·절전 확인)을 쓰는 시험은 건너뜀으로 나온다.
+- 방화벽 시험의 "밖에서 들어오는 연결"은 거쳐 갈 PC 에서 LAN 으로 붙는다 (`ssh -L`, 빈 포트를 따로 잡는다).
+- 시험이 계정·방화벽·복원 지점을 바꾸니 쓰는 PC 에는 돌리지 말 것.

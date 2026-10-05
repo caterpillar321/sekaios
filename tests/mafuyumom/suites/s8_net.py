@@ -3,7 +3,7 @@ root 도우미가 이상한 인자를 거절하나 (보안 회귀)."""
 import time
 import urllib.request
 
-from mm import config
+from mm import config, remote
 from mm.runner import test
 
 SETTINGS = "sekai-settings"
@@ -11,9 +11,9 @@ HELPER = "/usr/libexec/sekai/sekai-firewall"
 
 
 def probe():
-    """호스트에서 VM 의 8765 로 HTTP — 답이 오면 True (QEMU 의 포트 연결을 거친다)"""
+    """밖에서 시험대의 8765 로 HTTP — 답이 오면 True (VM 은 QEMU 포트 연결, 실기는 LAN 의 다른 PC 에서)"""
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{config.PROBE_PORT}/", timeout=4) as r:
+        with urllib.request.urlopen(remote.probe_url(), timeout=4) as r:
             return r.status == 200
     except Exception:
         return False
