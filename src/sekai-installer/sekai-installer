@@ -119,6 +119,20 @@ def human(b):
     return f"{gb / 1000:.1f} TB" if gb >= 1000 else f"{gb:.0f} GB"
 
 
+def tpm_ready():
+    """TPM 2.0 이 있고 보안 부팅이 켜졌나 — 둘 다면 켤 때 암호를 묻지 않게 봉인할 수 있다"""
+    tpm = os.path.exists("/dev/tpmrm0") or os.path.exists("/dev/tpm0")
+    sb = False
+    try:
+        import glob
+        for f in glob.glob("/sys/firmware/efi/efivars/SecureBoot-*"):
+            with open(f, "rb") as fh:
+                sb = fh.read()[4:5] == b"\x01"
+    except OSError:
+        pass
+    return tpm, sb
+
+
 def ram_mb():
     try:
         with open("/proc/meminfo") as f:
@@ -148,16 +162,20 @@ class Installer(Gtk.Window):
         self.esp_mb = 512
         self.swap_mb = 0
         self.fs = "btrfs"                      # btrfs = 시스템 복원 지점을 쓸 수 있다 (고급 설정에서 ext4)
+        self.encrypt = False                   # 드라이브 암호화 — 기본 끔 (원하는 사람만)
+        self.tpm, self.secure_boot = tpm_ready()
+        self.recovery = None
         self.busy = False
 
         self.wz = W.Wizard("SekaiOS 설치", [
             ("welcome", "환영"), ("disk", "설치 위치"), ("confirm", "확인"),
-            ("install", "설치"), ("done", "완료"), ("error", None)])
+            ("install", "설치"), ("recovery", None), ("done", "완료"), ("error", None)])
         self.add(self.wz)
         self.wz.add_page("welcome", self.build_welcome())
         self.wz.add_page("disk", self.build_disk())
         self.wz.add_page("confirm", self.build_confirm())
         self.wz.add_page("install", self.build_install())
+        self.wz.add_page("recovery", self.build_recovery())
         self.wz.add_page("done", self.build_done())
         self.wz.add_page("error", self.build_error())
         self.connect("delete-event", self.on_close)
@@ -237,6 +255,38 @@ class Installer(Gtk.Window):
         self.plan_legend = W.label("", "plan-legend", wrap=True)
         box.pack_start(self.plan_legend, False, False, 0)
 
+        # 드라이브 암호화 (BitLocker 처럼) — 기본 끔
+        self.enc_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.enc_check = Gtk.CheckButton(label="드라이브 암호화 — 컴퓨터를 잃어버려도 남이 파일을 읽지 못하게")
+        self.enc_check.connect("toggled", lambda b: self._set_encrypt(b.get_active()))
+        self.enc_box.pack_start(self.enc_check, False, False, 0)
+        self.enc_detail = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.enc_detail.set_margin_start(28)
+        self.enc_note = W.label("", "row-sub", wrap=True)
+        self.enc_detail.pack_start(self.enc_note, False, False, 0)
+        self.pin_check = Gtk.CheckButton(label="켤 때 PIN 도 묻기 — 더 안전합니다 (TPM 만 쓰면 부팅 USB 로 우회할 길이 남습니다)")
+        self.pin_check.connect("toggled", lambda *_: self._enc_changed())
+        self.enc_detail.pack_start(self.pin_check, False, False, 0)
+        grid = Gtk.Grid(column_spacing=12, row_spacing=8)
+        self.secret1 = Gtk.Entry(visibility=False)
+        self.secret2 = Gtk.Entry(visibility=False)
+        self.secret1_lbl = W.label("", "row-title")
+        self.secret2_lbl = W.label("", "row-title")
+        for w in (self.secret1, self.secret2):
+            w.set_width_chars(24)
+            w.connect("changed", lambda *_: self._enc_changed())
+        grid.attach(self.secret1_lbl, 0, 0, 1, 1)
+        grid.attach(self.secret1, 1, 0, 1, 1)
+        grid.attach(self.secret2_lbl, 0, 1, 1, 1)
+        grid.attach(self.secret2, 1, 1, 1, 1)
+        self.secret_grid = grid
+        self.enc_detail.pack_start(grid, False, False, 0)
+        self.enc_err = W.label("", "row-sub warn", wrap=True)
+        self.enc_detail.pack_start(self.enc_err, False, False, 0)
+        self.enc_box.pack_start(self.enc_detail, False, False, 0)
+        self.enc_detail.set_no_show_all(True)
+        box.pack_start(self.enc_box, False, False, 8)
+
         # 고급
         exp = Gtk.Expander(label="고급 설정")
         adv = Gtk.Grid(column_spacing=16, row_spacing=10)
@@ -278,7 +328,60 @@ class Installer(Gtk.Window):
 
     def _set_fs(self, v):
         self.fs = v or "btrfs"
+        if self.fs != "btrfs" and self.encrypt:
+            self.enc_check.set_active(False)
+        self.enc_check.set_sensitive(self.fs == "btrfs")
         self._plan()
+
+    # ── 드라이브 암호화 ──
+    def _use_tpm(self):
+        return self.tpm and self.secure_boot
+
+    def _set_encrypt(self, on):
+        self.encrypt = on
+        self.enc_detail.set_visible(on)
+        if on:
+            for w in self.enc_detail.get_children():
+                w.show_all()
+        self._enc_changed()
+        self._plan()
+
+    def _enc_changed(self):
+        """칸들의 뜻과 보이기를 고르고, 다음으로 갈 수 있나를 정한다"""
+        if not self.encrypt:
+            self.wz.set_next_enabled(self.disk is not None)
+            return
+        tpm = self._use_tpm()
+        pin = tpm and self.pin_check.get_active()
+        self.pin_check.set_visible(tpm)
+        if tpm:
+            self.enc_note.set_text("이 컴퓨터의 보안 칩(TPM 2.0)과 보안 부팅으로 잠급니다 — 켤 때 암호를 묻지 않습니다. "
+                                   "설치가 끝나면 복구 키(48자리)를 보여 드립니다. 보안 부팅을 끄거나 메인보드를 바꾸면 "
+                                   "복구 키가 필요합니다.")
+        else:
+            why = "TPM 2.0 이 없어" if not self.tpm else "보안 부팅이 꺼져 있어"
+            self.enc_note.set_text(f"{why} 켤 때마다 암호를 묻습니다. 설치가 끝나면 복구 키(48자리)도 보여 드립니다.")
+        need = pin or not tpm
+        self.secret_grid.set_visible(need)
+        if need:
+            self.secret_grid.show_all()
+        self.secret1_lbl.set_text("PIN (4~32자)" if pin else "암호 (8자 이상)")
+        self.secret2_lbl.set_text("PIN 확인" if pin else "암호 확인")
+        a, b = self.secret1.get_text(), self.secret2.get_text()
+        err = ""
+        if need:
+            if pin and not re.fullmatch(r"[0-9A-Za-z]{4,32}", a):
+                err = "PIN 은 숫자·영문 4~32자" if a else ""
+            elif not pin and len(a) < 8:
+                err = "암호는 8자 이상" if a else ""
+            elif a != b:
+                err = "두 칸이 다릅니다" if b else ""
+            ok = not err and a and a == b
+        else:
+            ok = True
+        self.enc_err.set_text(err)
+        self.enc_err.set_visible(bool(err))
+        self.wz.set_next_enabled(bool(ok) and self.disk is not None)
 
     def go_disk(self, forward=True):
         self.disk_list.clear()
@@ -339,7 +442,7 @@ class Installer(Gtk.Window):
         except Exception:
             self.disk_id = []
         self._plan()
-        self.wz.set_next_enabled(True)
+        self._enc_changed()             # 암호화를 켰으면 칸이 맞아야 다음으로
 
     def _plan(self):
         for c in self.plan.get_children():
@@ -352,10 +455,11 @@ class Installer(Gtk.Window):
             return
         total = d["size"] / 1000 / 1000            # 디스크 크기 표시와 같은 단위(10진 GB)로
         root = total - self.esp_mb * 1.048576 - self.swap_mb * 1.048576
-        segs = [("esp", "ESP", self.esp_mb)]
+        root -= 1024 * 1.048576
+        segs = [("esp", "ESP", self.esp_mb), ("esp", "부팅", 1024)]
         if self.swap_mb:
             segs.append(("swap", "스왑", self.swap_mb))
-        segs.append(("root", "SekaiOS", root))
+        segs.append(("root", "SekaiOS · 암호화" if self.encrypt else "SekaiOS", root))
         for cls, name, mb in segs:
             b = Gtk.Box()
             b.get_style_context().add_class("plan-seg")
@@ -370,8 +474,10 @@ class Installer(Gtk.Window):
         self.plan.show_all()
         fs_note = ("btrfs 로 만들어 업데이트 전마다 시스템 복원 지점을 남깁니다 (개인 파일은 건드리지 않음)"
                    if self.fs == "btrfs" else "ext4 로 만듭니다 (시스템 복원 지점 없음)")
-        legend = (f"ESP 는 FAT32, SekaiOS 는 {fs_note}. 부트로더(GRUB, 보안 부팅 지원)는 이 디스크의 ESP 에만 "
-                  "설치되고, 다른 디스크의 Windows 는 부팅 메뉴에서 자동으로 찾아 보여 줍니다.")
+        legend = (f"ESP 는 FAT32, 부팅(커널)은 ext4, SekaiOS 는 {fs_note}"
+                  + (" — 드라이브 전체를 암호화합니다(LUKS2)" if self.encrypt else "") +
+                  ". 부트로더(GRUB, 보안 부팅 지원)는 이 디스크의 ESP 에만 설치되고, 다른 디스크의 Windows 는 "
+                  "부팅 메뉴에서 자동으로 찾아 보여 줍니다.")
         self.plan_legend.set_text(legend)
 
     # ── 3. 확인 ──
@@ -407,6 +513,9 @@ class Installer(Gtk.Window):
             self.sum_list.remove(c)
         rows = [("설치할 디스크", f"{d['model']}  ({human(d['size'])}, {d['path']})"),
                 ("부팅 파티션 (ESP)", f"{self.esp_mb} MB · FAT32 · 새로 만듦"),
+                ("부팅 (커널)", "1 GB · ext4"),
+                ("드라이브 암호화", (("켬 — TPM + PIN" if self.pin_check.get_active() else "켬 — TPM (켤 때 묻지 않음)")
+                                   if self._use_tpm() else "켬 — 켤 때 암호") if self.encrypt else "끔"),
                 ("스왑", f"{self.swap_mb // 1024} GB" if self.swap_mb else "없음"),
                 ("SekaiOS", "나머지 전부 · " + ("btrfs (시스템 복원 지점)" if self.fs == "btrfs" else "ext4")),
                 ("부트로더", "GRUB (보안 부팅 지원) — 이 디스크의 ESP 에만"),
@@ -504,6 +613,12 @@ class Installer(Gtk.Window):
     def _cmd(self):
         args = [BACKEND, "--disk", self.disk, "--esp-mb", str(self.esp_mb),
                 "--swap-mb", str(self.swap_mb), "--fs", self.fs, "--yes-erase"]
+        if self.encrypt:
+            args.append("--encrypt")
+            if self._use_tpm():
+                args.append("--tpm")
+                if self.pin_check.get_active():
+                    args.append("--pin")
         ident = getattr(self, "disk_id", [])
         if ident:
             args += ["--expect-size", ident[0]]
@@ -528,10 +643,19 @@ class Installer(Gtk.Window):
             GLib.idle_add(self._line, "DONE")
             return
         try:
-            p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         except OSError as e:
             GLib.idle_add(self._line, f"ERROR 설치 프로그램을 실행하지 못했습니다: {e}")
             return
+        # 암호화 비밀은 표준 입력으로 (인자는 ps 에 보인다): 첫 줄 암호, 둘째 줄 PIN
+        try:
+            if self.encrypt:
+                pin = self._use_tpm() and self.pin_check.get_active()
+                secret = self.secret1.get_text() if (pin or not self._use_tpm()) else ""
+                p.stdin.write(("" if pin else secret) + "\n" + (secret if pin else "") + "\n")
+            p.stdin.close()
+        except OSError:
+            pass
         got_end = False
         for line in p.stdout:
             line = line.rstrip("\n")
@@ -557,13 +681,69 @@ class Installer(Gtk.Window):
             self.pct.set_text(f"{v}%")
             if text:
                 self.step_sub.set_text(text)
+        elif kind == "RECOVERY":
+            self.recovery = rest.strip()
         elif kind == "DONE":
             self.busy = False
-            self.go_done()
+            if self.recovery:
+                self.go_recovery()
+            else:
+                self.go_done()
         elif kind == "ERROR":
             self.busy = False
             self.go_error(rest)
         return False
+
+    # ── 4-b. 복구 키 (드라이브 암호화) ──
+    def build_recovery(self):
+        box = W.page_box("복구 키를 저장하세요",
+                         "보안 부팅을 끄거나, 메인보드·보안 칩이 바뀌거나, PIN·암호를 잊으면 이 48자리 복구 키로만 "
+                         "드라이브를 열 수 있습니다. 잃어버리면 SekaiOS 도 아무도 열어 드릴 수 없습니다.")
+        self.rk_lbl = W.label("", "recovery-key", 0.5)
+        self.rk_lbl.set_selectable(True)
+        box.pack_start(self.rk_lbl, False, False, 18)
+        h = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        h.set_halign(Gtk.Align.CENTER)
+        save = Gtk.Button(label="파일로 저장 (USB 등)…")
+        save.connect("clicked", lambda *_: self._save_recovery())
+        h.pack_start(save, False, False, 0)
+        box.pack_start(h, False, False, 0)
+        self.rk_saved = W.label("", "row-sub", 0.5, wrap=True)
+        box.pack_start(self.rk_saved, False, False, 0)
+        box.pack_start(W.label("설치한 디스크가 아닌 곳(USB·휴대폰 사진·종이)에 두세요. 설치한 뒤에는 "
+                               "설정 › 장치 암호화에서 다시 볼 수 있습니다.", "row-sub", 0.5, wrap=True), False, False, 0)
+        self.rk_ack = Gtk.CheckButton(label="복구 키를 안전한 곳에 저장했습니다")
+        self.rk_ack.set_halign(Gtk.Align.CENTER)
+        self.rk_ack.connect("toggled", lambda b: self.wz.set_next_enabled(b.get_active()))
+        box.pack_start(self.rk_ack, False, False, 10)
+        return box
+
+    def go_recovery(self):
+        self.rk_lbl.set_text(self.recovery)
+        self.rk_ack.set_active(False)
+        self.wz.show_page("recovery", back=None, next_label="다음", next_enabled=False)
+        self.wz.on_next = self.go_done
+
+    def _save_recovery(self):
+        d = Gtk.FileChooserDialog(title="복구 키 저장", transient_for=self, action=Gtk.FileChooserAction.SAVE)
+        d.add_button("취소", Gtk.ResponseType.CANCEL)
+        d.add_button("저장", Gtk.ResponseType.OK)
+        d.set_do_overwrite_confirmation(True)
+        d.set_current_name("SekaiOS-복구-키.txt")
+        media = "/media"
+        if os.path.isdir(media):
+            d.set_current_folder(media)
+        if d.run() == Gtk.ResponseType.OK:
+            path = d.get_filename()
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("SekaiOS 드라이브 암호화 복구 키\n\n" + self.recovery + "\n\n"
+                            "부팅 화면에서 암호를 물으면 이 키를 - 와 함께 또는 숫자만 입력하세요.\n"
+                            f"설치한 날: {time.strftime('%Y-%m-%d %H:%M')}\n")
+                self.rk_saved.set_text(f"저장했습니다: {path}")
+            except OSError as e:
+                self.rk_saved.set_text(f"저장하지 못했습니다: {e}")
+        d.destroy()
 
     # ── 5. 완료 ──
     def build_done(self):
@@ -627,7 +807,8 @@ def main():
         if os.path.exists(flag):
             return 0
         open(flag, "w").close()
-    W.load_css()
+    W.load_css(".recovery-key { font-family: monospace; font-size: 19pt; font-weight: 700; padding: 14px; "
+               "border: 1px solid rgba(128,128,128,0.45); border-radius: 8px; }")
     win = Installer()
     win.connect("destroy", Gtk.main_quit)
     win.show_all()

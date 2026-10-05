@@ -512,6 +512,8 @@ SETTINGS_ITEMS = [
                             "노트북 닫기", "덮개를 닫으면")),
     ("power", "로그아웃 · 다시 시작 · 종료", ("로그아웃", "logout", "다시 시작", "재시작", "재부팅",
                                        "reboot", "restart", "시스템 종료", "shutdown", "종료", "끄기")),
+    ("encryption", "장치 암호화", ("암호화", "bitlocker", "비트로커", "luks", "tpm", "복구 키", "recovery key",
+                               "드라이브 암호화", "pin")),
     ("wineapps", "Windows 앱", ("wine", "와인", "exe", "msi", "윈도우 프로그램", "windows 프로그램", "윈도우 앱",
                              "C: 드라이브", "prefix")),
     ("defaults", "기본 웹 브라우저", ("브라우저", "browser", "웹", "web", "chromium", "firefox")),

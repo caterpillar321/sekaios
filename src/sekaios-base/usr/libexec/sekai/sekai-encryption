@@ -1,0 +1,180 @@
+#!/bin/bash
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 드라이브 암호화 (LUKS2 + TPM2) — root 도우미
+#
+#    sekai-encryption status                      상태 (KEY=값 줄들 — 누구나 읽어도 되는 것만)
+#    sekai-encryption recovery-key                복구 키 보기 (root 전용 파일)
+#    sekai-encryption recovery-new                새 복구 키 — 옛 것은 지운다 (TPM 이나 지금 복구 키로 연다)
+#    sekai-encryption tpm-enroll [--pin]          TPM 에 봉인 (PCR 7 — 보안 부팅 상태). --pin 이면 표준 입력 첫 줄이 새 PIN
+#    sekai-encryption tpm-remove                  TPM 봉인 지우기 (부팅 때마다 복구 키·암호)
+#    sekai-encryption install-setup <장치> <이름> <복구키파일> [--tpm] [--pin]
+#        설치 프로그램이 chroot 안에서 부른다 — 복구 키 두 꼴(-있음·없음) 키슬롯은 이미 있다고 보고
+#        TPM 봉인, /etc/sekai/encryption.conf · /etc/sekai/recovery-key 를 쓴다
+#
+#  잠금을 푸는 비밀(복구 키·PIN)은 인자로 받지 않는다 (ps 에 보인다) — 표준 입력이나 root 전용 파일로.
+#  봉인을 바꾸면 initramfs 를 다시 만든다 (TPM 을 쓰는지가 initramfs 에 들어간다 — hooks/sekai-tpm2).
+# ═══════════════════════════════════════════════════════════════
+set -euo pipefail
+umask 077
+
+CONF=/etc/sekai/encryption.conf
+RKEY=/etc/sekai/recovery-key
+PCRS=7
+
+die() { echo "sekai-encryption: $*" >&2; exit 1; }
+[ "$(id -u)" -eq 0 ] || die "관리자 권한이 필요합니다"
+
+pcr7() { tr -d ' \n' < /sys/class/tpm/tpm0/pcr-sha256/7 2>/dev/null | tr 'a-f' 'A-F'; }
+
+conf_get() { sed -n "s/^$1=\([A-Za-z0-9_-]*\)$/\1/p" "$CONF" 2>/dev/null | head -1; }
+
+conf_set() {  # 키 값
+    mkdir -p /etc/sekai
+    touch "$CONF"; chmod 644 "$CONF"
+    if grep -q "^$1=" "$CONF"; then sed -i "s/^$1=.*/$1=$2/" "$CONF"; else echo "$1=$2" >> "$CONF"; fi
+}
+
+luks_dev() {
+    local u; u=$(conf_get LUKS_UUID)
+    [ -n "$u" ] && [ -b "/dev/disk/by-uuid/$u" ] || die "암호화된 드라이브가 아닙니다"
+    echo "/dev/disk/by-uuid/$u"
+}
+
+secure_boot() {  # 1 = 켜짐
+    local f
+    f=$(ls /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c 2>/dev/null | head -1)
+    [ -n "$f" ] && [ "$(od -An -t u1 -j4 -N1 "$f" 2>/dev/null | tr -d ' ')" = 1 ] && echo 1 || echo 0
+}
+
+tpm_present() { [ -e /dev/tpmrm0 ] || [ -e /dev/tpm0 ]; }
+
+new_recovery_key() {  # 48자리 (BitLocker 처럼 6자리 8묶음)
+    python3 -c "import secrets;print('-'.join(f'{secrets.randbelow(10**6):06d}' for _ in range(8)))"
+}
+
+rebuild_initramfs() { update-initramfs -u -k all >/dev/null 2>&1 || die "initramfs 를 다시 만들지 못했습니다"; }
+
+GLOCK=/etc/sekai/grub-lock
+# GRUB 메뉴 편집 잠금 (/etc/grub.d/01_sekai-lock) — 아무도 모르는 무작위 암호의 해시만 남긴다
+grub_lock_on() {
+    local pw h
+    pw=$(python3 -c "import secrets;print(secrets.token_urlsafe(32))")
+    h=$(printf '%s\n%s\n' "$pw" "$pw" | grub-mkpasswd-pbkdf2 2>/dev/null | sed -n 's/.* \(grub\.pbkdf2\.sha512\.[^ ]*\)$/\1/p')
+    [ -n "$h" ] || die "GRUB 잠금 해시를 만들지 못했습니다"
+    printf '%s\n' "$h" > "$GLOCK"; chmod 600 "$GLOCK"
+}
+grub_lock_off() { rm -f "$GLOCK"; }
+update_grub() { [ "${1:-}" = now ] && /usr/libexec/sekai/update-grub-locked >/dev/null 2>&1 || true; }
+
+# 지금 키로 여는 파일 — TPM 으로 열 수 있으면 그것으로, 아니면 저장된 복구 키
+unlock_args() {
+    if [ -s "$RKEY" ]; then
+        local t; t=$(mktemp /run/sekai-enc.XXXXXX)
+        tr -d '\n' < "$RKEY" > "$t"
+        echo "--unlock-key-file=$t"
+    else
+        echo "--unlock-tpm2-device=auto"
+    fi
+}
+
+tpm_enroll() {  # 장치 pin(0|1) [잠금 해제 인자]
+    local dev="$1" pin="$2" unlock="$3"
+    tpm_present || die "TPM 이 없습니다"
+    [ "$(secure_boot)" = 1 ] || die "보안 부팅이 꺼져 있어 TPM 에 봉인하지 않습니다 (꺼진 상태에 묶으면 누구나 열 수 있습니다)"
+    local args=(--tpm2-device=auto "--tpm2-pcrs=$PCRS" --wipe-slot=tpm2 "$unlock")
+    if [ "$pin" = 1 ]; then
+        local p; IFS= read -r p || true
+        [[ "$p" =~ ^[0-9A-Za-z]{4,32}$ ]] || die "PIN 은 4~32자 (숫자·영문)"
+        args+=(--tpm2-with-pin=yes)
+        NEWPIN="$p" systemd-cryptenroll "${args[@]}" "$dev" >/dev/null 2>&1 || die "TPM 에 봉인하지 못했습니다"
+    else
+        systemd-cryptenroll "${args[@]}" "$dev" >/dev/null 2>&1 || die "TPM 에 봉인하지 못했습니다"
+    fi
+}
+
+add_recovery() {  # 장치 새키 잠금해제키파일 — 두 꼴(- 있음·없음)을 키슬롯으로
+    local dev="$1" key="$2" unlockf="$3" k2
+    k2=$(mktemp /run/sekai-enc.XXXXXX)
+    for form in "$key" "${key//-/}"; do
+        printf '%s' "$form" > "$k2"
+        cryptsetup luksAddKey --batch-mode --key-file "$unlockf" "$dev" "$k2" || { rm -f "$k2"; die "복구 키를 더하지 못했습니다"; }
+    done
+    rm -f "$k2"
+}
+
+cmd="${1:-status}"; shift || true
+case "$cmd" in
+status)
+    if [ ! -s "$CONF" ]; then echo "ENCRYPTED=0"; exit 0; fi
+    echo "ENCRYPTED=1"
+    echo "TPM=$(conf_get TPM)"
+    echo "PIN=$(conf_get PIN)"
+    echo "TPM_PRESENT=$(tpm_present && echo 1 || echo 0)"
+    echo "SECURE_BOOT=$(secure_boot)"
+    echo "RECOVERY_SAVED=$([ -s "$RKEY" ] && echo 1 || echo 0)"
+    ;;
+recovery-key)
+    [ -s "$RKEY" ] || die "저장된 복구 키가 없습니다"
+    cat "$RKEY"
+    ;;
+recovery-new)
+    dev=$(luks_dev)
+    [ -s "$RKEY" ] || die "지금 복구 키를 몰라 새로 만들 수 없습니다"
+    old=$(tr -d '\n' < "$RKEY")
+    oldf=$(mktemp /run/sekai-enc.XXXXXX); printf '%s' "$old" > "$oldf"
+    new=$(new_recovery_key)
+    add_recovery "$dev" "$new" "$oldf"
+    # 옛 키 두 꼴을 지운다 (새 키로 열어서)
+    newf=$(mktemp /run/sekai-enc.XXXXXX); printf '%s' "$new" > "$newf"
+    for form in "$old" "${old//-/}"; do
+        printf '%s' "$form" > "$oldf"
+        cryptsetup luksRemoveKey --batch-mode "$dev" "$oldf" >/dev/null 2>&1 || true
+    done
+    rm -f "$oldf" "$newf"
+    printf '%s\n' "$new" > "$RKEY"; chmod 600 "$RKEY"
+    echo "$new"
+    ;;
+tpm-enroll)
+    dev=$(luks_dev)
+    pin=0; [ "${1:-}" = --pin ] && pin=1
+    u=$(unlock_args)
+    tpm_enroll "$dev" "$pin" "$u"
+    rm -f /run/sekai-enc.*
+    conf_set TPM 1; conf_set PIN "$pin"; conf_set PCR7 "$(pcr7)"
+    grub_lock_on
+    rebuild_initramfs
+    update_grub now
+    echo "OK"
+    ;;
+tpm-remove)
+    dev=$(luks_dev)
+    systemd-cryptenroll --wipe-slot=tpm2 "$dev" >/dev/null 2>&1 || die "TPM 봉인을 지우지 못했습니다"
+    conf_set TPM 0; conf_set PIN 0
+    grub_lock_off
+    rebuild_initramfs
+    update_grub now
+    echo "OK"
+    ;;
+install-setup)
+    dev="${1:?장치}"; name="${2:?이름}"; rkf="${3:?복구 키 파일}"; shift 3
+    tpm=0; pin=0
+    for a in "$@"; do case "$a" in --tpm) tpm=1 ;; --pin) pin=1 ;; *) die "모르는 옵션 $a" ;; esac; done
+    [[ "$name" =~ ^[a-z0-9-]+$ ]] || die "이름이 이상합니다"
+    [ -b "$dev" ] || die "장치가 없습니다: $dev"
+    uuid=$(cryptsetup luksUUID "$dev")
+    mkdir -p /etc/sekai
+    printf 'LUKS_UUID=%s\nLUKS_NAME=%s\nTPM=0\nPIN=0\n' "$uuid" "$name" > "$CONF"; chmod 644 "$CONF"
+    tr -d '\n' < "$rkf" > "$RKEY"; echo >> "$RKEY"; chmod 600 "$RKEY"
+    if [ "$tpm" = 1 ]; then
+        t=$(mktemp /run/sekai-enc.XXXXXX); tr -d '\n' < "$rkf" > "$t"
+        tpm_enroll "$dev" "$pin" "--unlock-key-file=$t"
+        rm -f "$t"
+        conf_set TPM 1; conf_set PIN "$pin"; conf_set PCR7 "$(pcr7)"
+        grub_lock_on          # update-grub 은 설치 프로그램이 부트로더를 설치할 때 돈다
+    fi
+    echo "OK"
+    ;;
+*)
+    sed -n '3,14p' "$0" | sed 's/^# \{0,1\}//'
+    exit 2 ;;
+esac

@@ -6,7 +6,7 @@ set -e
 [ "$(findmnt -no FSTYPE,FSROOT / 2>/dev/null)" = "btrfs /@" ] || [ -d /.sekai-restore/points ] || exit 0
 cat <<'MENU'
 if [ -f "$prefix/sekai-restore.cfg" ]; then
-	submenu '시스템 복원 (이전 상태로 되돌리기)' --class recovery $menuentry_id_option 'sekaios-restore' {
+	submenu '시스템 복원 (이전 상태로 되돌리기)' --class recovery --unrestricted $menuentry_id_option 'sekaios-restore' {
 		source "$prefix/sekai-restore.cfg"
 	}
 fi

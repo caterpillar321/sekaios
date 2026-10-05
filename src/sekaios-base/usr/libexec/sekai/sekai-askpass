@@ -1,0 +1,20 @@
+#!/bin/sh
+# 드라이브 암호화 — 부팅 화면에서 복구 키·암호를 한국어로 묻는다 (/etc/crypttab 의 keyscript= — cryptroot 훅이 initramfs 에 넣는다)
+#   데비안 cryptroot 의 기본 문구("Please unlock disk sekai-root")는 바꿀 수 없어 keyscript 로 대신 묻는다.
+#   cryptroot 가 표준 출력을 키로 쓰고, 틀리면 다시 부른다(CRYPTTAB_TRIED). TPM 으로 이미 열렸으면 불리지 않는다.
+tried="${CRYPTTAB_TRIED:-0}"
+if [ "$tried" -gt 0 ] 2>/dev/null; then
+    prompt="맞지 않습니다 — 복구 키(48자리) 또는 암호를 다시 입력하세요"
+else
+    prompt="드라이브가 잠겨 있습니다 — 복구 키(48자리) 또는 암호를 입력하세요"
+fi
+if [ -x /bin/plymouth ] && plymouth --ping 2>/dev/null; then
+    exec plymouth ask-for-password --prompt="$prompt"
+fi
+# 부팅 화면이 없으면 글자 화면에서
+printf '%s: ' "$prompt" >&2
+stty -echo 2>/dev/null
+IFS= read -r key
+stty echo 2>/dev/null
+echo >&2
+printf '%s' "$key"

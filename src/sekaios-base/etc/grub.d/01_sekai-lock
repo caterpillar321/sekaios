@@ -1,0 +1,14 @@
+#!/bin/sh
+# SekaiOS 드라이브 암호화 — GRUB 메뉴 편집·명령줄 잠금 (TPM 으로 저절로 여는 설치본만)
+#   TPM 은 보안 부팅 상태(PCR 7)만 보고 드라이브를 열어 준다. 그래서 부팅 메뉴에서 커널 명령줄을 고칠 수
+#   있으면(init=/bin/sh) 암호 없이 열린 드라이브에 들어온다 → 편집을 막는다.
+#   superuser 의 암호는 아무도 모른다 (sekai-encryption 이 무작위로 만들고 해시만 /etc/sekai/grub-lock 에).
+#   항목은 모두 --unrestricted 라 부팅·복원·Windows 는 그대로 고를 수 있다 (09_sekaios · 31_sekai-os-prober · 복원).
+set -e
+LOCK=/etc/sekai/grub-lock
+[ -s "$LOCK" ] || exit 0
+HASH=$(sed -n 's/^\(grub\.pbkdf2\.sha512\.[0-9]*\.[0-9A-F]*\.[0-9A-F]*\)$/\1/p' "$LOCK" | head -1)
+[ -n "$HASH" ] || exit 0
+echo 'set superusers="sekai-lock"'
+echo "password_pbkdf2 sekai-lock $HASH"
+echo "01_sekai-lock: 부팅 메뉴 편집 잠금" >&2

@@ -1,0 +1,7 @@
+#!/bin/sh
+# 다른 운영체제(Windows 등) 항목 — 데비안 30_os-prober 를 돌리고 항목마다 --unrestricted 를 붙인다
+#   (01_sekai-lock 으로 메뉴를 잠가도 Windows 는 암호 없이 고를 수 있게). 30_os-prober 는 실행 권한을 빼 둔다
+#   (sekaios-base — 항목이 두 벌이 되지 않게)
+set -e
+[ -f /etc/grub.d/30_os-prober ] || exit 0
+sh /etc/grub.d/30_os-prober | sed -e "s/^\([[:space:]]*\)\(menuentry\|submenu\) \('[^']*'\)/\1\2 \3 --unrestricted/"

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- SekaiOS 드라이브 암호화 도우미 — 설정 › 장치 암호화 가 pkexec 로 부른다 (복구 키 보기·새로 만들기, TPM 봉인·PIN).
+     복구 키를 보여 주므로 매번 인증한다 (auth_admin — 기억하지 않는다) -->
+<policyconfig>
+  <vendor>SekaiOS</vendor>
+  <action id="org.sekaios.encryption">
+    <description>Manage drive encryption</description>
+    <description xml:lang="ko">드라이브 암호화 관리</description>
+    <message>Authentication is required to see or change the drive encryption keys</message>
+    <message xml:lang="ko">드라이브 암호화 키를 보거나 바꾸려면 인증이 필요합니다</message>
+    <icon_name>drive-harddisk-system</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/sekai/sekai-encryption</annotate>
+  </action>
+</policyconfig>

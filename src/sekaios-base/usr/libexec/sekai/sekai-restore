@@ -358,11 +358,38 @@ def list_points():
     return pts
 
 
-def newest_kernel(root):
+def split_boot():
+    """/boot 가 따로 된 파티션인가 (2026-10 이후 새 설치 — 드라이브 암호화와 같은 구조).
+    그러면 복원 지점에 커널이 없다 — 커널은 /boot 에만 있고, 지점의 /usr/lib/modules 로 어느 커널인지 안다"""
+    return os.path.ismount("/boot")
+
+
+def _kernels_in(root):
+    if split_boot():
+        # 지점이 가진 모듈 중 아직 /boot 에 남아 있는 커널 (autoremove 로 지워진 커널은 못 켠다)
+        try:
+            mods = set(os.listdir(os.path.join(root, "usr/lib/modules")))
+            boot = {f[len("vmlinuz-"):] for f in os.listdir("/boot") if f.startswith("vmlinuz-")}
+        except OSError:
+            return []
+        return [k for k in mods & boot if os.path.isfile(f"/boot/initrd.img-{k}")]
     try:
-        ks = [f[len("vmlinuz-"):] for f in os.listdir(os.path.join(root, "boot")) if f.startswith("vmlinuz-")]
+        return [f[len("vmlinuz-"):] for f in os.listdir(os.path.join(root, "boot")) if f.startswith("vmlinuz-")]
     except OSError:
+        return []
+
+
+def newest_kernel(root):
+    ks = _kernels_in(root)
+    if not ks:
+        if split_boot():
+            # 지점의 커널이 /boot 에 없다 — 지금 커널로 켜고, initramfs 가 그 커널 모듈을 되돌린 시스템에 이어 붙인다
+            return _newest([f[len("vmlinuz-"):] for f in os.listdir("/boot") if f.startswith("vmlinuz-")])
         return None
+    return _newest(ks)
+
+
+def _newest(ks):
     if not ks:
         return None
 
@@ -514,19 +541,28 @@ def write_grub():
     blocks = []
     if backend() == "copy":
         blocks = RC.grub_blocks(uuid, opts, esc_grub, GRUB_MAX)
+    split = split_boot()
+    boot_uuid = run(["findmnt", "-no", "UUID", "/boot"], check=False).stdout.strip() if split else ""
     for p in (list_points()[:GRUB_MAX] if backend() == "btrfs" else []):
         k = p["kernel"]
         if not k:
             continue
-        base = f"/@snapshots/{p['number']}/snapshot/boot"
-        if not os.path.isfile(f"/.snapshots/{p['number']}/snapshot/boot/initrd.img-{k}"):
-            continue
+        if split:
+            # 커널은 /boot 파티션에 — 루트(암호화일 수 있다)는 GRUB 이 읽지 않는다
+            base = ""
+            if not os.path.isfile(f"/boot/initrd.img-{k}"):
+                continue
+        else:
+            base = f"/@snapshots/{p['number']}/snapshot/boot"
+            if not os.path.isfile(f"/.snapshots/{p['number']}/snapshot/boot/initrd.img-{k}"):
+                continue
         when = p["date"][:16]
         title = esc_grub(f"{when} — {p['description'] or p['kind_text']}")
         blocks.append(
-            f"menuentry '{title}' --class sekaios --class os {{\n"
-            f"\tload_video\n\tset gfxpayload=keep\n\tinsmod gzio\n\tinsmod part_gpt\n\tinsmod btrfs\n"
-            f"\tsearch --no-floppy --fs-uuid --set=root {uuid}\n"
+            f"menuentry '{title}' --class sekaios --class os --unrestricted {{\n"
+            f"\tload_video\n\tset gfxpayload=keep\n\tinsmod gzio\n\tinsmod part_gpt\n"
+            + (f"\tinsmod ext2\n\tsearch --no-floppy --fs-uuid --set=root {boot_uuid}\n" if split else
+               f"\tinsmod btrfs\n\tsearch --no-floppy --fs-uuid --set=root {uuid}\n") +
             f"\techo '복원 지점 {p['number']}번으로 되돌리는 중...'\n"
             f"\tlinux {base}/vmlinuz-{k} root=UUID={uuid} ro rootflags=subvol=@ sekai.restore={p['number']} {opts}\n"
             f"\tinitrd {base}/initrd.img-{k}\n}}\n")

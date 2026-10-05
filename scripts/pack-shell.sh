@@ -494,10 +494,11 @@ if [ "$1" = "configure" ]; then
         echo "refind refind/install_to_esp boolean false" | debconf-set-selections || true
     fi
     # 데비안의 10_linux 대신 09_sekaios 가 부팅 항목을 만든다 (항목이 두 벌이 되지 않게).
+    #   30_os-prober 는 31_sekai-os-prober 가 대신 돌린다 (항목에 --unrestricted — 드라이브 암호화의 GRUB 잠금)
     #   파일을 옮기지(dpkg-divert) 않고 실행 권한만 뺀다 — update-grub 은 실행 권한 없는 것을
     #   건너뛴다. 이 파일들은 grub-common 의 conffile 이라 옮기면 grub 업데이트 때 꼬인다.
     #   dpkg-statoverride 는 grub-common 이 업데이트돼도 유지된다.
-    for f in 10_linux 30_uefi-firmware; do
+    for f in 10_linux 30_uefi-firmware 30_os-prober; do
         # 아주 예전 판(sekai-desktop)이 옮겨 둔 것 되돌리기
         if dpkg-divert --listpackage "/etc/grub.d/$f" 2>/dev/null | grep -qx sekai-desktop; then
             dpkg-divert --package sekai-desktop --rename --quiet --remove "/etc/grub.d/$f" || true
@@ -554,7 +555,7 @@ cat > "$STAGE_B/DEBIAN/postrm" <<'PO'
 set -e
 if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
     # 데비안 부팅 항목을 되살리고, 우리 항목은 끈다 (conffile 이라 purge 전까진 남는다)
-    for f in 10_linux 30_uefi-firmware; do
+    for f in 10_linux 30_uefi-firmware 30_os-prober; do
         if dpkg-statoverride --list "/etc/grub.d/$f" >/dev/null 2>&1; then
             dpkg-statoverride --remove "/etc/grub.d/$f" || true
             [ -e "/etc/grub.d/$f" ] && chmod 755 "/etc/grub.d/$f"
@@ -589,7 +590,9 @@ Priority: optional
 Depends: shim-signed, grub-efi-amd64-signed, grub-efi-amd64-bin, grub2-common, os-prober,
  efibootmgr, mokutil, pciutils, openssl,
  plymouth (>= 24.004.60-5+sekai1), plymouth-themes,
- network-manager, systemd-resolved, flatpak, btrfs-progs, snapper, firewalld, power-profiles-daemon
+ network-manager, systemd-resolved, flatpak, btrfs-progs, snapper, firewalld, power-profiles-daemon,
+ cryptsetup, cryptsetup-initramfs, systemd-cryptsetup,
+ libtss2-esys-3.0.2-0t64, libtss2-rc0t64, libtss2-mu-4.0.1-0t64, libtss2-tcti-device0t64
 Replaces: sekai-desktop (<< ${FULL})
 Breaks: sekai-desktop (<< ${FULL})
 Description: SekaiOS base system

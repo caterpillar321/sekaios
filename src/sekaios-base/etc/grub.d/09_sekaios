@@ -19,7 +19,7 @@ entry() {  # 제목 클래스 id 커널 옵션
     v="${k#/boot/vmlinuz-}"
     rel_k=$(make_system_path_relative_to_its_root "$k")
     rel_i=$(make_system_path_relative_to_its_root "/boot/initrd.img-$v")
-    echo "menuentry '$title' --class $class --class os \$menuentry_id_option 'sekaios-$id' {"
+    echo "menuentry '$title' --class $class --class os --unrestricted \$menuentry_id_option 'sekaios-$id' {"
     echo "	load_video"
     echo "	set gfxpayload=keep"
     echo "	insmod gzio"
@@ -44,6 +44,9 @@ fi
 #   GRUB_CMDLINE_LINUX         모든 항목 (복구 모드 포함)
 #   GRUB_CMDLINE_LINUX_DEFAULT 보통 항목만 (데비안 기본값 "quiet" 는 겹쳐도 무해)
 ALWAYS="${GRUB_CMDLINE_LINUX:-}"
+# 드라이브 암호화로 GRUB 을 잠갔으면(01_sekai-lock) initramfs 가 실패해도 비상 셸 대신 다시 시작한다 —
+#   TPM 이 이미 드라이브를 연 뒤의 셸은 뒷문이 된다
+[ -s /etc/sekai/grub-lock ] && ALWAYS="$ALWAYS panic=10"
 # 부팅 화면·콘솔을 바탕화면과 같은 모니터 모드로 — sekai-bootmode 가 적는다 (video=이름:가로x세로@주사율).
 #   source 하지 않고 형식을 확인한 값만 쓴다
 VIDEO=$(sed -n 's/^SEKAI_VIDEO_OPTS="\(.*\)"$/\1/p' /var/lib/sekai/boot-video 2>/dev/null | head -1)
@@ -64,7 +67,7 @@ cat <<'FW'
 if [ "$grub_platform" = "efi" ]; then
 	fwsetup --is-supported
 	if [ "$?" = 0 ]; then
-		menuentry '펌웨어 설정 (UEFI)' --class efi $menuentry_id_option 'sekaios-firmware' {
+		menuentry '펌웨어 설정 (UEFI)' --class efi --unrestricted $menuentry_id_option 'sekaios-firmware' {
 			fwsetup
 		}
 	fi

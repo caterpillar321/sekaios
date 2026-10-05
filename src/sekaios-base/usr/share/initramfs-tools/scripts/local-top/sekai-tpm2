@@ -1,0 +1,54 @@
+#!/bin/sh
+# SekaiOS 드라이브 암호화 — TPM2 로 저절로 연다 (hooks/sekai-tpm2 가 넣은 것으로).
+#   데비안 cryptroot 는 local-top 의 맨 끝에 돌고, 이미 열린 매핑은 건너뛴다. 그래서 여기서 열면 암호를 묻지 않는다.
+#   못 열면(보안 부팅이 꺼졌다·펌웨어가 바뀌었다·TPM 이 없다·PIN 을 세 번 틀렸다) 아무것도 하지 않고 넘긴다 —
+#   cryptroot 가 부팅 화면에서 암호(복구 키)를 묻는다.
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in prereqs) prereqs; exit 0 ;; esac
+
+CONF=/etc/sekai-encryption.conf
+[ -r "$CONF" ] || exit 0
+LUKS_UUID=""; LUKS_NAME=""; TPM=0; PIN=0; PCR7=""
+. "$CONF"
+[ "$TPM" = 1 ] && [ -n "$LUKS_UUID" ] && [ -n "$LUKS_NAME" ] || exit 0
+[ -b "/dev/mapper/$LUKS_NAME" ] && exit 0
+
+modprobe -q tpm_crb 2>/dev/null; modprobe -q tpm_tis 2>/dev/null
+# 장치가 늦게 나타날 수 있다 (NVMe · USB) — 10초까지
+DEV="/dev/disk/by-uuid/$LUKS_UUID"
+n=0
+while [ ! -b "$DEV" ] && [ $n -lt 40 ]; do sleep 0.25; n=$((n + 1)); done
+[ -b "$DEV" ] || exit 0
+[ -e /dev/tpm0 ] || [ -e /dev/tpmrm0 ] || exit 0
+# 봉인할 때와 PCR 7(보안 부팅 상태·인증서)이 다르면 TPM 은 어떤 PIN 으로도 열어 주지 않는다 — 묻지 않는다.
+#   헛된 PIN 시도는 TPM 의 사전 공격 잠금(lockout)까지 부른다
+if [ -n "$PCR7" ] && [ -r /sys/class/tpm/tpm0/pcr-sha256/7 ]; then
+    now=$(tr -d ' \n' < /sys/class/tpm/tpm0/pcr-sha256/7 | tr 'a-f' 'A-F')
+    [ "$now" = "$PCR7" ] || exit 0
+fi
+
+if [ "$PIN" = 1 ]; then
+    tries=0
+    while [ $tries -lt 3 ]; do
+        tries=$((tries + 1))
+        if [ -x /bin/plymouth ] && plymouth --ping 2>/dev/null; then
+            pin=$(plymouth ask-for-password --prompt="드라이브 암호화 PIN" 2>/dev/null) || break
+        else
+            printf '드라이브 암호화 PIN: ' >&2
+            stty -echo 2>/dev/null; read -r pin; stty echo 2>/dev/null; echo >&2
+        fi
+        [ -n "$pin" ] || break
+        if printf '%s' "$pin" | cryptsetup open --token-only --token-type systemd-tpm2 "$DEV" "$LUKS_NAME" 2>/tmp/sekai-tpm2.err; then
+            exit 0
+        fi
+        # PIN 이 아니라 TPM 쪽 문제(잠금·상태)면 더 묻지 않는다
+        grep -qiE 'not recoverable|lockout|0x921|no such device' /tmp/sekai-tpm2.err 2>/dev/null && break
+        [ -x /bin/plymouth ] && plymouth display-message --text="PIN 이 맞지 않습니다" 2>/dev/null
+    done
+    # PIN 을 못 맞췄다 — cryptroot 가 복구 키를 묻는다
+    exit 0
+fi
+
+cryptsetup open --token-only --token-type systemd-tpm2 "$DEV" "$LUKS_NAME" </dev/null 2>/dev/null || true
+exit 0

@@ -18,10 +18,11 @@ from . import recovery  # noqa: F401
 from . import a11y  # noqa: F401
 from . import firewall  # noqa: F401
 from . import wineapps  # noqa: F401
+from . import encryption  # noqa: F401
 
 # 윈도우 11 의 시스템 순서처럼 디스플레이 다음에 소리
 MODULES = [about, display, graphics, sound, personalize, multitasking, devices, shortcuts, bluetooth, printers, network,
-           firewall, notifications, locale, apps, wineapps, users, a11y, update, recovery]
+           firewall, notifications, locale, apps, wineapps, users, a11y, update, recovery, encryption]
 
 
 def all_pages():

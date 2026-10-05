@@ -2,21 +2,31 @@
 # ═══════════════════════════════════════════════════════════════
 #  SekaiOS 설치 — 실제 작업 (관리자 권한, 라이브 세션에서만)
 #
-#    sekai-install-backend --disk /dev/sdX [--esp-mb 512] [--swap-mb 0] [--fs btrfs|ext4] --yes-erase
+#    sekai-install-backend --disk /dev/sdX [--esp-mb 512] [--swap-mb 0] [--fs btrfs|ext4]
+#                          [--encrypt [--tpm] [--pin]] --yes-erase
 #
 #  디스크 전체를 쓴다. 그 디스크에 SekaiOS 전용 ESP 를 새로 만든다
 #  (다른 디스크의 윈도우 ESP 는 건드리지 않는다 — 서로 독립).
 #    p1  ESP   FAT32  (기본 512MB)
-#    p2  swap         (선택)
-#    pN  root  btrfs  나머지 — 하위 볼륨 @(/) @home @snapshots(/.snapshots) @log(/var/log) @cache(/var/cache)
+#    p2  /boot ext4   1GB — 커널·initramfs (GRUB 이 암호화된 루트를 열지 않게. 암호화하지 않아도 같은 구조 —
+#                      복원 경로가 하나, ext4 라 grub-reboot 도 된다)
+#    p3  swap         (선택 — 암호화하면 부팅마다 새 무작위 키)
+#    pN  root  btrfs  나머지 (--encrypt 면 LUKS2 안에) — 하위 볼륨 @(/) @home @snapshots(/.snapshots) @log(/var/log) @cache(/var/cache)
 #                      @flatpak(/var/lib/flatpak)
 #                      (시스템 복원: @ 만 복원 지점을 만든다 — sekai-restore. 나머지는 많이 바뀌어 공간만 붙잡는다)
 #
 #  계정·시간대·컴퓨터 이름은 여기서 정하지 않는다 — 첫 부팅의 OOBE 가 묻는다.
 #
+#  드라이브 암호화 (--encrypt): 비밀은 표준 입력으로 (인자는 ps 에 보인다)
+#    첫 줄 = 암호 (TPM 을 안 쓸 때 부팅마다 묻는 것 — --tpm 이면 비워도 된다), 둘째 줄 = PIN (--pin 일 때)
+#    복구 키(48자리)는 여기서 만들어 "RECOVERY <키>" 줄로 알린다 — 설치 화면이 보여 주고 저장하게 한다.
+#    --tpm: TPM 2.0 + 보안 부팅이면 PCR 7 에 봉인해 부팅 때 묻지 않는다 (sekai-encryption · initramfs sekai-tpm2)
+#
 #  출력 (한 줄에 하나, 설치 화면이 읽는다):
 #    STEP <번호> <전체> <설명>
 #    PROGRESS <0-100> [설명]
+#    RECOVERY <복구 키>      (--encrypt)
+#    ENCRYPTION tpm|tpm+pin|passphrase
 #    ERROR <설명>
 #    DONE
 #  자세한 기록은 /var/log/sekai-install.log
@@ -27,7 +37,9 @@ TARGET=/target
 LOG=/var/log/sekai-install.log
 TOTAL=6
 
-DISK=""; ESP_MB=512; SWAP_MB=0; FS=btrfs; YES=0; EXP_SIZE=""; EXP_SERIAL=""
+DISK=""; ESP_MB=512; BOOT_MB=1024; SWAP_MB=0; FS=btrfs; YES=0; EXP_SIZE=""; EXP_SERIAL=""
+ENCRYPT=0; USE_TPM=0; USE_PIN=0; EXTRA_DEBS=""; TEST_USER=""
+LUKS_NAME=sekai-root
 while [ $# -gt 0 ]; do
     case "$1" in
         --disk)      DISK="$2"; shift 2 ;;
@@ -37,6 +49,12 @@ while [ $# -gt 0 ]; do
         --yes-erase) YES=1; shift ;;
         --expect-size)   EXP_SIZE="$2"; shift 2 ;;
         --expect-serial) EXP_SERIAL="$2"; shift 2 ;;
+        --encrypt)   ENCRYPT=1; shift ;;
+        --tpm)       USE_TPM=1; shift ;;
+        --pin)       USE_PIN=1; shift ;;
+        # 개발 ISO 시험용 (켄 하네스): 풀고 나서 이 폴더의 .deb 를 덮어 깐다 · 시험 계정을 만든다
+        --extra-debs) EXTRA_DEBS="$2"; shift 2 ;;
+        --test-user)  TEST_USER="$2"; shift 2 ;;
         *) echo "ERROR 모르는 옵션: $1"; exit 2 ;;
     esac
 done
@@ -53,12 +71,14 @@ SUBVOLS="@home:/home @snapshots:/.snapshots @log:/var/log @cache:/var/cache @fla
 BTRFS_OPTS="noatime,compress=zstd:1"
 
 cleanup() {
-    for m in "$TARGET/sys/firmware/efi/efivars" "$TARGET/boot/efi" \
+    for m in "$TARGET/sys/firmware/efi/efivars" "$TARGET/boot/efi" "$TARGET/boot" \
              "$TARGET/dev/pts" "$TARGET/dev" "$TARGET/proc" "$TARGET/sys" \
              "$TARGET/run" "$TARGET/var/lib/flatpak" "$TARGET/var/cache" "$TARGET/var/log" "$TARGET/.snapshots" "$TARGET/home" \
              "$TARGET" /run/sekai-install-top; do
         mountpoint -q "$m" && umount -l "$m" 2>/dev/null
     done
+    [ -b "/dev/mapper/$LUKS_NAME" ] && cryptsetup close "$LUKS_NAME" 2>/dev/null
+    rm -f /run/sekai-install-key.* 2>/dev/null
     return 0
 }
 trap 'die "중단되었습니다"' INT TERM
@@ -69,7 +89,14 @@ trap 'rm -f "$INSTALLING"' EXIT
 
 : > "$LOG"
 log "SekaiOS 설치 $(date)"
-log "disk=$DISK esp=$ESP_MB swap=$SWAP_MB fs=$FS"
+log "disk=$DISK esp=$ESP_MB boot=$BOOT_MB swap=$SWAP_MB fs=$FS encrypt=$ENCRYPT tpm=$USE_TPM pin=$USE_PIN"
+
+# 암호화 비밀 — 표준 입력 두 줄 (암호 · PIN)
+PASSPHRASE=""; PIN=""
+if [ "$ENCRYPT" = 1 ]; then
+    IFS= read -r PASSPHRASE || true
+    IFS= read -r PIN || true
+fi
 
 # ── 확인 ─────────────────────────────────────────────────
 [ "$(id -u)" -eq 0 ]            || die "관리자 권한이 필요합니다"
@@ -82,6 +109,21 @@ DISK="$(realpath "$DISK")"        # /dev/disk/by-id/… 같은 링크도 실제 
 [[ "$ESP_MB" =~ ^[0-9]+$ ]] && [ "$ESP_MB" -ge 256 ] && [ "$ESP_MB" -le 4096 ] || die "ESP 크기가 이상합니다: $ESP_MB"
 [[ "$SWAP_MB" =~ ^[0-9]+$ ]] && [ "$SWAP_MB" -le 65536 ] || die "스왑 크기가 이상합니다: $SWAP_MB"
 case "$FS" in btrfs|ext4) ;; *) die "모르는 파일 시스템: $FS" ;; esac
+if [ "$ENCRYPT" = 1 ]; then
+    [ "$FS" = btrfs ] || die "드라이브 암호화는 btrfs 에서만 됩니다"
+    if [ "$USE_TPM" = 1 ]; then
+        { [ -e /dev/tpmrm0 ] || [ -e /dev/tpm0 ]; } || { log "TPM 이 없어 암호로"; USE_TPM=0; }
+        sb=$(od -An -t u1 -j4 -N1 /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c 2>/dev/null | tr -d ' ')
+        [ "$sb" = 1 ] || { log "보안 부팅이 꺼져 있어 TPM 대신 암호로"; USE_TPM=0; }
+    fi
+    [ "$USE_TPM" = 1 ] || USE_PIN=0
+    if [ "$USE_TPM" = 0 ]; then
+        [ "${#PASSPHRASE}" -ge 8 ] || die "TPM 을 쓸 수 없어 암호가 필요합니다 (8자 이상)"
+    fi
+    if [ "$USE_PIN" = 1 ]; then
+        [[ "$PIN" =~ ^[0-9A-Za-z]{4,32}$ ]] || die "PIN 은 4~32자 (숫자·영문)"
+    fi
+fi
 
 # 고른 뒤에 디스크가 바뀌지 않았는지 (크기·시리얼)
 if [ -n "$EXP_SIZE" ] && [ "$(lsblk -dnbo SIZE "$DISK")" != "$EXP_SIZE" ]; then
@@ -100,7 +142,7 @@ if [ -n "$LIVE_DEV" ]; then
 fi
 
 SIZE_MB=$(( $(lsblk -dnbo SIZE "$DISK") / 1024 / 1024 ))
-NEED_MB=$(( ESP_MB + SWAP_MB + 10240 ))
+NEED_MB=$(( ESP_MB + BOOT_MB + SWAP_MB + 10240 ))
 [ "$SIZE_MB" -ge "$NEED_MB" ] || die "디스크가 너무 작습니다 (${SIZE_MB}MB, 최소 ${NEED_MB}MB)"
 
 SQUASH=""
@@ -120,10 +162,11 @@ for p in $(lsblk -ln -o NAME "$DISK" | tail -n +2); do umount -f "/dev/$p" 2>/de
 run wipefs -a "$DISK"
 run sgdisk --zap-all "$DISK"
 run sgdisk --new=1:0:+${ESP_MB}M --typecode=1:ef00 --change-name=1:SEKAI-ESP "$DISK"
-PN=2
+run sgdisk --new=2:0:+${BOOT_MB}M --typecode=2:ea00 --change-name=2:SEKAI-BOOT "$DISK"
+PN=3
 if [ "$SWAP_MB" -gt 0 ]; then
-    run sgdisk --new=2:0:+${SWAP_MB}M --typecode=2:8200 --change-name=2:SEKAI-SWAP "$DISK"
-    PN=3
+    run sgdisk --new=3:0:+${SWAP_MB}M --typecode=3:8200 --change-name=3:SEKAI-SWAP "$DISK"
+    PN=4
 fi
 run sgdisk --new=${PN}:0:0 --typecode=${PN}:8304 --change-name=${PN}:SEKAI-ROOT "$DISK"
 run partprobe "$DISK"
@@ -131,12 +174,14 @@ udevadm settle 2>/dev/null || sleep 2
 
 if [[ "$DISK" =~ (nvme|mmcblk|loop) ]]; then PFX="${DISK}p"; else PFX="$DISK"; fi
 ESP_DEV="${PFX}1"
-if [ "$SWAP_MB" -gt 0 ]; then SWAP_DEV="${PFX}2"; else SWAP_DEV=""; fi
+BOOT_DEV="${PFX}2"
+if [ "$SWAP_MB" -gt 0 ]; then SWAP_DEV="${PFX}3"; else SWAP_DEV=""; fi
 ROOT_DEV="${PFX}${PN}"
+LUKS_DEV=""
 for i in 1 2 3 4 5; do [ -b "$ROOT_DEV" ] && break; sleep 1; done
 [ -b "$ESP_DEV" ] && [ -b "$ROOT_DEV" ] || die "파티션을 만들지 못했습니다"
 # 새 파티션 자리에 남아 있던 옛 파일 시스템 서명을 지운다 (자동 연결·mkfs 가 옛것으로 착각하지 않게)
-for p in "$ESP_DEV" ${SWAP_DEV:+"$SWAP_DEV"} "$ROOT_DEV"; do
+for p in "$ESP_DEV" "$BOOT_DEV" ${SWAP_DEV:+"$SWAP_DEV"} "$ROOT_DEV"; do
     umount -f "$p" 2>/dev/null || true
     run wipefs -a "$p"
 done
@@ -145,8 +190,34 @@ prog 2
 # ── 2. 포맷 ──────────────────────────────────────────────
 step 2 "파일 시스템 만들기"
 run mkfs.vfat -F 32 -n SEKAIESP "$ESP_DEV"
-[ -n "$SWAP_DEV" ] && run mkswap -L SEKAISWAP "$SWAP_DEV"
+run mkfs.ext4 -F -q -L SEKAIBOOT "$BOOT_DEV"
+if [ -n "$SWAP_DEV" ]; then
+    if [ "$ENCRYPT" = 1 ]; then
+        :   # 암호화하면 스왑은 부팅마다 새 무작위 키 (crypttab) — 서명을 남기지 않는다
+    else
+        run mkswap -L SEKAISWAP "$SWAP_DEV"
+    fi
+fi
 mkdir -p "$TARGET"
+RECOVERY=""
+if [ "$ENCRYPT" = 1 ]; then
+    prog 2 "드라이브를 암호화하는 중"
+    LUKS_DEV="$ROOT_DEV"
+    RECOVERY=$(python3 -c "import secrets;print('-'.join(f'{secrets.randbelow(10**6):06d}' for _ in range(8)))")
+    KF=$(mktemp /run/sekai-install-key.XXXXXX); KF2=$(mktemp /run/sekai-install-key.XXXXXX)
+    printf '%s' "$RECOVERY" > "$KF"
+    run cryptsetup luksFormat --batch-mode --type luks2 --label SEKAI-LUKS --key-file "$KF" "$LUKS_DEV"
+    printf '%s' "${RECOVERY//-/}" > "$KF2"
+    run cryptsetup luksAddKey --batch-mode --key-file "$KF" "$LUKS_DEV" "$KF2"
+    if [ -n "$PASSPHRASE" ]; then
+        printf '%s' "$PASSPHRASE" > "$KF2"
+        run cryptsetup luksAddKey --batch-mode --key-file "$KF" "$LUKS_DEV" "$KF2"
+    fi
+    rm -f "$KF2"
+    run cryptsetup open --allow-discards --key-file "$KF" "$LUKS_DEV" "$LUKS_NAME"
+    ROOT_DEV="/dev/mapper/$LUKS_NAME"
+    out "RECOVERY $RECOVERY"
+fi
 if [ "$FS" = ext4 ]; then
     run mkfs.ext4 -F -L SekaiOS "$ROOT_DEV"
     run mount "$ROOT_DEV" "$TARGET"
@@ -165,6 +236,8 @@ else
     done
     chmod 750 "$TARGET/.snapshots"
 fi
+mkdir -p "$TARGET/boot"
+run mount "$BOOT_DEV" "$TARGET/boot"
 mkdir -p "$TARGET/boot/efi"
 run mount "$ESP_DEV" "$TARGET/boot/efi"
 prog 4
@@ -189,6 +262,7 @@ prog 76
 step 4 "시스템 설정"
 ROOT_UUID=$(blkid -s UUID -o value "$ROOT_DEV")
 ESP_UUID=$(blkid -s UUID -o value "$ESP_DEV")
+BOOT_UUID=$(blkid -s UUID -o value "$BOOT_DEV")
 {
     echo "# /etc/fstab — SekaiOS 설치 프로그램이 만듦"
     if [ "$FS" = ext4 ]; then
@@ -199,8 +273,15 @@ ESP_UUID=$(blkid -s UUID -o value "$ESP_DEV")
             echo "UUID=$ROOT_UUID  ${sv#*:}  btrfs  subvol=${sv%%:*},$BTRFS_OPTS  0 0"
         done
     fi
+    echo "UUID=$BOOT_UUID  /boot      ext4  defaults,nodev,nosuid  0 2"
     echo "UUID=$ESP_UUID   /boot/efi  vfat  umask=0077         0 2"
-    [ -n "$SWAP_DEV" ] && echo "UUID=$(blkid -s UUID -o value "$SWAP_DEV")  none  swap  sw  0 0"
+    if [ -n "$SWAP_DEV" ]; then
+        if [ "$ENCRYPT" = 1 ]; then
+            echo "/dev/mapper/sekai-swap  none  swap  sw  0 0"
+        else
+            echo "UUID=$(blkid -s UUID -o value "$SWAP_DEV")  none  swap  sw  0 0"
+        fi
+    fi
     echo "tmpfs  /tmp  tmpfs  defaults,nosuid,nodev  0 0"
 } > "$TARGET/etc/fstab"
 
@@ -212,6 +293,44 @@ mount --bind /dev/pts "$TARGET/dev/pts"
 mount -t tmpfs tmpfs  "$TARGET/run"
 mkdir -p "$TARGET/sys/firmware/efi/efivars"
 mount --bind /sys/firmware/efi/efivars "$TARGET/sys/firmware/efi/efivars" 2>/dev/null || true
+
+if [ "$ENCRYPT" = 1 ]; then
+    {
+        echo "# /etc/crypttab — SekaiOS 설치 프로그램이 만듦 (드라이브 암호화)"
+        echo "# TPM 으로 저절로 여는 것은 initramfs 의 sekai-tpm2 가 먼저 한다 (/etc/sekai/encryption.conf)"
+        echo "$LUKS_NAME UUID=$(cryptsetup luksUUID "$LUKS_DEV") none luks,discard,keyscript=/usr/libexec/sekai/sekai-askpass"
+        if [ -n "$SWAP_DEV" ]; then
+            echo "sekai-swap PARTUUID=$(blkid -s PARTUUID -o value "$SWAP_DEV") /dev/urandom swap,cipher=aes-xts-plain64,size=512"
+        fi
+    } > "$TARGET/etc/crypttab"
+    chmod 600 "$TARGET/etc/crypttab"
+    # 잠들기(최대 절전) 자리는 없다 — 무작위 키 스왑에서 깨어날 수 없다
+    mkdir -p "$TARGET/etc/initramfs-tools/conf.d"
+    echo "RESUME=none" > "$TARGET/etc/initramfs-tools/conf.d/resume"
+fi
+
+# 개발 ISO 시험용 — 풀어 놓은 시스템에 최신 패키지를 덮어 깐다 (켄 하네스 · 개발 ISO 에서만)
+if [ -n "$EXTRA_DEBS" ]; then
+    log "--extra-debs $EXTRA_DEBS: $(ls "$EXTRA_DEBS" | tr '\n' ' ')"
+    mkdir -p "$TARGET/tmp/extra-debs"
+    cp "$EXTRA_DEBS"/*.deb "$TARGET/tmp/extra-debs/" 2>/dev/null || die "--extra-debs 에 .deb 이 없습니다"
+    chroot "$TARGET" sh -c 'DEBIAN_FRONTEND=noninteractive apt-get install -y -q --allow-downgrades --no-download /tmp/extra-debs/*.deb || DEBIAN_FRONTEND=noninteractive apt-get install -y -q --allow-downgrades /tmp/extra-debs/*.deb' >>"$LOG" 2>&1 \
+        || die "--extra-debs 를 깔지 못했습니다"
+    rm -rf "$TARGET/tmp/extra-debs"
+fi
+
+# 드라이브 암호화 — 설정 파일·복구 키, TPM 봉인 (initramfs 를 만들기 전에 — TPM 을 쓰는지가 initramfs 에 들어간다)
+if [ "$ENCRYPT" = 1 ]; then
+    prog 77 "드라이브 잠금을 설정하는 중"
+    install -m600 "$KF" "$TARGET/tmp/sekai-rk"
+    targs=(); [ "$USE_TPM" = 1 ] && targs+=(--tpm); [ "$USE_PIN" = 1 ] && targs+=(--pin)
+    printf '%s\n' "$PIN" | chroot "$TARGET" /usr/libexec/sekai/sekai-encryption install-setup "$LUKS_DEV" "$LUKS_NAME" /tmp/sekai-rk "${targs[@]}" >>"$LOG" 2>&1 \
+        || { rm -f "$TARGET/tmp/sekai-rk"; die "드라이브 잠금을 설정하지 못했습니다 (기록: $LOG)"; }
+    rm -f "$TARGET/tmp/sekai-rk" "$KF"
+    if [ "$USE_TPM" = 1 ] && [ "$USE_PIN" = 1 ]; then out "ENCRYPTION tpm+pin"
+    elif [ "$USE_TPM" = 1 ]; then out "ENCRYPTION tpm"
+    else out "ENCRYPTION passphrase"; fi
+fi
 
 cat > "$TARGET/tmp/sekai-post.sh" <<'POSTEOF'
 #!/bin/bash
@@ -243,9 +362,14 @@ ssh-keygen -A >/dev/null 2>&1 || true
 # 라이브·설치 전용 패키지 제거.
 #   autoremove 는 쓰지 않는다 — live-config 가 끌고 온 sudo 같은 것을 고아로 보고 지운다.
 apt-mark manual sudo openssh-server polkitd >/dev/null 2>&1 || true
-apt-get purge -y live-boot live-boot-initramfs-tools live-boot-doc \
-                 live-config live-config-systemd live-config-doc live-tools \
-                 sekai-installer >/dev/null 2>&1 || true
+#   설치된 것만 dpkg 로 — apt-get purge 에 이미지에 없는 이름(live-boot-doc 등)이 섞이면 패키지 목록이 없는
+#   이미지에서 "찾을 수 없음"으로 통째로 실패해 아무것도 안 지워졌다 (live-tools 가 update-initramfs 를 계속 막았다)
+LIVE_PKGS=""
+for lp in live-boot live-boot-initramfs-tools live-boot-doc live-config live-config-systemd live-config-doc \
+          live-tools sekai-installer; do
+    dpkg -s "$lp" >/dev/null 2>&1 && LIVE_PKGS="$LIVE_PKGS $lp"
+done
+[ -z "$LIVE_PKGS" ] || dpkg --purge $LIVE_PKGS >/dev/null 2>&1 || echo "sekai-post: 라이브 패키지를 다 지우지 못함:$LIVE_PKGS"
 command -v sudo >/dev/null 2>&1 || apt-get install -y --no-download sudo >/dev/null 2>&1 || true
 rm -rf /etc/live /lib/live /usr/lib/live
 rm -f /etc/sudoers.d/live* 2>/dev/null || true
@@ -259,8 +383,35 @@ mkdir -p /var/lib/sekai
 : > /var/lib/sekai/oobe-pending
 systemctl enable sekai-oobe-helper.service >/dev/null 2>&1 || true
 
-# initramfs 재생성: 라이브(squashfs 찾기)용 → 디스크 부팅용
-update-initramfs -u -k all
+# 시험 계정 (켄 하네스 — 개발 ISO): OOBE 없이 SSH 로 들어올 수 있게
+if [ -n "${SEKAI_TEST_USER:-}" ]; then
+    useradd -m -G sudo -s /bin/bash "$SEKAI_TEST_USER" && echo "$SEKAI_TEST_USER:${SEKAI_TEST_USER}1234" | chpasswd
+    if [ -f /tmp/sekai-test-keys ]; then
+        install -d -m700 -o "$SEKAI_TEST_USER" -g "$SEKAI_TEST_USER" "/home/$SEKAI_TEST_USER/.ssh"
+        install -m600 -o "$SEKAI_TEST_USER" -g "$SEKAI_TEST_USER" /tmp/sekai-test-keys "/home/$SEKAI_TEST_USER/.ssh/authorized_keys"
+    fi
+    rm -f /var/lib/sekai/oobe-pending
+fi
+
+# initramfs 를 새로 만든다: 라이브(squashfs 찾기)용 → 디스크 부팅용.
+#   live-tools 의 update-initramfs 감싸개는 바깥(설치하는 라이브 세션)이 라이브면 "disabled" 하고 아무것도 안 한다.
+#   위에서 live-tools 를 못 지웠을 때도 원래 것(.orig.initramfs-tools)을 직접 부르고, 지운 뒤 새로(-c) 만든다
+#   (2026-10-05 켄: 라이브 패키지가 안 지워져 설치본이 라이브용 initramfs 로 켜졌다 — TPM 해제가 안 들어갔다)
+UIR=update-initramfs
+# live-tools 가 남아 있으면(지우지 못했으면) 그 감싸개는 라이브에서 막는다 — 원래 것을 직접
+[ -x /usr/sbin/update-initramfs.orig.initramfs-tools ] && UIR=/usr/sbin/update-initramfs.orig.initramfs-tools
+mkdir -p /var/lib/initramfs-tools
+for kv in $(ls /usr/lib/modules); do
+    [ -f "/boot/vmlinuz-$kv" ] || continue
+    [ -f "/boot/initrd.img-$kv" ] && mv -f "/boot/initrd.img-$kv" "/boot/initrd.img-$kv.live"
+    if $UIR -c -k "$kv" && [ -s "/boot/initrd.img-$kv" ]; then
+        rm -f "/boot/initrd.img-$kv.live"
+    else
+        [ -f "/boot/initrd.img-$kv.live" ] && mv -f "/boot/initrd.img-$kv.live" "/boot/initrd.img-$kv"
+        echo "sekai-post: initramfs 를 만들지 못함 ($kv)"
+        exit 1
+    fi
+done
 
 rm -f /tmp/sekai-post.sh
 POSTEOF
@@ -269,7 +420,14 @@ prog 78 "설치된 시스템을 설정하는 중"
 # initramfs 만들기가 오래 걸린다 — 도는 동안 조금씩 움직여 멈춘 것처럼 보이지 않게
 ( p=78; while sleep 4; do [ $p -lt 90 ] && p=$((p+1)); echo "PROGRESS $p"; done ) &
 TICK=$!
-chroot "$TARGET" /tmp/sekai-post.sh >>"$LOG" 2>&1; rc=$?
+if [ -n "$TEST_USER" ]; then
+    [[ "$TEST_USER" =~ ^[a-z][a-z0-9]{1,15}$ ]] || die "--test-user 이름이 이상합니다"
+    for k in /home/sekai/.ssh/authorized_keys /root/.ssh/authorized_keys; do
+        [ -s "$k" ] && { cp "$k" "$TARGET/tmp/sekai-test-keys"; break; }
+    done
+fi
+SEKAI_TEST_USER="$TEST_USER" chroot "$TARGET" /tmp/sekai-post.sh >>"$LOG" 2>&1; rc=$?
+rm -f "$TARGET/tmp/sekai-test-keys"
 kill $TICK 2>/dev/null; wait $TICK 2>/dev/null
 [ $rc -eq 0 ] || die "시스템을 설정하지 못했습니다 (기록: $LOG)"
 prog 91

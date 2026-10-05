@@ -123,6 +123,7 @@ case "$action" in
         else
             logline "fail 마무리 $arg"
         fi
+        prev="$T/$old"
         finish
         ;;
     undo)
@@ -150,8 +151,8 @@ case "$action" in
         else
             logline "fail 취소 $arg"
         fi
+        prev="$T/$gone"
         finish
-        [ -d "$T/$gone" ] && btrfs subvolume delete "$T/$gone" >/dev/null 2>&1
         ;;
     *)
         logline "fail 모르는-요청 $action"; finish; umount "$T"; exit 0 ;;
@@ -160,7 +161,21 @@ esac
 # 켜진 커널의 모듈이 되돌린 시스템에 있나
 k=$(uname -r)
 reboot_needed=0
-[ -d "$T/@/lib/modules/$k" ] || [ -d "$T/@/usr/lib/modules/$k" ] || reboot_needed=1
+if [ ! -d "$T/@/lib/modules/$k" ] && [ ! -d "$T/@/usr/lib/modules/$k" ]; then
+    if grep -qE '^[^#]*[[:space:]]/boot[[:space:]]' "$T/@/etc/fstab" 2>/dev/null; then
+        # /boot 가 따로인 설치본 (2026-10~): 커널은 /boot 에만 있어 다시 켜도 같은 커널이다 — 지금 커널의 모듈을
+        #   바로 전 루트에서 되돌린 시스템으로 이어 붙인다 (다음 커널 업데이트 때 정리된다 — sekai-restore)
+        if [ -n "${prev:-}" ] && [ -d "$prev/usr/lib/modules/$k" ]; then
+            mkdir -p "$T/@/usr/lib/modules" "$T/@/var/lib/sekai"
+            cp -a "$prev/usr/lib/modules/$k" "$T/@/usr/lib/modules/" && echo "$k" >> "$T/@/var/lib/sekai/carried-modules"
+            logline "carry-modules $k"
+        fi
+    else
+        reboot_needed=1
+    fi
+fi
+# 취소한 쪽은 이제 지운다 (모듈을 가져온 뒤)
+case "${prev:-}" in */@undone-restore-*) btrfs subvolume delete "$prev" >/dev/null 2>&1 ;; esac
 sync
 umount "$T"
 if [ "$reboot_needed" = 1 ]; then

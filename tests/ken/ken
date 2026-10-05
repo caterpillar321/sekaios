@@ -1,0 +1,368 @@
+#!/usr/bin/env python3
+"""켄 (안 아빠) — 설치·첫 부팅 하네스. 개발 ISO 를 QEMU(보안 부팅 OVMF + swtpm)에 꽂아 설치하고 다시 켜 본다.
+
+  ken luks [--pin] [--keep]      드라이브 암호화 설치 → TPM 으로 저절로 열리나 (--pin 이면 PIN 을 쳐서)
+                                 → 보안 부팅을 끄고 켜면 복구 키를 묻나 → 복구 키로 열리나
+  ken plain [--keep]             암호화 없이 설치 (/boot 분리 새 구조) → 부팅
+  ken stop                       VM · swtpm 끄기
+  ken live | boot                디스크를 지우지 않고 ISO 로 / 디스크로 켜기 (들여다보기용 — 라이브는 sekai@, 설치본은 miku@ :2350)
+
+ISO 는 지금 소스보다 오래됐을 수 있다 — 라이브 세션에 최신 설치 백엔드를 올리고, packages/ 의 최신
+sekai-de · sekai-shell · sekaios-base 와 그 새 의존성(.deb, trixie buildroot 에서 받음)을 --extra-debs 로 덮어 깐다.
+설치본엔 시험 계정(miku/miku1234, 개발 키)을 만들어 OOBE 없이 SSH 로 들어간다 (--test-user).
+
+바탕은 MafuyuMom 의 QMP(mm/qmp.py)를 같이 쓴다. 결과는 줄마다 ✓ / ✗ 로.
+"""
+import glob
+import os
+import shutil
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+P = os.path.abspath(os.path.join(HERE, "..", ".."))
+sys.path.insert(0, os.path.join(P, "tests", "mafuyumom"))
+from mm.qmp import QMP  # noqa: E402
+
+RUN = os.path.expanduser("~/.cache/ken/run")
+ISO = os.environ.get("KEN_ISO", os.path.join(P, "build", "sekaios-1.0-amd64-dev.iso"))
+PORT = int(os.environ.get("KEN_SSH_PORT", "2350"))
+VNC = int(os.environ.get("KEN_VNC", "6"))
+KEY = os.path.expanduser("~/.ssh/sekaios-dev")
+CODE = "/usr/share/OVMF/OVMF_CODE_4M.secboot.fd"
+VARS_SB = "/usr/share/OVMF/OVMF_VARS_4M.ms.fd"        # 마이크로소프트 키 등록 — 보안 부팅 켜짐
+VARS_NOSB = "/usr/share/OVMF/OVMF_VARS_4M.fd"         # 키 없음 — 보안 부팅 꺼짐
+BR = os.path.join(P, "buildroot-wine")                 # trixie — 새 의존성 .deb 를 받는 곳
+NEW_DEPS = ["cryptsetup", "cryptsetup-bin", "cryptsetup-initramfs", "libcryptsetup12", "systemd-cryptsetup",
+            "libtss2-esys-3.0.2-0t64", "libtss2-rc0t64", "libtss2-mu-4.0.1-0t64", "libtss2-tcti-device0t64",
+            "libtss2-sys1t64", "libtss2-tctildr0t64", "power-profiles-daemon", "firewalld"]
+
+FAILS = []
+PIN = None              # luks --pin 이면 다시 켤 때마다 이 PIN 을 친다
+Q = None
+
+
+def say(*a):
+    print(*a, flush=True)
+
+
+def ok(cond, what):
+    say(("  ✓ " if cond else "  ✗ ") + what)
+    if not cond:
+        FAILS.append(what)
+    return cond
+
+
+# ── 프로세스 ──
+def pid_alive(f):
+    try:
+        os.kill(int(open(f).read()), 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def stop():
+    for f in ("qemu.pid", "swtpm.pid"):
+        p = os.path.join(RUN, f)
+        if pid_alive(p):
+            os.kill(int(open(p).read()), 15)
+    for _ in range(20):
+        if not any(pid_alive(os.path.join(RUN, f)) for f in ("qemu.pid", "swtpm.pid")):
+            break
+        time.sleep(0.5)
+
+
+def swtpm_start():
+    tpm = os.path.join(RUN, "tpm")
+    os.makedirs(tpm, exist_ok=True)
+    sock = os.path.join(RUN, "swtpm.sock")
+    if pid_alive(os.path.join(RUN, "swtpm.pid")):
+        return sock
+    subprocess.run(["swtpm", "socket", "--tpm2", "--tpmstate", f"dir={tpm}", "--ctrl", f"type=unixio,path={sock}",
+                    "--daemon", "--pid", f"file={os.path.join(RUN, 'swtpm.pid')}",
+                    "--log", f"file={os.path.join(RUN, 'swtpm.log')},level=1", "--flags", "startup-clear"],
+                   check=True)
+    for _ in range(20):
+        if os.path.exists(sock):
+            break
+        time.sleep(0.2)
+    return sock
+
+
+def qemu_start(cd=True):
+    sock = swtpm_start()
+    qmp = os.path.join(RUN, "qmp.sock")
+    if os.path.exists(qmp):
+        os.remove(qmp)
+    args = ["qemu-system-x86_64", "-name", "ken", "-enable-kvm", "-cpu", "host", "-smp", "4", "-m", "6144",
+            "-machine", "q35,smm=on", "-global", "driver=cfi.pflash01,property=secure,value=on",
+            "-drive", f"if=pflash,format=raw,readonly=on,file={CODE}",
+            "-drive", f"if=pflash,format=raw,file={os.path.join(RUN, 'OVMF_VARS.fd')}",
+            "-drive", f"file={os.path.join(RUN, 'disk.qcow2')},if=none,id=hd0,format=qcow2",
+            "-device", "virtio-blk-pci,drive=hd0,bootindex=1",
+            "-chardev", f"socket,id=chrtpm,path={sock}", "-tpmdev", "emulator,id=tpm0,chardev=chrtpm",
+            "-device", "tpm-crb,tpmdev=tpm0",
+            "-device", "virtio-vga,xres=1920,yres=1080", "-device", "qemu-xhci", "-device", "usb-tablet",
+            "-device", "usb-kbd",
+            "-netdev", f"user,id=n0,hostfwd=tcp:127.0.0.1:{PORT}-:22", "-device", "virtio-net-pci,netdev=n0",
+            "-display", "none", "-vnc", f"127.0.0.1:{VNC}",
+            "-qmp", f"unix:{qmp},server=on,wait=off", "-serial", f"file:{os.path.join(RUN, 'serial.log')}",
+            "-daemonize", "-pidfile", os.path.join(RUN, "qemu.pid")]
+    if cd:
+        args += ["-drive", f"file={ISO},media=cdrom,readonly=on,if=none,id=cd0", "-device", "ide-cd,drive=cd0,bootindex=0"]
+    subprocess.run(args, check=True)
+    return QMP(qmp).connect(30)
+
+
+# ── SSH ──
+def ssh(user, cmd, timeout=600, input=None):
+    base = ["ssh", "-p", str(PORT), "-i", KEY, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=5",
+            "-o", "BatchMode=yes", f"{user}@127.0.0.1", cmd]
+    try:
+        return subprocess.run(base, capture_output=True, text=True, timeout=timeout, input=input)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(base, 124, "", "timeout")
+
+
+def sudo(cmd, timeout=600):
+    """설치본의 시험 계정(miku)으로 root — 암호는 표준 입력으로"""
+    import shlex
+    return ssh("miku", f"sudo -S -p '' sh -c {shlex.quote(cmd)}", timeout=timeout, input="miku1234\n")
+
+
+def scp(user, files, dest):
+    return subprocess.run(["scp", "-q", "-P", str(PORT), "-i", KEY, "-o", "IdentitiesOnly=yes",
+                           "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+                           "-o", "LogLevel=ERROR", *files, f"{user}@127.0.0.1:{dest}"]).returncode == 0
+
+
+def wait_ssh(user, timeout):
+    end = time.time() + timeout
+    while time.time() < end:
+        if ssh(user, "true", timeout=10).returncode == 0:
+            return True
+        time.sleep(3)
+    return False
+
+
+def shot(q, name):
+    path = os.path.join(RUN, f"{name}.ppm")
+    try:
+        q.cmd("screendump", filename=path)
+        from PIL import Image
+        Image.open(path).save(path[:-4] + ".png")
+        os.remove(path)
+        return path[:-4] + ".png"
+    except Exception as e:
+        say("   (화면을 못 찍음:", e, ")")
+        return None
+
+
+# ── 준비 ──
+def newest(pat):
+    c = sorted(glob.glob(os.path.join(P, "packages", pat)), key=os.path.getmtime)
+    return c[-1] if c else None
+
+
+def gather_debs():
+    d = os.path.join(RUN, "debs")
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    for pat in ("sekai-de_*_all.deb", "sekai-shell_*_all.deb", "sekaios-base_*_all.deb"):
+        f = newest(pat)
+        if not f:
+            raise SystemExit(f"packages/ 에 {pat} 이 없습니다 — scripts/pack-shell.sh")
+        shutil.copy(f, d)
+    # 새 의존성이 ISO 에 아직 없으면 trixie buildroot 에서 받아 같이 (KEN_DEPS=1)
+    if os.environ.get("KEN_DEPS") == "1":
+        tmp = "/tmp/ken-debs"
+        subprocess.run(["sudo", "-n", "chroot", BR, "sh", "-c",
+                        f"rm -rf {tmp} && mkdir -p {tmp} && cd {tmp} && apt-get download -q {' '.join(NEW_DEPS)} >/dev/null 2>&1; ls"],
+                       check=True, capture_output=True)
+        for f in glob.glob(os.path.join(BR, tmp.lstrip("/"), "*.deb")):
+            shutil.copy(f, d)
+    return d
+
+
+def fresh_disk(sb=True):
+    stop()
+    shutil.rmtree(RUN, ignore_errors=True)
+    os.makedirs(RUN)
+    subprocess.run(["qemu-img", "create", "-q", "-f", "qcow2", os.path.join(RUN, "disk.qcow2"), "40G"], check=True)
+    shutil.copy(VARS_SB if sb else VARS_NOSB, os.path.join(RUN, "OVMF_VARS.fd"))
+
+
+def install(q, extra):
+    say("■ 라이브 세션 (개발 ISO) 을 기다린다")
+    ok(wait_ssh("sekai", 240), "라이브 세션 SSH")
+    ok(ssh("sekai", "test -e /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c && "
+           "od -An -t u1 -j4 -N1 /sys/firmware/efi/efivars/SecureBoot-* | grep -q 1").returncode == 0, "보안 부팅 켜짐")
+    ok(ssh("sekai", "test -e /dev/tpmrm0").returncode == 0, "TPM 2.0 (swtpm) 보임")
+    debs = gather_debs()
+    ssh("sekai", "rm -rf /tmp/kdebs && mkdir -p /tmp/kdebs")
+    ok(scp("sekai", glob.glob(os.path.join(debs, "*.deb")), "/tmp/kdebs/"), "최신 패키지를 라이브 세션으로")
+    ok(scp("sekai", [os.path.join(P, "src", "sekai-installer", "sekai-install-backend")], "/tmp/"), "최신 설치 백엔드")
+    # 라이브 세션 자체에도 cryptsetup 이 있어야 (luksFormat)
+    ssh("sekai", "command -v cryptsetup >/dev/null || sudo -n dpkg -i /tmp/kdebs/libcryptsetup12_*.deb /tmp/kdebs/cryptsetup-bin_*.deb >/dev/null 2>&1; true")
+    say("■ 설치 (", " ".join(extra), ")")
+    t0 = time.time()
+    stdin = "\n" + ("2468\n" if "--pin" in extra else "\n")
+    if "--passphrase" in extra:
+        stdin = "sekai-passphrase\n\n"
+        extra = [x for x in extra if x != "--passphrase"]
+    r = ssh("sekai", "sudo -n bash /tmp/sekai-install-backend --disk /dev/vda " + " ".join(extra) +
+            " --extra-debs /tmp/kdebs --test-user miku --yes-erase", timeout=1800, input=stdin)
+    out = r.stdout
+    rec = next((ln.split(" ", 1)[1].strip() for ln in out.splitlines() if ln.startswith("RECOVERY ")), None)
+    enc = next((ln.split(" ", 1)[1].strip() for ln in out.splitlines() if ln.startswith("ENCRYPTION ")), None)
+    done = "DONE" in out.splitlines()
+    if not ok(done, f"설치 끝 ({time.time() - t0:.0f}초)"):
+        say("   ", "\n    ".join([ln for ln in out.splitlines() if ln.startswith("ERROR")][-3:]))
+        log = ssh("sekai", "sudo -n tail -30 /var/log/sekai-install.log").stdout
+        say(log)
+    return rec, enc
+
+
+def reboot_from_disk(q, sb=True):
+    """끄고(설치 매체 빼고) 디스크로 다시 켠다. sb=False 면 보안 부팅을 끈 펌웨어 변수로"""
+    q.close()
+    stop()
+    if not sb:
+        shutil.copy(VARS_NOSB, os.path.join(RUN, "OVMF_VARS.fd"))
+    return qemu_start(cd=False)
+
+
+def cmd_luks(pin=False, keep=False):
+    global PIN, Q
+    PIN = "2468" if pin else None
+    fresh_disk(sb=True)
+    q = qemu_start(cd=True)
+    extra = ["--encrypt", "--tpm"] + (["--pin"] if pin else [])
+    rec, enc = install(q, extra)
+    ok(bool(rec) and len(rec) == 55, f"복구 키를 알려 줬다 ({rec})")
+    ok(enc == ("tpm+pin" if pin else "tpm"), f"잠금 방식 = {enc}")
+    if FAILS:
+        return
+    say("■ 디스크로 다시 켠다 — TPM 으로 저절로 열려야")
+    q = Q = reboot_from_disk(q)
+    if pin:
+        type_pin(q)
+    up = wait_ssh("miku", 180)
+    if not ok(up, "암호를 묻지 않고 부팅해 SSH (miku)" if not pin else "PIN 으로 부팅해 SSH (miku)"):
+        shot(q, "tpm-boot-fail")
+        return
+    st = sudo("lsblk -o NAME,TYPE,MOUNTPOINTS; /usr/libexec/sekai/sekai-encryption status").stdout
+    say("   " + st.replace("\n", "\n   "))
+    ok("crypt" in st and "TPM=1" in st, "루트가 LUKS 위, TPM 봉인")
+    ok(ssh("miku", "findmnt -no FSTYPE /boot").stdout.strip() == "ext4", "/boot 는 ext4 따로")
+    ok(sudo("cryptsetup luksDump $(blkid -t TYPE=crypto_LUKS -o device) | grep -c systemd-tpm2").stdout.strip() == "1",
+       "LUKS 헤더에 systemd-tpm2 토큰 하나")
+    restore_and_update(q)
+    say("■ 보안 부팅을 끄고 켠다 — TPM 이 열어 주면 안 되고 복구 키를 물어야")
+    sudo("poweroff", timeout=20)
+    time.sleep(5)
+    q = reboot_from_disk(q, sb=False)
+    time.sleep(30)
+    up = ssh("miku", "true", timeout=8).returncode == 0
+    ok(not up, "보안 부팅이 꺼지면 저절로 열리지 않는다")
+    shot(q, "recovery-prompt")
+    q.type(rec)
+    q.key("ret")
+    ok(wait_ssh("miku", 150), "복구 키로 열려 부팅")
+    if not keep:
+        stop()
+
+
+def type_pin(q):
+    """부팅 화면의 PIN 칸 (initramfs sekai-tpm2 가 plymouth 로 묻는다) — 뜰 때까지 조금 기다렸다 친다"""
+    time.sleep(22)
+    shot(q, "pin-prompt")
+    q.type(PIN)
+    q.key("ret")
+
+
+def reboot_wait(what, timeout=180):
+    sudo("systemctl reboot", timeout=15)
+    if PIN:
+        time.sleep(5)
+        type_pin(Q)
+    else:
+        time.sleep(15)
+    return ok(wait_ssh("miku", timeout), what)
+
+
+def restore_and_update(q):
+    """암호화 설치본에서 시스템 복원(되돌리기·취소)과 initramfs 다시 만들기 뒤에도 TPM 으로 저절로 열리나"""
+    import json
+    say("■ 시스템 복원 — 되돌리고 다시 켜도 TPM 으로 열리나")
+    r = sudo("/usr/libexec/sekai/sekai-restore create '켄 시험 지점' >/dev/null && /usr/libexec/sekai/sekai-restore list")
+    try:
+        pts = json.loads(r.stdout.strip().splitlines()[-1])
+        pts = pts.get("points", pts) if isinstance(pts, dict) else pts
+        num = next(p["number"] for p in pts if p.get("description") == "켄 시험 지점")
+    except Exception:
+        ok(False, f"복원 지점을 만들지 못했다 ({r.stdout[-200:]} {r.stderr[-200:]})")
+        return
+    ok(True, f"복원 지점 {num}번")
+    sudo("touch /etc/ken-after-point")
+    ok(sudo(f"/usr/libexec/sekai/sekai-restore restore {num}").returncode == 0, "되돌리기 예약")
+    if not reboot_wait("되돌린 뒤 TPM 으로 열려 부팅"):
+        shot(q, "restore-boot-fail")
+        return
+    ok(ssh("miku", "test ! -e /etc/ken-after-point").returncode == 0, "지점 뒤에 만든 파일이 사라졌다 (되돌림)")
+    ok(sudo("/usr/libexec/sekai/sekai-restore undo").returncode == 0, "복원 취소 예약")
+    if not reboot_wait("복원 취소 뒤 부팅"):
+        return
+    ok(ssh("miku", "test -e /etc/ken-after-point").returncode == 0, "취소하자 파일이 돌아왔다")
+
+    say("■ 업데이트(initramfs 다시 만들기) 뒤에도 TPM 으로 열리나")
+    ok(sudo("update-initramfs -u -k all", timeout=600).returncode == 0, "update-initramfs -u")
+    ok("libcryptsetup-token-systemd-tpm2" in sudo("lsinitramfs /boot/initrd.img-$(uname -r)").stdout,
+       "새 initramfs 에 TPM 토큰 플러그인")
+    reboot_wait("initramfs 를 새로 만든 뒤 TPM 으로 열려 부팅")
+
+
+def cmd_plain(keep=False):
+    fresh_disk(sb=True)
+    q = qemu_start(cd=True)
+    rec, enc = install(q, [])
+    ok(rec is None, "암호화 안 함 — 복구 키 없음")
+    if FAILS:
+        return
+    q = reboot_from_disk(q)
+    ok(wait_ssh("miku", 180), "디스크로 부팅해 SSH (miku)")
+    ok(ssh("miku", "findmnt -no FSTYPE /boot").stdout.strip() == "ext4", "/boot 는 ext4 따로")
+    ok(ssh("miku", "findmnt -no FSTYPE /").stdout.strip() == "btrfs", "루트 btrfs")
+    if not keep:
+        stop()
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__)
+        return 2
+    keep = "--keep" in argv
+    if argv[0] == "stop":
+        stop()
+        return 0
+    if argv[0] in ("live", "boot"):
+        stop()
+        qemu_start(cd=argv[0] == "live").close()
+        say("켜짐 — ssh -p", PORT, "sekai@127.0.0.1" if argv[0] == "live" else "miku@127.0.0.1")
+        return 0
+    if argv[0] == "luks":
+        cmd_luks(pin="--pin" in argv, keep=keep)
+    elif argv[0] == "plain":
+        cmd_plain(keep=keep)
+    else:
+        print(__doc__)
+        return 2
+    say(f"■ 결과: {'통과' if not FAILS else '실패 ' + str(len(FAILS))}")
+    return 1 if FAILS else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
