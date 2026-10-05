@@ -61,6 +61,7 @@ class TabButton(Gtk.Box):
         close.set_valign(Gtk.Align.CENTER)
         close.connect("clicked", lambda *_: win.close_tab(tab))
         self.append(close)
+        self.close_btn = close
         g = Gtk.GestureClick(button=0)
         g.connect("pressed", self._pressed)
         self.add_controller(g)
@@ -89,6 +90,12 @@ class TabButton(Gtk.Box):
             self.win.move_tab_to_x(self.tab, pt.x)
 
     def _pressed(self, g, n, x, y):
+        # × 단추 위의 누름은 단추 몫 — 여기서 잡으면(CLAIMED) 단추가 놓기를 못 받아 "clicked" 가 안 나서
+        #   탭이 닫히지 않았다 (단축키·가운데 클릭은 됐다)
+        w = self.pick(x, y, Gtk.PickFlags.DEFAULT)
+        if w is not None and (w is self.close_btn or w.is_ancestor(self.close_btn)):
+            g.set_state(Gtk.EventSequenceState.DENIED)
+            return
         b = g.get_current_button()
         if b == 1:
             self.win.select_tab(self.tab)
@@ -405,6 +412,8 @@ class TermWindow(Gtk.ApplicationWindow):
             self._closing = True
             self.close()
             return
+        if self._closing or self.get_application() is None:
+            return        # 창을 닫는 중 — 남은 탭의 셸이 끝나며 들어온다. 고를 탭이 없다 (예전엔 여기서 오류)
         if was_current:
             self.select_tab(self.tabs[min(i, len(self.tabs) - 1)])
 
