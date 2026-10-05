@@ -156,6 +156,7 @@ class Oobe(Gtk.Window):
 
         # 시작 애니메이션 — "세카이로 들어가기" (끝나면 설정 카드가 서서히). SEKAI_OOBE_NOINTRO=1 이면 건너뛴다
         self.sound = None
+        self._gone = False
         self.intro = None
         if os.environ.get("SEKAI_OOBE_NOINTRO") != "1":
             from sekaishell.oobe_intro import Intro
@@ -167,20 +168,63 @@ class Oobe(Gtk.Window):
         self.connect("destroy", lambda *_: self._stop_sound())
 
     def _play_intro_sound(self):
-        import shutil
-        import subprocess
+        """시작 소리 — 소리 서버에 출력 장치가 잡힌 뒤에 튼다 (스레드).
+        첫 부팅의 이 화면은 소리 서버(PipeWire·WirePlumber)와 같은 순간에 떠서, 바로 틀면 USB 오디오처럼
+        늦게 잡히는 장치가 아직 없어 아무 데도(또는 모니터 HDMI 로) 나갔다 — 메인 PC 2026-10-05.
+        기본 출력이 1.5초 동안 그대로일 때까지(최대 8초) 기다린다. 못 틀면 까닭을 기록에 남긴다"""
         path = next((p for p in INTRO_SOUNDS if os.path.isfile(p)), None)
         if not path:
             return
+        threading.Thread(target=self._sound_worker, args=(path,), daemon=True).start()
+
+    def _sound_worker(self, path):
+        import shutil
+        import subprocess
+
+        def default_sink():
+            try:
+                r = subprocess.run(["wpctl", "inspect", "@DEFAULT_AUDIO_SINK@"], capture_output=True,
+                                   text=True, timeout=3)
+            except (OSError, subprocess.TimeoutExpired):
+                return None
+            m = re.search(r'node\.name = "([^"]+)"', r.stdout) if r.returncode == 0 else None
+            return m.group(1) if m else None
+
+        if shutil.which("wpctl"):
+            t0, last, since = time.monotonic(), None, time.monotonic()
+            while time.monotonic() - t0 < 8:
+                cur = default_sink()
+                if cur != last:
+                    last, since = cur, time.monotonic()
+                elif cur and time.monotonic() - since >= 1.5:
+                    break
+                time.sleep(0.25)
+            print(f"sekai-oobe: 시작 소리 출력 {last or '(없음)'} ({time.monotonic() - t0:.1f}초 기다림)",
+                  file=sys.stderr, flush=True)
+            if not last:
+                return
+        if self._gone:
+            return                                  # 그새 첫 설정이 끝났다
         for cmd in (["pw-play", path], ["paplay", path], ["aplay", "-q", path]):
-            if shutil.which(cmd[0]):
-                try:
-                    self.sound = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    return
-                except OSError:
-                    continue
+            if not shutil.which(cmd[0]):
+                continue
+            try:
+                self.sound = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+            except OSError as e:
+                print(f"sekai-oobe: {cmd[0]} 실행 실패: {e}", file=sys.stderr, flush=True)
+                continue
+            try:
+                rc = self.sound.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                return                              # 틀고 있다
+            if rc != 0:
+                print(f"sekai-oobe: {cmd[0]} 이(가) 곧바로 끝남 ({rc}): {(self.sound.stderr.read() or '').strip()[:300]}",
+                      file=sys.stderr, flush=True)
+                continue
+            return
 
     def _stop_sound(self):
+        self._gone = True
         if self.sound and self.sound.poll() is None:
             self.sound.terminate()
 
