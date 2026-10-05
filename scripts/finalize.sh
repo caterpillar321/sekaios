@@ -95,8 +95,10 @@ inroot "systemctl disable systemd-networkd.socket systemd-networkd 2>/dev/null |
         systemctl enable  ssh.socket  2>/dev/null || true
         rm -f /etc/systemd/network/10-dhcp.network"
 # 방화벽 정책 — 개발 ISO 는 SSH 를 모든 네트워크에 열고, 배포용은 SSH 를 끄고 닫는다 (설정 › 방화벽에서 켤 수 있다)
-FW_KIND="$(cat "$P/build/overlay.kind" 2>/dev/null || echo release)"
-[ "$FW_KIND" = dev ] || FW_KIND=release
+#   종류는 sync-overlay 와 같은 규칙으로 지금 정한다 — build/overlay.kind 는 그 뒤 mksquash(sync-overlay)가 쓰는
+#   "지난번" 값이라, 개발용 다음에 배포용을 구우면 배포용에 SSH 가 열렸다
+FW_KIND=release
+if [ "${SEKAI_DEV:-0}" = 1 ] && [ -d "$P/local/overlay-dev" ]; then FW_KIND=dev; fi
 inroot "/usr/libexec/sekai/sekai-firewall setup $FW_KIND && mkdir -p /var/lib/sekai && touch /var/lib/sekai/firewall-v1
         systemctl enable firewalld.service 2>/dev/null || true"
 ok "방화벽 정책: $FW_KIND"
