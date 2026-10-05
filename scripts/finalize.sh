@@ -92,15 +92,29 @@ inroot "systemctl disable systemd-networkd.socket systemd-networkd 2>/dev/null |
         systemctl enable NetworkManager systemd-resolved 2>/dev/null || true
         # 데비안 13 은 소켓 활성화가 기본. ssh.service 는 ssh.socket 과 충돌한다.
         systemctl disable ssh.service 2>/dev/null || true
-        systemctl enable  ssh.socket  2>/dev/null || true
+        # ssh.socket 은 아래 방화벽 정책이 정한다 (개발용만 켠다)
         rm -f /etc/systemd/network/10-dhcp.network"
 # 방화벽 정책 — 개발 ISO 는 SSH 를 모든 네트워크에 열고, 배포용은 SSH 를 끄고 닫는다 (설정 › 방화벽에서 켤 수 있다)
 #   종류는 sync-overlay 와 같은 규칙으로 지금 정한다 — build/overlay.kind 는 그 뒤 mksquash(sync-overlay)가 쓰는
 #   "지난번" 값이라, 개발용 다음에 배포용을 구우면 배포용에 SSH 가 열렸다
 FW_KIND=release
 if [ "${SEKAI_DEV:-0}" = 1 ] && [ -d "$P/local/overlay-dev" ]; then FW_KIND=dev; fi
-inroot "/usr/libexec/sekai/sekai-firewall setup $FW_KIND && mkdir -p /var/lib/sekai && touch /var/lib/sekai/firewall-v1
+if ! inroot "/usr/libexec/sekai/sekai-firewall setup $FW_KIND"; then
+    echo "E: 방화벽 정책($FW_KIND)을 넣지 못했습니다 — ISO 를 만들지 않습니다"; exit 1
+fi
+inroot "mkdir -p /var/lib/sekai && touch /var/lib/sekai/firewall-v1
         systemctl enable firewalld.service 2>/dev/null || true"
+# 확인 — 정책 파일이 생겼고, SSH 가 종류대로인가 (배포용에 SSH 가 열린 채 나가지 않게)
+PUB="$R/etc/firewalld/zones/public.xml"
+[ -f "$PUB" ] || { echo "E: $PUB 이 없습니다 — 방화벽 정책이 안 들어갔습니다"; exit 1; }
+SOCK_ON=0; [ -e "$R/etc/systemd/system/sockets.target.wants/ssh.socket" ] && SOCK_ON=1
+SSH_PUB=0; grep -q 'service name="ssh"' "$PUB" && SSH_PUB=1
+if [ "$FW_KIND" = release ] && { [ $SOCK_ON = 1 ] || [ $SSH_PUB = 1 ]; }; then
+    echo "E: 배포용인데 SSH 가 열려 있습니다 (소켓 $SOCK_ON · 공용 존 $SSH_PUB)"; exit 1
+fi
+if [ "$FW_KIND" = dev ] && { [ $SOCK_ON = 0 ] || [ $SSH_PUB = 0 ]; }; then
+    echo "E: 개발용인데 SSH 가 닫혀 있습니다 (소켓 $SOCK_ON · 공용 존 $SSH_PUB)"; exit 1
+fi
 ok "방화벽 정책: $FW_KIND"
 # 설치 이미지 빌드 번호 (config/build-number — 출시용으로 구울 때 손으로 올린다). 패키지 파일이 아니라
 #   업데이트에 덮이지 않고, 설치본엔 "어느 이미지로 깔았나"로 남는다 (설정 › 시스템 정보)
