@@ -18,7 +18,8 @@ import signal
 import subprocess
 import tempfile
 
-from .util import dbg, hex_to_rgba, keyword, run
+from . import monscale
+from .util import dbg, hex_to_rgba, hyprctl, keyword, run
 from sekaishell import theme
 
 HOME = os.path.expanduser("~")
@@ -563,7 +564,7 @@ class Store:
                 continue
             mode = m.get("mode") or "preferred"
             pos = m.get("position") or "auto"
-            scale = m.get("scale", 1.0)
+            scale = self._fit_scale(name, m)
             line = f"monitor = {name}, {mode}, {pos}, {scale}"
             if m.get("transform"):
                 line += f", transform, {int(m['transform'])}"
@@ -782,6 +783,19 @@ class Store:
             changed = True
         return changed
 
+    def _fit_scale(self, name, m):
+        """저장된 배율을 그 모니터·모드에서 합성기가 받는 값으로 (monscale) — 예전에 저장한 150% 등도 여기서 맞춘다"""
+        size = monscale.mode_size(m.get("mode"))
+        if size is None:                            # "preferred" — 모니터의 기본 모드 크기
+            mon = next((x for x in (hyprctl("monitors", "all", js=True) or [])
+                        if name in (x.get("name"), display_key(x))), None)
+            if mon:
+                size = (monscale.mode_size((mon.get("availableModes") or [""])[0])
+                        or (mon.get("width", 0), mon.get("height", 0)))
+        if not size:
+            return monscale.fmt(m.get("scale", 1.0))
+        return monscale.fmt(monscale.fit(size[0], size[1], m.get("scale", 1.0)))
+
     def apply_display(self):
         for name, m in self.get("display").items():
             if not _DISPLAY_KEY_OK.fullmatch(name):
@@ -790,7 +804,7 @@ class Store:
                 keyword("monitor", f"{name}, disable")
                 continue
             mode = m.get("mode") or "preferred"
-            arg = f"{name}, {mode}, {m.get('position') or 'auto'}, {m.get('scale', 1.0)}"
+            arg = f"{name}, {mode}, {m.get('position') or 'auto'}, {self._fit_scale(name, m)}"
             if m.get("transform"):
                 arg += f", transform, {int(m['transform'])}"
             # vrr 는 끌 때도 0 을 명시해야 켜져 있던 것이 꺼진다

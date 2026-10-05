@@ -13,13 +13,12 @@ from ..store import display_key
 from ..util import hyprctl, keyword, spawn
 from ..widgets import Page, button, combo, row, switch
 from .arrange import ArrangeView
+from .. import monscale
 
 
 TRANSFORMS = [(0, "가로 (기본)"), (1, "세로 90°"), (2, "가로 180°"), (3, "세로 270°"),
               (4, "가로 뒤집기"), (5, "세로 90° 뒤집기"),
               (6, "가로 180° 뒤집기"), (7, "세로 270° 뒤집기")]
-SCALES = [("1.0", "100%"), ("1.25", "125%"), ("1.5", "150%"),
-          ("1.75", "175%"), ("2.0", "200%")]
 
 
 def _modes(mon):
@@ -107,12 +106,12 @@ def _hz_label(hz):
     return f"{v:.0f} Hz" if abs(v - round(v)) < 0.02 else f"{v:.2f} Hz"
 
 
-def _scale_id(v):
-    try:
-        v = float(v)
-    except (TypeError, ValueError):
-        return "1.0"
-    return next((k for k, _ in SCALES if abs(float(k) - v) < 0.01), "1.0")
+def _res_size(res, mon):
+    """해상도 id("2560x1600" · "preferred") → 픽셀 크기 — 배율 목록을 그 해상도에 맞춘다"""
+    first = (mon.get("availableModes") or [""])[0]
+    return (monscale.mode_size(res)
+            or monscale.mode_size(first)
+            or (mon.get("width", 0), mon.get("height", 0)))
 
 
 def build(store):
@@ -172,7 +171,7 @@ def build(store):
                     w["res"].set_active_id("preferred")
                 w["fill"](w["rate"], w["res"].get_active_id(), hz)
                 w["vrr"].set_active_id(str(int(d.get("vrr", 0))))
-                w["scale"].set_active_id(_scale_id(d.get("scale", 1.0)))
+                w["fill_scale"](w["scale"], w["res"].get_active_id(), d.get("scale", 1.0))
                 w["tr"].set_active_id(str(int(d.get("transform", 0))))
         finally:
             quiet["on"] = False
@@ -403,6 +402,8 @@ def build(store):
             rc = ctl[n]["rate"]
             # 해상도를 바꾸면 그 해상도의 가장 높은 주사율로 (윈도우와 같게)
             fill_rates(rc, v)
+            # 배율 목록도 새 해상도에 맞게 (지금 배율이 안 되면 가장 가까운 값 — 적용할 때 store 가 똑같이 맞춘다)
+            ctl[n]["fill_scale"](ctl[n]["scale"], v, entry(n).get("scale", 1.0))
             apply_mode(n, v, rc.get_active_id())
 
         def on_rate(v, n=name):
@@ -488,10 +489,27 @@ def build(store):
                 warn.hide()
             return False
 
+        def fill_scale(sc, res, want, mon=mon):
+            """배율 목록을 해상도에 맞게 다시 채운다 (신호 없이) — 그 해상도에서 되는 값만"""
+            prev, quiet["on"] = quiet["on"], True
+            try:
+                w_, h_ = _res_size(res, mon)
+                items = monscale.choices(w_, h_)
+                sc.remove_all()
+                for k, label in items:
+                    sc.append(k, label)
+                sc.set_active_id(monscale.match_id(items, want))
+            finally:
+                quiet["on"] = prev
+
         def on_scale(v, n=name):
+            if quiet["on"] or v is None:
+                return
             change(n, "scale", float(v))
 
-        scale_combo = combo(SCALES, _scale_id(saved.get("scale", mon.get("scale", 1.0))), on_scale)
+        scale_combo = Gtk.ComboBoxText()
+        scale_combo.connect("changed", lambda w: on_scale(w.get_active_id()))
+        fill_scale(scale_combo, res_combo.get_active_id(), saved.get("scale", mon.get("scale", 1.0)))
         row(s, "배율", "글자와 UI 크기", control=scale_combo)
 
         def on_tr(v, n=name):
@@ -507,7 +525,7 @@ def build(store):
         row(s, "이 모니터 사용", "끄면 화면이 꺼집니다 (마지막 남은 모니터는 끌 수 없음)",
             control=en_switch)
         ctl[name] = {"res": res_combo, "rate": rate_combo, "fill": fill_rates, "scale": scale_combo,
-                     "tr": tr_combo, "en": en_switch, "vrr": vrr_combo}
+                     "fill_scale": fill_scale, "tr": tr_combo, "en": en_switch, "vrr": vrr_combo}
 
 
     s = p.section("기타")
