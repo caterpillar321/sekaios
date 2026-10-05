@@ -24,6 +24,25 @@ KEY["f11"], KEY["f12"] = 87, 88
 BTN = {"left": 272, "right": 273, "middle": 274}
 
 
+def logical_screen():
+    """시험대의 논리 화면 크기 (배율을 나눈 값, 모니터 전체를 감싸는 크기) — 가상 태블릿의 0..32767 이 여기에 맞는다.
+    배율 160% 의 2560×1600 노트북이면 1600×1000. 화면 찍기도 같은 크기(grim -s 1)라 좌표가 하나로 맞는다."""
+    out = remote.run("hyprctl -j monitors", timeout=20).out
+    import json
+    try:
+        mons = [m for m in json.loads(out) if not m.get("disabled")]
+    except ValueError:
+        return config.SCREEN
+    if not mons:
+        return config.SCREEN
+    def size(m):
+        w, h = m["width"] / m["scale"], m["height"] / m["scale"]
+        return (h, w) if m.get("transform", 0) % 2 else (w, h)
+    w = max(m["x"] + size(m)[0] for m in mons)
+    h = max(m["y"] + size(m)[1] for m in mons)
+    return round(w), round(h)
+
+
 class RealOnly(Exception):
     """VM(QEMU)에만 있는 동작 — 실기 모드에선 그 시험을 건너뛴다"""
 
@@ -33,6 +52,8 @@ class RealIO:
         self.p = None
 
     def connect(self, timeout=20):
+        if not config.REAL_SCREEN_SET:
+            config.SCREEN = logical_screen()
         remote.push(config.REAL_UINPUT, "/tmp/mm-uinput.py")
         self.p = subprocess.Popen(remote._ssh_base() + ["sudo -S -p '' python3 /tmp/mm-uinput.py"],
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
@@ -65,7 +86,7 @@ class RealIO:
 
     # ── 화면 ──
     def shot(self, path):
-        r = subprocess.run(remote._ssh_base() + [f"{remote.SESSION_ENV}; grim -"], capture_output=True, timeout=60)
+        r = subprocess.run(remote._ssh_base() + [f"{remote.SESSION_ENV}; grim -s 1 -"], capture_output=True, timeout=60)
         if r.returncode != 0 or not r.stdout.startswith(b"\x89PNG"):
             raise RuntimeError("화면을 찍지 못했습니다: " + r.stderr.decode(errors="replace")[-200:])
         with open(path, "wb") as f:

@@ -23,6 +23,7 @@ SCREEN = (1920, 1080)
 REAL = os.environ.get("MM_REAL", "")
 REAL_JUMP = os.environ.get("MM_REAL_JUMP", "")
 REAL_UINPUT = os.path.join(HERE, "real", "mm-uinput.py")
-if REAL:
-    SCREEN = tuple(int(x) for x in os.environ.get("MM_REAL_SCREEN", "1920x1080").split("x"))
+REAL_SCREEN_SET = bool(os.environ.get("MM_REAL_SCREEN"))      # 없으면 연결할 때 시험대에서 알아낸다 (realio.logical_screen)
+if REAL and REAL_SCREEN_SET:
+    SCREEN = tuple(int(x) for x in os.environ["MM_REAL_SCREEN"].split("x"))
 OVMF_CODE = "/usr/share/OVMF/OVMF_CODE_4M.fd"
