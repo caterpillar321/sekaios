@@ -203,6 +203,18 @@ class Oobe(Gtk.Window):
                   file=sys.stderr, flush=True)
             if not last:
                 return
+            # 이 화면은 로그인 전 계정(_greetd)으로 돌아 그 계정의 출력 음량(새 장치 기본 40%)을 쓴다 — 너무 작게 들렸다
+            #   (벤치 2026-10-05). 낮으면 70% 로 — 사용자 계정의 음량은 건드리지 않는다
+            try:
+                v = subprocess.run(["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"], capture_output=True, text=True,
+                                   timeout=3).stdout
+                m = re.search(r"Volume:\s*([0-9.]+)", v)
+                if m and float(m.group(1)) < 0.6:
+                    subprocess.run(["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", "0.7"], timeout=3)
+                if "MUTED" in v:
+                    subprocess.run(["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "0"], timeout=3)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
         if self._gone:
             return                                  # 그새 첫 설정이 끝났다
         for cmd in (["pw-play", path], ["paplay", path], ["aplay", "-q", path]):
