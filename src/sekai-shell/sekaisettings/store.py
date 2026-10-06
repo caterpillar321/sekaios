@@ -60,7 +60,8 @@ DEFAULTS = {
         "kb_options": "korean:ralt_hangul,korean:rctrl_hanja",
         "repeat_rate": 25,
         "repeat_delay": 600,
-        "sensitivity": 0.0,
+        "sensitivity": -0.3,     # 포인터 속도 10단계(윈도우 기본) — libinput 0 은 윈도우보다 빠르다 (pages/devices.py SPEED_MID)
+        "accel": True,           # 포인터 정확도 향상 (가속) — 끄면 flat
         "natural_scroll": False,
         "tp_natural_scroll": True,
         "tp_tap": True,
@@ -521,6 +522,7 @@ class Store:
         lines.append(f"    repeat_rate = {int(i['repeat_rate'])}")
         lines.append(f"    repeat_delay = {int(i['repeat_delay'])}")
         lines.append(f"    sensitivity = {float(i['sensitivity']):.2f}")
+        lines.append(f"    accel_profile = {'adaptive' if i.get('accel', True) else 'flat'}")
         lines.append(f"    natural_scroll = {'true' if i['natural_scroll'] else 'false'}")
         lines.append(f"    follow_mouse = {int(i['follow_mouse'])}")
         lines.append(f"    sekai_sticky_keys = {1 if x.get('sticky_keys') else 0}")
@@ -625,6 +627,7 @@ class Store:
         ("input", "repeat_rate"):           ("input:repeat_rate", _int),
         ("input", "repeat_delay"):          ("input:repeat_delay", _int),
         ("input", "sensitivity"):           ("input:sensitivity", _f2),
+        ("input", "accel"):                 ("input:accel_profile", lambda v: "adaptive" if v else "flat"),
         ("input", "natural_scroll"):        ("input:natural_scroll", _bool),
         ("input", "follow_mouse"):          ("input:follow_mouse", _int),
         ("input", "tp_natural_scroll"):     ("input:touchpad:natural_scroll", _bool),

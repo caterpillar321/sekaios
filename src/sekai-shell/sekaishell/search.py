@@ -542,6 +542,8 @@ SETTINGS_ITEMS = [
     ("input", "키 반복 속도", ("키 반복", "repeat", "반복 시작 지연", "delay", "repeat rate")),
     ("input", "포인터 속도", ("마우스 속도", "mouse speed", "감도", "sensitivity", "커서 속도", "pointer",
                           "mouse")),
+    ("input", "포인터 정확도 향상", ("가속", "마우스 가속", "acceleration", "accel", "정확도", "enhance pointer precision",
+                                   "raw input", "flat")),
     ("input", "스크롤 방향", ("스크롤", "scroll", "natural scroll", "자연스러운 스크롤", "반대로")),
     ("input", "마우스를 따라 포커스", ("focus follows mouse", "포커스", "focus")),
     ("input", "터치패드", ("touchpad", "탭하여 클릭", "tap to click", "trackpad", "트랙패드", "터치패드 끄기",

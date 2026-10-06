@@ -13,6 +13,28 @@ LAYOUTS = [("us", "영어 (미국)"), ("kr", "한국어"), ("jp", "일본어"),
            ("ru", "러시아어"), ("cn", "중국어")]
 
 
+
+# 포인터 속도 — 윈도우의 1~20 눈금(기본 10)을 합성기의 sensitivity(-1.0 ~ 1.0)로.
+#   libinput 의 0 은 윈도우 10단계보다 빠르게 느껴져(가속 곡선이 다르다 — 천천히 움직일 때도 민감) 10단계를 -0.3 에 둔다
+#   (2026-10-06 실제 PC 에서 윈도우와 견줘 정함). 그 아래·위는 -1.0 · 1.0 까지 고르게.
+SPEED_MID = -0.3
+
+
+def sens_of(n):
+    n = min(20, max(1, int(round(n))))
+    if n <= 10:
+        return round(-1.0 + (n - 1) * (SPEED_MID + 1.0) / 9, 3)
+    return round(SPEED_MID + (n - 10) * (1.0 - SPEED_MID) / 10, 3)
+
+
+def speed_of(sens):
+    try:
+        v = float(sens)
+    except (TypeError, ValueError):
+        return 10
+    return min(range(1, 21), key=lambda n: abs(sens_of(n) - v))
+
+
 def edited_entry(text, on_change, width=20, placeholder=None):
     """입력 칸 — 엔터나 포커스가 빠질 때, 그리고 사람이 글자를 바꿨을 때만 저장한다.
     포커스가 지나가기만 해도 저장하면, 다른 곳(위 목록·한/영 스위치)에서 바꾼 값을
@@ -79,10 +101,12 @@ def build_input(store):
                        lambda v: store.set("input", "repeat_delay", v)))
 
     s = p.section("마우스")
-    row(s, "포인터 속도", "-1.0 느리게 ~ 1.0 빠르게",
+    row(s, "포인터 속도", "윈도우처럼 1 ~ 20, 기본 10",
         icon=["input-mouse", "preferences-desktop-peripherals"],
-        control=slider(i["sensitivity"], -1.0, 1.0, 0.05,
-                       lambda v: store.set("input", "sensitivity", v), digits=2))
+        control=slider(speed_of(i["sensitivity"]), 1, 20, 1,
+                       lambda v: store.set("input", "sensitivity", sens_of(v))))
+    row(s, "포인터 정확도 향상", "빨리 움직일수록 더 멀리 — 끄면 움직인 만큼만 (게임에서 많이 끕니다 · 터치패드에도 적용)",
+        control=switch(i.get("accel", True), lambda v: store.set("input", "accel", v)))
     row(s, "스크롤 방향 반대로", "손가락이 움직이는 대로 내용이 따라옵니다",
         control=switch(i["natural_scroll"],
                        lambda v: store.set("input", "natural_scroll", v)))
