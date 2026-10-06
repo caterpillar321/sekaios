@@ -18,6 +18,8 @@ import sys
 import threading
 import time
 
+import cairo
+
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk, GdkPixbuf, GLib  # noqa: E402
@@ -127,6 +129,8 @@ class Oobe(Gtk.Window):
             GtkLayerShell.set_exclusive_zone(self, -1)
 
         self.bg = None
+        self._bgc = None                      # ((W, H, 배율, 그림), 그려 둔 배경) — _paint_bg
+        self._bg_pending = None
         try:
             self.bg = GdkPixbuf.Pixbuf.new_from_file(f"{WALLDIR}/hatsune.jpg")
         except Exception:
@@ -160,7 +164,7 @@ class Oobe(Gtk.Window):
         self.intro = None
         if os.environ.get("SEKAI_OOBE_NOINTRO") != "1":
             from sekaishell.oobe_intro import Intro
-            self.intro = Intro(self._intro_done, background=self._paint_bg)
+            self.intro = Intro(self._intro_done, background=self._paint_bg, prepare=self.bg_prepare)
             ov.add_overlay(self.intro)
             card.set_opacity(0.0)
             self.connect("key-press-event", lambda *_: (self.intro.skip(), True)[1] if self.intro else False)
@@ -253,24 +257,17 @@ class Oobe(Gtk.Window):
             return x < 1.0
         GLib.timeout_add(16, fade)
 
-    def _paint_bg(self, cr, width, height):
-        class _A:
-            pass
-        a = _A()
-        a.width, a.height = width, height
-        self._draw_bg_alloc(cr, a)
-
-    def _draw_bg(self, w, cr):
-        return self._draw_bg_alloc(cr, w.get_allocation())
-
-    def _draw_bg_alloc(self, cr, a):
-        if self.bg is not None:
-            bw, bh = self.bg.get_width(), self.bg.get_height()
-            s = max(a.width / bw, a.height / bh)
+    # 배경 그림 — 화면 크기로 한 번만 그려 두고 복사만 한다. 매번 사진(pixbuf)을 cairo 로 바꾸면 2560×1440 에서
+    #   한 번에 ~100ms 라 시작 애니메이션·설정 카드가 나타나는 동안 초당 5프레임쯤이었다 (2026-10-06 메인 PC).
+    #   시작 애니메이션이 첫 프레임에 bg_prepare 로 다른 스레드에서 미리 그리게 한다.
+    def _render_bg(self, cr, W, H, pix):
+        if pix is not None:
+            bw, bh = pix.get_width(), pix.get_height()
+            s = max(W / bw, H / bh)
             cr.save()
-            cr.translate((a.width - bw * s) / 2, (a.height - bh * s) / 2)
+            cr.translate((W - bw * s) / 2, (H - bh * s) / 2)
             cr.scale(s, s)
-            Gdk.cairo_set_source_pixbuf(cr, self.bg, 0, 0)
+            Gdk.cairo_set_source_pixbuf(cr, pix, 0, 0)
             cr.paint()
             cr.restore()
         else:
@@ -278,6 +275,43 @@ class Oobe(Gtk.Window):
             cr.paint()
         cr.set_source_rgba(0, 0, 0, 0.35)
         cr.paint()
+
+    def _bg_build(self, W, H, sf, pix):
+        surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, max(1, W * sf), max(1, H * sf))
+        surf.set_device_scale(sf, sf)
+        self._render_bg(cairo.Context(surf), W, H, pix)
+        return surf
+
+    def bg_prepare(self, W, H, sf):
+        """다른 스레드에서 미리 — 사진 변환·확대가 화면 스레드를 붙잡지 않게"""
+        key = (W, H, sf, id(self.bg))
+        if self._bgc and self._bgc[0] == key or self._bg_pending == key:
+            return
+        self._bg_pending = key
+        pix = self.bg
+
+        def work():
+            surf = self._bg_build(W, H, sf, pix)
+
+            def done():
+                if self._bg_pending == key:
+                    self._bgc = (key, surf)
+                    self._bg_pending = None
+                return False
+            GLib.idle_add(done)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _paint_bg(self, cr, width, height, sf=1):
+        key = (width, height, sf, id(self.bg))
+        if not self._bgc or self._bgc[0] != key:
+            self._bgc = (key, self._bg_build(width, height, sf, self.bg))   # 미리 못 그렸으면 지금 (한 번)
+            self._bg_pending = None
+        cr.set_source_surface(self._bgc[1], 0, 0)
+        cr.paint()
+
+    def _draw_bg(self, w, cr):
+        a = w.get_allocation()
+        self._paint_bg(cr, a.width, a.height, w.get_scale_factor())
         return False
 
     # ── 언어 ──
