@@ -2052,8 +2052,11 @@ def main():
                     body = f.read()
                 break
         # 사용자가 직접 덧붙이고 싶을 때
-        if not _layer.WAYLAND:
-            # 기본 화면 모드(X11)엔 뒤를 흐리는 효과가 없다 — 반투명 면을 거의 불투명하게
+        if (not _layer.WAYLAND or os.environ.get("SEKAI_SOFTWARE_RENDER")
+                or not sekai_conf("appearance", "blur", True)):
+            # 뒤를 흐리는 효과가 없을 때 — 기본 화면 모드(X11), 그래픽 가속이 없어 합성기가 흐림을 끈 때,
+            #   사용자가 "투명 효과"를 끈 때. 반투명만 남으면 메뉴 뒤 바탕화면 아이콘·글자가 또렷이 비쳐
+            #   메뉴 글자와 겹친다 — 거의 불투명하게 (윈도우도 투명 효과를 끄면 불투명)
             body = body.replace("alpha(@surface, 0.86)", "alpha(@surface, 0.97)")
         user = os.path.expanduser("~/.config/sekai/panel.css")
         if os.path.exists(user):

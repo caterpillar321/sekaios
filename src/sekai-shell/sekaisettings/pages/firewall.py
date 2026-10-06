@@ -18,6 +18,7 @@ from sekaishell.firewall import _fw_call, listening_apps  # noqa: E402
 
 from ..util import dbg, failure_reason, run_async  # noqa: E402
 from ..widgets import Page, button, combo, row, switch  # noqa: E402
+from .network import conn_label  # noqa: E402
 
 HELPER = "/usr/libexec/sekai/sekai-firewall"
 ICON = ["security-high", "security-high-symbolic", "network-wired"]
@@ -147,7 +148,7 @@ class FirewallPage:
             kind = {"802-11-wireless": "와이파이", "802-3-ethernet": "유선", "vpn": "VPN", "wireguard": "VPN"}.get(c["type"], c["type"])
             sub = ("공용 — 다른 기기가 이 PC 를 볼 수 없습니다 (카페 · 공항처럼 믿을 수 없는 곳)" if c["zone"] == "public" else
                    "개인 — 프린터 · 기기 찾기와 아래에서 허용한 기능이 됩니다 (집 · 회사처럼 믿는 곳)")
-            row(s, f"{c['name']}", f"{kind} · {sub}",
+            row(s, conn_label(c["name"]), f"{kind} · {sub}",            # "Wired connection 1" → "유선 연결 1" (네트워크 페이지와 같게)
                 icon=["network-wireless", "network-wireless-symbolic"] if kind == "와이파이" else ["network-wired", "network-wired-symbolic"],
                 control=combo(PROFILES, c["zone"],
                               lambda z, u=c["uuid"], cur=c["zone"]: z and z != cur and self._do(
