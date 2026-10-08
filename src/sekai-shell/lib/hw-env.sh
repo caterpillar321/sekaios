@@ -36,14 +36,28 @@ sekai_gpu_check
 #   내장 GPU 나 보조 카드일 수 있다 (예: 내장 AMD + RTX 5090 + Quadro).
 #   → 모니터가 꽂힌 카드만, 펌웨어가 화면을 띄운 카드(boot_vga)를 앞에 두어 넘긴다.
 #   (카드 목록은 콜론으로 나누므로 by-path 대신 /dev/dri/cardN 을 쓴다)
+#   노트북(내장 화면이 있는 PC)은 모니터가 아직 없는 카드도 단자가 있으면 뒤에 붙인다 — 하이브리드 노트북의
+#   HDMI 는 보통 NVIDIA 에 직결이라, 로그인 뒤 꽂은 외부 모니터를 합성기가 그 카드를 안 보고 있어 못 켰다
+#   (TUF A15, 2026-10-08). 넘겨도 화면을 안 내보내는 동안 NVIDIA 는 그대로 잠든다(D3, 실기 확인).
+#   데스크톱(카드 여럿·모니터 여럿)은 예전처럼 모니터가 꽂힌 카드만 — 따로 시험한 뒤에 넓힌다.
 sekai_gpu_pick() {
     [ -n "${AQ_DRM_DEVICES:-}" ] && return 0            # 사용자가 정했으면 그대로
-    first="" rest="" n=0
+    first="" rest="" idle="" n=0 laptop=0
+    for st in /sys/class/drm/card[0-9]*-eDP-*/status /sys/class/drm/card[0-9]*-LVDS-*/status \
+              /sys/class/drm/card[0-9]*-DSI-*/status; do
+        [ -e "$st" ] && grep -qx connected "$st" && laptop=1
+    done
     for c in /dev/dri/card[0-9]*; do
         [ -e "$c" ] || continue
         n=$((n + 1))
         k=${c##*/}
-        grep -qx connected /sys/class/drm/"$k"-*/status 2>/dev/null || continue
+        if ! grep -qx connected /sys/class/drm/"$k"-*/status 2>/dev/null; then
+            # 모니터 없음 — 노트북이고 화면 단자(쓰기 되돌림 Writeback 말고)가 있으면 뒤에
+            if [ "$laptop" = 1 ] && ls /sys/class/drm/"$k"-* 2>/dev/null | grep -qv -- '-Writeback-'; then
+                idle="$idle${idle:+:}$c"
+            fi
+            continue
+        fi
         if [ -z "$first" ] && [ "$(cat /sys/class/drm/"$k"/device/boot_vga 2>/dev/null)" = 1 ]; then
             first=$c
         else
@@ -52,6 +66,7 @@ sekai_gpu_pick() {
     done
     [ "$n" -gt 1 ] || return 0                           # 카드가 하나면 고를 것이 없다
     list="$first${first:+${rest:+:}}$rest"
+    [ -n "$list" ] && [ -n "$idle" ] && list="$list:$idle"
     [ -n "$list" ] && export AQ_DRM_DEVICES="$list"
 }
 sekai_gpu_pick
