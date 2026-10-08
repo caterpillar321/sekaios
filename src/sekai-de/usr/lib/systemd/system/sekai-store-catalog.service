@@ -1,9 +1,9 @@
 [Unit]
 Description=SekaiOS store catalog (download once if missing)
 Documentation=file:///usr/libexec/sekai/sekai-catalog
-# 목록이 있으면 바로 끝난다. 부팅을 붙잡지 않게 simple (oneshot 이면 multi-user 까지 기다린다)
-After=network-online.target
-Wants=network-online.target
+# 부팅을 붙잡지 않는다 — network-online 을 원하거나(Wants) 그 뒤로(After) 두면 NetworkManager-wait-online 이
+#   부팅에 끌려 들어오고, multi-user 가 이 서비스를 기다려 로그인 화면이 그만큼 늦게 뜬다(i3-6100 실기 18초,
+#   랜선이 없으면 더). 네트워크는 목록이 없을 때만 스크립트가 스스로 기다린다.
 
 [Service]
 Type=simple

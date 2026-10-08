@@ -10,6 +10,8 @@ have_flathub() {
     [ -e /var/lib/flatpak/appstream/flathub/x86_64/active/appstream.xml.gz ]
 }
 have_debian && have_flathub && exit 0
+# 네트워크는 여기서 기다린다 (최대 10분) — 유닛이 network-online 을 기다리면 로그인 화면이 그만큼 늦게 뜬다
+command -v nm-online >/dev/null 2>&1 && { nm-online -q -t 600 || true; }
 # 업데이트 도중에(패키지 설치 스크립트에서) 불렸으면 apt·dpkg 가 끝날 때까지 기다린다 (최대 30분)
 i=0
 while pgrep -x 'apt|apt-get|dpkg|aptitude|unattended-upgr' >/dev/null 2>&1; do
