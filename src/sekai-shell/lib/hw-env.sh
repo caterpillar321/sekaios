@@ -36,24 +36,21 @@ sekai_gpu_check
 #   내장 GPU 나 보조 카드일 수 있다 (예: 내장 AMD + RTX 5090 + Quadro).
 #   → 모니터가 꽂힌 카드만, 펌웨어가 화면을 띄운 카드(boot_vga)를 앞에 두어 넘긴다.
 #   (카드 목록은 콜론으로 나누므로 by-path 대신 /dev/dri/cardN 을 쓴다)
-#   노트북(내장 화면이 있는 PC)은 모니터가 아직 없는 카드도 단자가 있으면 뒤에 붙인다 — 하이브리드 노트북의
-#   HDMI 는 보통 NVIDIA 에 직결이라, 로그인 뒤 꽂은 외부 모니터를 합성기가 그 카드를 안 보고 있어 못 켰다
-#   (TUF A15, 2026-10-08). 넘겨도 화면을 안 내보내는 동안 NVIDIA 는 그대로 잠든다(D3, 실기 확인).
-#   데스크톱(카드 여럿·모니터 여럿)은 예전처럼 모니터가 꽂힌 카드만 — 따로 시험한 뒤에 넓힌다.
+#   모니터가 아직 없는 카드도 화면 단자가 있으면 뒤에 붙인다 — 로그인 뒤 그 카드에 꽂은 모니터를 합성기가 그 카드를
+#   안 보고 있어 못 켰다 (하이브리드 노트북의 HDMI 는 보통 NVIDIA 에 직결 — TUF A15, 2026-10-08. 데스크톱도
+#   메인보드 단자·보조 카드에 나중에 꽂으면 같았다). 넘겨도 화면을 안 내보내는 동안 NVIDIA 는 그대로 잠든다(D3, 실기).
+#   빈 카드 때문에 합성기가 못 뜨면 세션이 모니터가 꽂힌 카드만(SEKAI_AQ_SAFE)으로 다시 띄운다 (sekai-session ·
+#   sekai-greeter-session) — 그래도 안 되면 기본 화면 모드.
 sekai_gpu_pick() {
     [ -n "${AQ_DRM_DEVICES:-}" ] && return 0            # 사용자가 정했으면 그대로
-    first="" rest="" idle="" n=0 laptop=0
-    for st in /sys/class/drm/card[0-9]*-eDP-*/status /sys/class/drm/card[0-9]*-LVDS-*/status \
-              /sys/class/drm/card[0-9]*-DSI-*/status; do
-        [ -e "$st" ] && grep -qx connected "$st" && laptop=1
-    done
+    first="" rest="" idle="" n=0
     for c in /dev/dri/card[0-9]*; do
         [ -e "$c" ] || continue
         n=$((n + 1))
         k=${c##*/}
         if ! grep -qx connected /sys/class/drm/"$k"-*/status 2>/dev/null; then
-            # 모니터 없음 — 노트북이고 화면 단자(쓰기 되돌림 Writeback 말고)가 있으면 뒤에
-            if [ "$laptop" = 1 ] && ls /sys/class/drm/"$k"-* 2>/dev/null | grep -qv -- '-Writeback-'; then
+            # 모니터 없음 — 화면 단자(쓰기 되돌림 Writeback 말고)가 있으면 뒤에
+            if ls /sys/class/drm/"$k"-* 2>/dev/null | grep -qv -- '-Writeback-'; then
                 idle="$idle${idle:+:}$c"
             fi
             continue
@@ -66,8 +63,12 @@ sekai_gpu_pick() {
     done
     [ "$n" -gt 1 ] || return 0                           # 카드가 하나면 고를 것이 없다
     list="$first${first:+${rest:+:}}$rest"
-    [ -n "$list" ] && [ -n "$idle" ] && list="$list:$idle"
-    [ -n "$list" ] && export AQ_DRM_DEVICES="$list"
+    [ -n "$list" ] || return 0
+    if [ -n "$idle" ]; then
+        export SEKAI_AQ_SAFE="$list"                     # 모니터가 꽂힌 카드만 — 되띄울 때
+        list="$list:$idle"
+    fi
+    export AQ_DRM_DEVICES="$list"
 }
 sekai_gpu_pick
 

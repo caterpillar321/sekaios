@@ -53,6 +53,15 @@ run_greeter() {
     worldlink -c "$1" >/dev/null 2>&1
     rc=$?
     [ -e "$DONE" ] && { rm -f "$DONE"; exit 0; }
+    # 모니터 없는 카드까지 넘겨서(hw-env.sh) 바로 죽었으면 — 모니터가 꽂힌 카드만으로 한 번 더
+    if [ $rc -ne 0 ] && [ $(( $(date +%s) - started )) -lt 10 ] && [ -n "${SEKAI_AQ_SAFE:-}" ]; then
+        export AQ_DRM_DEVICES="$SEKAI_AQ_SAFE"
+        unset SEKAI_AQ_SAFE
+        started=$(date +%s)
+        worldlink -c "$1" >/dev/null 2>&1
+        rc=$?
+        [ -e "$DONE" ] && { rm -f "$DONE"; exit 0; }
+    fi
     if [ $rc -ne 0 ] && [ $(( $(date +%s) - started )) -lt 10 ]; then
         export SEKAI_BASIC=1
         exec "$X/start" "$X/greeter" "$APP"

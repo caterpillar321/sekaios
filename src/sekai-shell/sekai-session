@@ -84,6 +84,15 @@ rm -f "$UP"
 started=$(date +%s)
 worldlink >"$LOGDIR/session.log" 2>&1
 rc=$?
+# 모니터 없는 카드까지 넘겨서(hw-env.sh) 바로 죽었으면 — 모니터가 꽂힌 카드만으로 한 번 더 (첫 기록은 따로 남긴다)
+if [ ! -e "$UP" ] && [ $rc -ne 0 ] && [ $(( $(date +%s) - started )) -lt 10 ] && [ -n "${SEKAI_AQ_SAFE:-}" ]; then
+    cp -f "$LOGDIR/session.log" "$LOGDIR/session-allgpu.log" 2>/dev/null
+    export AQ_DRM_DEVICES="$SEKAI_AQ_SAFE"
+    unset SEKAI_AQ_SAFE
+    started=$(date +%s)
+    worldlink >"$LOGDIR/session.log" 2>&1
+    rc=$?
+fi
 if [ ! -e "$UP" ] && [ $rc -ne 0 ] && [ $(( $(date +%s) - started )) -lt 10 ]; then
     export SEKAI_BASIC=1 SEKAI_BASIC_REASON=crash
     exec /usr/lib/sekai/x11/start /usr/lib/sekai/x11/session
