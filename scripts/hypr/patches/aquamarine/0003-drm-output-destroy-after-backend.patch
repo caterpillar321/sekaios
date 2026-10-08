@@ -1,17 +1,19 @@
 diff --git a/src/backend/drm/DRM.cpp b/src/backend/drm/DRM.cpp
-index aa7a497..c05d1c9 100644
+index aa7a497..81f54f5 100644
 --- a/src/backend/drm/DRM.cpp
 +++ b/src/backend/drm/DRM.cpp
-@@ -1554,9 +1554,14 @@ void Aquamarine::SDRMConnector::onPresent() {
+@@ -1554,9 +1554,16 @@ void Aquamarine::SDRMConnector::onPresent() {
  }
  
  Aquamarine::CDRMOutput::~CDRMOutput() {
 -    backend->backend->removeIdleEvent(frameIdle);
 -    connector->isPageFlipPending   = false;
 -    connector->frameEventScheduled = false;
-+    // the backend (and its connectors) can already be gone when outputs are destroyed at shutdown — the login screen's
-+    // compositor crashed here on every exit once several GPUs were handed to it (upstream 6d0b356, plus the connector)
-+    if (backend && backend->backend)
++    // At exit the backend can be torn down from a static destructor: ~CBackend has already destroyed its idle list when
++    // ~CDRMBackend disconnects the connectors and the outputs die here. Erasing from that destroyed list corrupted memory and
++    // freed frameIdle — the login screen's compositor crashed on every exit once several GPUs were handed to it.
++    // expired() is also true while an object is being destroyed (upstream 6d0b356 only checked for null).
++    if (!backend.expired() && backend->backend && !backend->backend.expired())
 +        backend->backend->removeIdleEvent(frameIdle);
 +    if (connector) {
 +        connector->isPageFlipPending   = false;

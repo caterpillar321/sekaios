@@ -90,7 +90,9 @@ REV="sekai2"
 #      세그폴트 (patches/aquamarine/0003, 원본 6d0b356)
 #   aquamarine sekai5: 렌더러가 먼저 사라진 뒤 버퍼를 지울 때 그 렌더러로 들어가지 않는다 — 0002 의 읽기 객체가 세션 합성기를
 #      로그아웃 때 죽였다 (~CEglContextGuard)
-rev_for() { case "$1" in aquamarine) echo sekai5 ;; hyprbars) echo sekai40 ;; hyprexpo) echo sekai28 ;; worldlink|sekaicomp|hyprland) echo sekai43 ;; *) echo "$REV" ;; esac; }
+#   aquamarine sekai6: ~CDRMOutput 가드를 expired() 로 — 끝날 때 CBackend 가 정적 소멸자에서 지워지며 이미 없앤 idle 목록에서
+#      지우다가 메모리를 깨뜨렸다 (로그인 화면 합성기가 끝날 때마다 세그폴트, 본컴 gdb 백트레이스로 확인)
+rev_for() { case "$1" in aquamarine) echo sekai6 ;; hyprbars) echo sekai40 ;; hyprexpo) echo sekai28 ;; worldlink|sekaicomp|hyprland) echo sekai43 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
