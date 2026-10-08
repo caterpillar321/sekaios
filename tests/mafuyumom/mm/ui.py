@@ -100,6 +100,27 @@ class UI:
                 return None
             time.sleep(0.5)
 
+    def settle(self, w, timeout=5, **kw):
+        """찾은 위젯의 자리가 멈출 때까지 (0.5초 동안 그대로) — 그 자리를 돌려준다.
+        창이 뜬 뒤 내용이 늦게 들어와(확인 창의 "함께 제거되는 구성 요소", 설치 관리자의 경고 칸) 창이 커지거나
+        다시 가운데로 오면 단추가 움직인다 — 그 전 좌표를 누르면 한 줄쯤 빗나갔다 (노트북 200%·VM 에서 가끔)."""
+        if not w:
+            return w
+        kw.setdefault("name", w.get("name"))
+        kw.setdefault("role", w.get("role"))
+        end = time.time() + timeout
+        last = (w.get("cx"), w.get("cy"))
+        while time.time() < end:
+            time.sleep(0.5)
+            cand = [x for x in (self.find(all=True, **kw) or []) if x.get("cx") is not None]
+            if not cand:
+                continue
+            cur = min(cand, key=lambda x: abs(x["cx"] - last[0]) + abs(x["cy"] - last[1]))
+            if (cur["cx"], cur["cy"]) == last:
+                return cur
+            w, last = cur, (cur["cx"], cur["cy"])
+        return w
+
     def click(self, timeout=10, button="left", n=1, **kw):
         """찾아서 그 가운데를 누른다 — 못 찾으면 None (눌 수 있게 될 때까지 기다린다)"""
         if kw.get("role") in ("button", "push button", "toggle button", "check box", "radio button", "menu item"):
@@ -107,6 +128,7 @@ class UI:
         w = self.wait(timeout=timeout, **kw)
         if not w:
             return None
+        w = self.settle(w, **{k: v for k, v in kw.items() if k not in ("sensitive",)})
         self.q.click(w["cx"], w["cy"], btn=button, n=n)
         return w
 

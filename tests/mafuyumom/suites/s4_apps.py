@@ -141,6 +141,7 @@ def deb_install(t):
     btn = t.ui.wait(app="(?i)appinstall|AppInstaller|앱 설치", role="button", name="설치", timeout=30, sensitive=True)
     t.shot("설치관리자")
     t.expect(btn, "앱 설치 관리자에 [설치]")
+    btn = t.ui.settle(btn, app="(?i)appinstall|AppInstaller|앱 설치")      # 경고 칸이 들어오며 창이 자리를 잡을 때까지
     t.click(btn["cx"], btn["cy"])
     t.auth()
     t.expect(t.wait(lambda: installed(t, "zz-mm-test"), 120, every=2), "설치됨 (dpkg)")
