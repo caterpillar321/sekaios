@@ -6,11 +6,11 @@
 #  배경화면(전에는 swaybg)과 아이콘을 한 표면에 직접 그린다 →
 #  배경을 바꿀 때 부드럽게 넘어가고, 아이콘 글씨는 어떤 배경에서도 읽히게.
 #
-#  아이콘: 내 PC · 홈 폴더 · 휴지통 + 바탕화면 폴더(xdg-user-dir DESKTOP)의 내용
+#  아이콘: 내 PC · 홈 폴더 · 휴지통 + 바탕화면 폴더(xdg-user-dir DESKTOP)의 내용 — 모든 모니터에 (윈도우처럼)
 #  조작:   클릭 선택 · 더블클릭 열기 · 끌어서 여러 개 선택 · 오른쪽 클릭 메뉴
 #          Delete 휴지통 · F2 이름 바꾸기 · Enter 열기 · Ctrl+A 전체 선택 · 화살표 옆 아이콘으로
 #          아이콘을 끌어 바탕화면 안에 놓으면 그 자리로 (보기 › 자동 정렬 · 격자에 맞춤, 정렬 기준)
-#          다른 곳에서 파일을 끌어다 놓으면 바탕화면으로 옮기거나 복사한다
+#          다른 곳에서 파일을 끌어다 놓으면 바탕화면으로 옮기거나 복사한다 · 휴지통 아이콘에 놓으면 휴지통으로
 #  실행기: .desktop 은 실행 권한 + 신뢰 표시가 있을 때만 바로 실행한다 (없으면 묻는다)
 #  저장:   ~/.config/sekai/desktop-icons.json — 아이콘 자리와 보기 설정
 #  신호:   SIGHUP = 설정 다시 읽기 (배경화면·강조색)
@@ -40,7 +40,7 @@ if os.path.isdir(os.path.join(HERE, "sekaishell")):
     sys.path.insert(0, HERE)
 from sekaishell.layer import GtkLayerShell  # noqa: E402  (X11 기본 화면 모드에선 흉내)
 from sekaishell.popup import PanelPopup, make_translucent  # noqa: E402,F401
-from sekaishell.monitors import primary_gdk  # noqa: E402
+from sekaishell.monitors import hypr_monitors, primary_gdk  # noqa: E402
 
 CFG = os.path.expanduser("~/.config/sekai/settings.json")
 ICONS_CFG = os.path.expanduser("~/.config/sekai/desktop-icons.json")
@@ -472,7 +472,7 @@ class RenamePopup(PanelPopup):
         GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.TOP, True)
         GtkLayerShell.set_anchor(self, GtkLayerShell.Edge.LEFT, True)
         GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.EXCLUSIVE)
-        t = Gtk.Label(label="이름 바꾸기", xalign=0)
+        self.title = t = Gtk.Label(label="이름 바꾸기", xalign=0)
         t.get_style_context().add_class("pop-title")
         self.root.pack_start(t, False, False, 0)
         self.entry = Gtk.Entry()
@@ -484,10 +484,12 @@ class RenamePopup(PanelPopup):
         self.root.pack_start(self.err, False, False, 0)
         self.cb = None
 
-    def ask(self, x, y, current, cb, screen_h=1080):
+    def ask(self, x, y, current, cb, screen_h=1080, new=False):
+        """new = 방금 만든 새 폴더·문서 — "이름 정하기" (기본 이름 그대로 Enter 면 그 이름으로)"""
         self.cb = cb
+        self.title.set_text("이름 정하기" if new else "이름 바꾸기")
         self.entry.set_text(current)
-        self.err.set_text("Enter 로 바꾸기 · Esc 로 취소")
+        self.err.set_text("Enter 로 정하기 · Esc 로 기본 이름 그대로" if new else "Enter 로 바꾸기 · Esc 로 취소")
         GtkLayerShell.set_margin(self, GtkLayerShell.Edge.LEFT, max(8, int(x) - 40))
         # 아이콘 칸 바로 아래 — 이름 글자를 가리지 않게
         top = int(y) + CELL_H + 2
@@ -573,110 +575,249 @@ class TrustPopup(PanelPopup):
 
 
 # ───────────────────────────────────────────────────────────────
-class Desk(Gtk.Window):
-    def __init__(self, monitor, primary):
-        super().__init__()
-        self.monitor = monitor
-        self.primary = primary
+def mon_id_of(gmon, hmons):
+    """아이콘 자리를 적을 모니터 이름 — 제조사·모델·일련번호(Hyprland 의 description).
+    단자를 바꿔 꽂아도 같은 모니터로 알아본다 (윈도우처럼 모니터에 붙는다). 모르면 단자 이름·모델·위치"""
+    g = gmon.get_geometry()
+    for hm in hmons:
+        if (hm.get("x"), hm.get("y")) == (g.x, g.y):
+            return (hm.get("description") or "").strip() or hm.get("name") or f"@{g.x},{g.y}"
+    return (gmon.get_model() or "").strip() or f"@{g.x},{g.y}"
+
+
+def pos_parts(p):
+    """저장된 자리 → (모니터 이름 또는 None=주 모니터, [열, 행] 또는 None, {"x","y"} 또는 None)"""
+    if isinstance(p, list):
+        return None, p, None
+    if isinstance(p, dict):
+        mon = p.get("mon") if isinstance(p.get("mon"), str) else None
+        if type(p.get("c")) is int and type(p.get("r")) is int:
+            return mon, [p["c"], p["r"]], None
+        if type(p.get("x")) is int and type(p.get("y")) is int:
+            return mon, None, {"x": p["x"], "y": p["y"]}
+    return None, None, None
+
+
+# ───────────────────────────────────────────────────────────────
+class Board:
+    """바탕화면 아이콘의 공용 상태 — 바탕화면 폴더·아이콘 목록·자리·보기 설정·선택·파일 작업은 여기 하나,
+    모니터마다 있는 Desk 는 자기 모니터에 놓인 아이콘만 그리고 입력을 받는다.
+    윈도우처럼 바탕화면이 모든 모니터에 걸쳐 있다: 아이콘을 보조 모니터로 끌어 놓을 수 있고, 그 모니터를 빼면
+    주 모니터에 잠깐 보였다가 다시 꽂으면 제자리로 돌아간다. 자동 정렬·정렬 기준은 주 모니터에 늘어놓는다."""
+
+    def __init__(self):
+        self.desks = []
         self.items = []
+        self.where = {}                    # 아이콘 key → 놓인 Desk
         self.selected = set()
         self.cursor = None                 # 화살표 키의 기준 아이콘 (key)
-        self.hover = None
-        self.band = None                   # 끌어서 선택하는 사각형 (x0,y0,x1,y1)
-        self.press = None
-        self._drag = None                  # 아이콘을 끄는 중: 고른 것·누른 점
-        self._drag_uris = []
-        self.wall_src = None               # 원본 픽스버프
-        self.wall_path = None
-        self.wall_cache = {}               # (w,h,mode) → cairo 표면
-        self.fade_from = None              # 전환 효과용 이전 표면
-        self.fade_t = 1.0
-        self.accent = (0.224, 0.773, 0.733)
-        self.menu = DeskMenu()
-        self.rename = RenamePopup()
-        self.trust = TrustPopup()
-
-        # 아이콘 자리·보기 설정 (주 모니터만) — 기본은 지금까지와 같게: 자동 정렬 · 이름순 · 격자
+        # 보기 설정 — 기본은 자동 정렬 · 이름순 · 격자
         self.auto = True                   # 보기 › 아이콘 자동 정렬
         self.snap = True                   # 보기 › 아이콘을 격자에 맞춤
         self.sort = "name"                 # 정렬 기준
-        self.pos = {}                      # 파일 이름(특별 항목은 key) → [열, 행] 또는 {"x", "y"}
-        self._fallback = set()             # 저장된 자리가 화면 밖·겹침이라 임시로 딴 칸에 둔 것 (key)
-        self._want = {}                    # 곧 생길 이름 → (x, y, 시각): 그 근처 빈 칸에 (새 폴더·끌어다 놓기)
-        self._grid = (1, 1)                # 지금 화면의 (열, 행)
-        self._save_src = 0
+        # 파일 이름(특별 항목은 key) → 자리. 주 모니터는 [열, 행] 또는 {"x", "y"} (예전 형식 그대로),
+        #   다른 모니터는 {"mon": 모니터 이름, "c", "r"} 또는 {"mon", "x", "y"}
+        self.pos = {}
+        self._want = {}                    # 곧 생길 이름 → (모니터 이름, x, y, 시각): 그 근처 빈 칸에
         self._reserved = set()             # 복사·이동 중이라 곧 생길 이름
         self._jobs = set()                 # 도는 cp/mv (끝날 때까지 붙잡아 둔다)
-
-        make_translucent(self)
-        GtkLayerShell.init_for_window(self)
-        GtkLayerShell.set_namespace(self, "sekai-desk")
-        GtkLayerShell.set_layer(self, GtkLayerShell.Layer.BACKGROUND)
-        GtkLayerShell.set_monitor(self, monitor)
-        for e in (GtkLayerShell.Edge.TOP, GtkLayerShell.Edge.BOTTOM,
-                  GtkLayerShell.Edge.LEFT, GtkLayerShell.Edge.RIGHT):
-            GtkLayerShell.set_anchor(self, e, True)
-        GtkLayerShell.set_exclusive_zone(self, -1)       # 작업 표시줄 밑까지 배경을 깐다
-        GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.ON_DEMAND)
-
-        self.area = Gtk.DrawingArea()
-        self.area.set_can_focus(True)
-        self.area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK |
-                             Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK |
-                             Gdk.EventMask.KEY_PRESS_MASK)
-        self.area.connect("draw", self.on_draw)
-        self.area.connect("button-press-event", self.on_press)
-        self.area.connect("button-release-event", self.on_release)
-        self.area.connect("motion-notify-event", self.on_motion)
-        self.area.connect("leave-notify-event", lambda *_: self._set_hover(None))
-        self.area.connect("key-press-event", self.on_key)
-        self.area.connect("size-allocate", lambda *_: self.layout())
-        if self.primary:
-            # 끌어다 놓기 — 다른 앱의 파일(uri) + 바탕화면 안에서 아이콘 자리 옮기기(우리 형식).
-            #   놓기(drop)는 직접 처리한다: GTK 기본 처리는 drag_finish 를 한 번 더 부르고,
-            #   옮기기면 원본 쪽에 지우라고(del) 한다
-            self.area.drag_dest_set(Gtk.DestDefaults.MOTION | Gtk.DestDefaults.HIGHLIGHT,
-                                    [Gtk.TargetEntry.new(ICONS_TARGET, Gtk.TargetFlags.SAME_WIDGET, 0)],
-                                    Gdk.DragAction.MOVE | Gdk.DragAction.COPY)
-            self.area.drag_dest_add_uri_targets()
-            self.area.connect("drag-motion", self.on_drag_motion)
-            self.area.connect("drag-drop", self.on_drag_drop)
-            self.area.connect("drag-data-received", self.on_drop)
-            self.area.connect("drag-data-get", self.on_drag_get)
-            self.area.connect("drag-end", self.on_drag_end)
-        self.add(self.area)
-
+        self._save_src = 0
         # 바탕화면 폴더가 바뀌면 다시 읽는다 — 사진 수백 장을 복사하면 변경 알림이 수천 번 오므로
         #   한 번으로 모은다(디바운스). 썸네일은 (시각·크기)가 같으면 다시 만들지 않고,
         #   새로 만들 것은 화면이 멈추지 않게 뒤에서 조금씩 (_thumb_step).
-        self._pending = 0                  # 모아 둔 새로 읽기 타이머
+        self._pending = 0
         self._pending_since = 0.0
         self._thumbs = {}                  # 경로 → ((시각, 크기), 픽스버프)
-        self._thumb_queue = []             # 썸네일을 만들어야 할 Item
+        self._thumb_queue = []
         self._thumb_src = 0
+        self.drag = None                   # 아이콘을 끄는 중: {"desk", "keys", "anchor", "x", "y"} (누른 점은 그 Desk 좌표)
+        self.drag_uris = []
+        self._load()
+        self.ddir = desktop_dir()
         self.monitor_file = None
-        self.trash_mon = None
-        self.connect("destroy", self._on_destroy)
-
-        if self.primary:
-            self._load_icons()
-        self.reload_settings()
-        self.dirs_mon = None
+        self._watch_ddir()
+        # 사용자 폴더 이름이 바뀌면(언어를 바꿔 "표준 폴더 이름 업데이트" → ~/Desktop 이 ~/바탕화면) 따라간다
         self._dirs_src = 0
-        if self.primary:
-            self.ddir = desktop_dir()
-            self._watch_ddir()
-            # 사용자 폴더 이름이 바뀌면(언어를 바꿔 "표준 폴더 이름 업데이트" → ~/Desktop 이 ~/바탕화면) 따라간다
-            self.dirs_mon = Gio.File.new_for_path(os.path.join(
-                os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "user-dirs.dirs")
-            ).monitor_file(Gio.FileMonitorFlags.NONE, None)
-            self.dirs_mon.connect("changed", lambda *_: self._dirs_changed())
-            # 휴지통 상태(비었나/찼나)에 따라 아이콘을 바꾼다
-            self.trash_mon = Gio.File.new_for_uri("trash:///").monitor_directory(
-                Gio.FileMonitorFlags.NONE, None)
-            self.trash_mon.connect("changed", lambda *_: self._refresh_later(300))
-            self.refresh()
+        self.dirs_mon = Gio.File.new_for_path(os.path.join(
+            os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "user-dirs.dirs")
+        ).monitor_file(Gio.FileMonitorFlags.NONE, None)
+        self.dirs_mon.connect("changed", lambda *_: self._dirs_changed())
+        # 휴지통 상태(비었나/찼나)에 따라 아이콘을 바꾼다
+        self.trash_mon = Gio.File.new_for_uri("trash:///").monitor_directory(Gio.FileMonitorFlags.NONE, None)
+        self.trash_mon.connect("changed", lambda *_: self._refresh_later(300))
+        self.refresh()
 
+    # ── 모니터 ────────────────────────────────────────────
+    def set_desks(self, desks):
+        self.desks = list(desks)
+        self.relayout()
+
+    def primary_desk(self):
+        return next((d for d in self.desks if d.primary), self.desks[0] if self.desks else None)
+
+    def desk_for(self, mon):
+        return next((d for d in self.desks if d.mon == mon), None)
+
+    def desk_of(self, it):
+        return self.where.get(it.key) or self.primary_desk()
+
+    def redraw(self):
+        for d in self.desks:
+            d.area.queue_draw()
+
+    def relayout(self):
+        """아이콘을 모니터에 나눠 주고 모니터마다 배치한다.
+        자동 정렬이면 모두 주 모니터. 아니면 저장된 모니터 — 지금 없으면 주 모니터에 잠깐 (저장은 그대로).
+        처음 보는 아이콘은 새 폴더를 만든·끌어다 놓은 모니터, 아니면 주 모니터."""
+        prim = self.primary_desk()
+        if prim is None:
+            return
+        groups = {d: [] for d in self.desks}
+        self.where = {}
+        now = time.monotonic()
+        for it in self.items:
+            d = prim
+            if not self.auto:
+                k = pos_key(it)
+                if k in self.pos:
+                    mon = pos_parts(self.pos[k])[0]
+                    d = (self.desk_for(mon) if mon else None) or prim
+                else:
+                    w = self._want.get(k)
+                    if w and now - w[3] < 600:
+                        d = self.desk_for(w[0]) or prim
+            groups[d].append(it)
+            self.where[it.key] = d
+        for d, its in groups.items():
+            d.here = its
+            d.layout()
+
+    def set_pos(self, it, desk, cell=None, px=None):
+        """아이콘 자리를 desk 모니터의 칸(cell) 또는 좌표(px)로 적는다"""
+        if desk.primary:
+            v = list(cell) if cell is not None else {"x": int(px[0]), "y": int(px[1])}
+        elif cell is not None:
+            v = {"mon": desk.mon, "c": int(cell[0]), "r": int(cell[1])}
+        else:
+            v = {"mon": desk.mon, "x": int(px[0]), "y": int(px[1])}
+        self.pos[pos_key(it)] = v
+
+    # ── 아이콘 자리 저장 ──────────────────────────────────
+    def _load(self):
+        try:
+            with open(ICONS_CFG, encoding="utf-8") as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            d = {}
+        if not isinstance(d, dict):
+            d = {}
+        self.auto = d.get("auto_arrange", True) is not False
+        self.snap = d.get("align_to_grid", True) is not False
+        self.sort = d.get("sort_by") if d.get("sort_by") in dict(SORTS) else "name"
+        self.pos = {}
+        raw = d.get("positions")
+        for k, v in (raw.items() if isinstance(raw, dict) else ()):
+            mon, cell, px = pos_parts(v)
+            if cell is None and px is None:
+                continue
+            if mon is None:
+                self.pos[k] = list(cell) if cell is not None else px
+            else:
+                self.pos[k] = dict({"mon": mon}, **({"c": cell[0], "r": cell[1]} if cell is not None else px))
+
+    def save(self):
+        """자리·보기 설정을 저장 — 임시 파일에 쓰고 바꿔 끼운다 (쓰다 꺼져도 반쪽 파일이 남지 않게)"""
+        if self._save_src:
+            GLib.source_remove(self._save_src)
+            self._save_src = 0
+        # 없어진 파일의 자리는 버린다. 폴더를 못 읽는 때(떼어 낸 디스크 등)는 그대로 둔다
+        if os.path.isdir(self.ddir):
+            self.pos = {k: v for k, v in self.pos.items()
+                        if k.startswith("::") or os.path.lexists(os.path.join(self.ddir, k))}
+        data = {"auto_arrange": self.auto, "align_to_grid": self.snap, "sort_by": self.sort,
+                "positions": self.pos}
+        tmp = f"{ICONS_CFG}.{os.getpid()}.tmp"
+        try:
+            os.makedirs(os.path.dirname(ICONS_CFG), exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=1)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, ICONS_CFG)
+        except OSError as e:
+            dbg("아이콘 자리 저장 실패", e)
+        return False
+
+    def save_later(self):
+        """새 항목의 자리 — 파일 수백 개를 복사하면 여러 번 오므로 모아서 한 번"""
+        if not self._save_src:
+            self._save_src = GLib.timeout_add(500, self.save)
+
+    def flush(self):
+        if self._save_src:                             # 미뤄 둔 자리 저장을 마저 한다
+            self.save()
+
+    def want_spot(self, name, desk, x, y):
+        """name 이 생기면 desk 모니터의 (x, y)(아이콘 왼쪽 위) 근처 빈 칸에 둔다"""
+        now = time.monotonic()
+        self._want = {k: v for k, v in self._want.items() if now - v[3] < 600}
+        self._want[name] = (desk.mon, x, y, now)
+        dbg("[자리] 바라는 자리", name, desk.mon, int(x), int(y))
+
+    # ── 보기 ──────────────────────────────────────────────
+    def snapshot(self):
+        """자동 정렬을 끌 때 — 지금 자리 그대로 굳힌다 (윈도우처럼)"""
+        self.pos = {}
+        for d in self.desks:
+            for it in d.here:
+                self.set_pos(it, d, cell=cell_of(it.x, it.y))
+            d._fallback = set()
+
+    def pin_fallback(self):
+        """임시 자리(저장된 자리가 화면 밖·겹침·빠진 모니터)에 있던 아이콘을 지금 자리로 굳힌다 —
+        다른 아이콘을 옮긴 뒤 원래 칸이 비었다고 혼자 튀어 돌아가지 않게"""
+        for d in self.desks:
+            for it in d.here:
+                if it.key in d._fallback:
+                    self.set_pos(it, d, cell=cell_of(it.x, it.y))
+            d._fallback = set()
+
+    def toggle_auto(self):
+        """보기 › 아이콘 자동 정렬 — 켜면 모두 주 모니터에 늘어놓는다"""
+        if self.auto:
+            self.snapshot()                            # 꺼도 아이콘은 지금 자리 그대로
+            self.auto = False
+        else:
+            self.auto = True
+            self.pos = {}
+            for d in self.desks:
+                d._fallback = set()
+        self.save()
+        self.relayout()
+
+    def toggle_snap(self):
+        """보기 › 아이콘을 격자에 맞춤"""
+        self.snap = not self.snap
+        if self.snap and not self.auto:
+            for d in self.desks:
+                d.snap_all()
+        self.save()
+        self.relayout()
+
+    def arrange_by(self, by):
+        """정렬 기준 — 자동 정렬이 꺼져 있어도 그 순서로 주 모니터에 한 번 다시 늘어놓는다 (윈도우처럼)"""
+        self.sort = by
+        self.items.sort(key=lambda i: order_key(i, by))
+        prim = self.primary_desk()
+        if not self.auto and prim is not None:
+            rows = prim._grid[1]
+            self.pos = {pos_key(it): list(divmod(i, rows)) for i, it in enumerate(self.items)}
+            for d in self.desks:
+                d._fallback = set()
+        self.save()
+        self.relayout()
+
+    # ── 아이콘 목록 ───────────────────────────────────────
     def _watch_ddir(self):
         if self.monitor_file is not None:
             self.monitor_file.cancel()
@@ -706,140 +847,13 @@ class Desk(Gtk.Window):
             return False
         self._dirs_src = GLib.timeout_add(500, go)
 
-    def _on_destroy(self, *_):
-        """모니터를 뺐다 꽂을 때마다 새로 만들어진다 — 감시·타이머·팝업·큰 그림을 놓는다
-        (안 놓으면 감시 콜백이 이 창을 붙잡고 있어 해제되지 않고 계속 쌓였다)"""
-        if self._save_src:                             # 미뤄 둔 자리 저장을 마저 한다
-            self._save()
-        for mon in (self.monitor_file, self.trash_mon, self.dirs_mon):
-            if mon is not None:
-                mon.cancel()
-        self.monitor_file = self.trash_mon = self.dirs_mon = None
-        for src in (self._pending, self._thumb_src, self._dirs_src):
-            if src:
-                GLib.source_remove(src)
-        self._pending = self._thumb_src = self._dirs_src = 0
-        self.menu.close()                              # 하위 메뉴 타이머도 멈춘다
-        for pop in (self.menu.sub, self.menu, self.rename, self.trust):
-            pop.catcher.destroy()
-            pop.destroy()
-        self.wall_src = None
-        self.wall_cache = {}
-        self.fade_from = None
-        self.items = []
-        self._thumbs = {}
-        self._thumb_queue = []
-
-    # ── 설정 ──────────────────────────────────────────────
-    def reload_settings(self):
-        s = settings()
-        a = s.get("appearance") or {}
-        self.accent = hex_rgb(a.get("accent", "#39c5bb"))
-        try:
-            self.panel_h = int((s.get("panel") or {}).get("height", 48))
-        except (TypeError, ValueError):
-            self.panel_h = 48
-        w = s.get("wallpaper") or {}
-        path = w.get("path") or FALLBACK_WALL
-        if not os.path.exists(path):
-            path = FALLBACK_WALL
-        old_look = (getattr(self, "mode", None), getattr(self, "bgcolor", None))
-        self.mode = w.get("mode") if w.get("mode") in ("fill", "fit", "stretch", "center", "tile",
-                                                       "solid_color") else "fill"
-        self.bgcolor = hex_rgb(w.get("color", "#151517"), (0.08, 0.08, 0.09))
-        # 같은 이름의 파일을 새 그림으로 덮어쓴 경우도 알아본다 (시각·크기)
-        stamp = file_stamp(path)
-        if path != self.wall_path or stamp != getattr(self, "wall_stamp", None):
-            self.wall_stamp = stamp
-            old = self._current_surface()
-            try:
-                # 폰 사진은 EXIF 방향대로 세운다 (안 하면 사진 앱에서 배경으로 고른 세로 사진이 누워 보였다)
-                self.wall_src = GdkPixbuf.Pixbuf.new_from_file(path).apply_embedded_orientation()
-                self.wall_path = path
-            except Exception as e:
-                dbg("배경 읽기 실패", path, e)
-                self.wall_src = None
-            self.wall_cache.clear()
-            if old is not None:                        # 이전 배경에서 새 배경으로 스르륵
-                self.fade_from = old
-                self.fade_t = 0.0
-                GLib.timeout_add(16, self._fade_step)
-        elif old_look != (self.mode, self.bgcolor):
-            # 배치·바탕색이 바뀌었을 때만 다시 그린다 — 설정 앱이 저장할 때마다 SIGHUP 이 오는데,
-            #   그때마다 4K 원본을 고품질로 다시 줄이면 무겁다
-            self.wall_cache.clear()
-        self.area.queue_draw()
-        if self.primary:
-            self.layout()
-
-    def _fade_step(self):
-        if self.fade_from is None:                    # 창이 닫혔다 (_on_destroy)
-            return False
-        self.fade_t = min(1.0, self.fade_t + 16 / 450)
-        self.area.queue_draw()
-        if self.fade_t >= 1.0:
-            self.fade_from = None
-            return False
-        return True
-
-    # ── 아이콘 자리 저장 ──────────────────────────────────
-    def _load_icons(self):
-        try:
-            with open(ICONS_CFG, encoding="utf-8") as f:
-                d = json.load(f)
-        except (OSError, ValueError):
-            d = {}
-        if not isinstance(d, dict):
-            d = {}
-        self.auto = d.get("auto_arrange", True) is not False
-        self.snap = d.get("align_to_grid", True) is not False
-        self.sort = d.get("sort_by") if d.get("sort_by") in dict(SORTS) else "name"
-        self.pos = {}
-        raw = d.get("positions")
-        for k, v in (raw.items() if isinstance(raw, dict) else ()):
-            if isinstance(v, list) and len(v) == 2 and all(type(n) is int for n in v):
-                self.pos[k] = [v[0], v[1]]
-            elif isinstance(v, dict) and all(type(v.get(n)) is int for n in ("x", "y")):
-                self.pos[k] = {"x": v["x"], "y": v["y"]}
-
-    def _save(self):
-        """자리·보기 설정을 저장 — 임시 파일에 쓰고 바꿔 끼운다 (쓰다 꺼져도 반쪽 파일이 남지 않게)"""
-        if self._save_src:
-            GLib.source_remove(self._save_src)
-            self._save_src = 0
-        # 없어진 파일의 자리는 버린다. 폴더를 못 읽는 때(떼어 낸 디스크 등)는 그대로 둔다
-        if os.path.isdir(self.ddir):
-            self.pos = {k: v for k, v in self.pos.items()
-                        if k.startswith("::") or os.path.lexists(os.path.join(self.ddir, k))}
-        data = {"auto_arrange": self.auto, "align_to_grid": self.snap, "sort_by": self.sort,
-                "positions": self.pos}
-        tmp = f"{ICONS_CFG}.{os.getpid()}.tmp"
-        try:
-            os.makedirs(os.path.dirname(ICONS_CFG), exist_ok=True)
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=1)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp, ICONS_CFG)
-        except OSError as e:
-            dbg("아이콘 자리 저장 실패", e)
-        return False
-
-    def _save_later(self):
-        """새 항목의 자리 — 파일 수백 개를 복사하면 여러 번 오므로 모아서 한 번"""
-        if not self._save_src:
-            self._save_src = GLib.timeout_add(500, self._save)
-
-    # ── 아이콘 목록 ───────────────────────────────────────
     def _refresh_once(self):
         self._pending = 0
         self.refresh()
         return False
 
-    def _refresh_later(self, ms):
+    def refresh_later(self, ms):
         """변경 알림을 모아 한 번만 다시 읽는다. 알림이 계속 와도 2초에 한 번은 읽는다."""
-        if not self.primary:
-            return
         now = time.monotonic()
         if self._pending:
             if now - self._pending_since > 2.0:
@@ -849,12 +863,14 @@ class Desk(Gtk.Window):
             self._pending_since = now
         self._pending = GLib.timeout_add(ms, self._refresh_once)
 
+    _refresh_later = refresh_later
+
     def _thumb_step(self):
         """썸네일을 한 번에 몇 장씩만 — 메인 스레드에서 사진 수백 장을 한꺼번에 풀면 화면이 멈춘다"""
         for _ in range(4):
             if not self._thumb_queue:
                 self._thumb_src = 0
-                self.area.queue_draw()
+                self.redraw()
                 return False
             it, ctype, stamp = self._thumb_queue.pop(0)
             if it not in self.items:                # 그 사이 목록이 바뀌었다
@@ -863,7 +879,7 @@ class Desk(Gtk.Window):
             self._thumbs[it.path] = (stamp, pb)
             if pb is not None:
                 it.pixbuf = pb
-        self.area.queue_draw()
+        self.redraw()
         return True
 
     def refresh(self):
@@ -936,16 +952,15 @@ class Desk(Gtk.Window):
         for it in items:
             if it.pixbuf is None:
                 it.pixbuf = load_icon(it.gicon)       # 썸네일이 나오기 전엔 보통 아이콘
-        keep = {k for k in self.selected if any(i.key == k for i in items)}
+        self.selected = {k for k in self.selected if any(i.key == k for i in items)}
         self.items = items
-        self.selected = keep
         # 지워진 파일의 썸네일은 버린다
         live = {i.path for i in items if i.path}
         self._thumbs = {k: v for k, v in self._thumbs.items() if k in live}
         self._thumb_queue = queue
         if queue and not self._thumb_src:
             self._thumb_src = GLib.idle_add(self._thumb_step)
-        self.layout()
+        self.relayout()
         if recheck:
             self._refresh_later(1000)
 
@@ -957,33 +972,315 @@ class Desk(Gtk.Window):
         except Exception:
             return 0
 
+    # ── 파일 작업 ─────────────────────────────────────────
+    def run_job(self, argv, verb, name):
+        try:
+            proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDOUT_SILENCE |
+                                      Gio.SubprocessFlags.STDERR_PIPE)
+        except GLib.Error as e:
+            notify(f"바탕 화면으로 {verb} 못했습니다", f"‘{name}’\n{e.message}")
+            return False
+        self._reserved.add(name)
+        self._jobs.add(proc)
+        proc.communicate_async(None, None, self._job_done, (verb, name))
+        return True
+
+    def _job_done(self, proc, res, data):
+        verb, name = data
+        self._jobs.discard(proc)
+        self._reserved.discard(name)
+        err = ""
+        try:
+            _ok, _out, eb = proc.communicate_finish(res)
+            err = eb.get_data().decode("utf-8", "replace") if eb else ""
+        except GLib.Error as e:
+            err = e.message
+        if not proc.get_successful():
+            lines = [ln.strip() for ln in err.splitlines() if ln.strip()]
+            notify(f"바탕 화면으로 {verb} 못했습니다", f"‘{name}’" + (f"\n{lines[-1]}" if lines else ""))
+        self._refresh_later(150)
+
+    def _launch(self, path):
+        try:
+            app = Gio.DesktopAppInfo.new_from_filename(path)
+            if app is not None:
+                app.launch([], None)
+                return True
+        except Exception as e:
+            dbg("앱 실행 실패", e)
+        return False
+
+    def _open_default(self, it_uri, it_path=None):
+        try:
+            Gio.AppInfo.launch_default_for_uri(it_uri, None)
+        except Exception:
+            run(["xdg-open", it_path or it_uri])
+
+    def open_items(self, items, desk):
+        doubt = []
+        for it in items:
+            if it.key == "::install":
+                run(["sekai-installer"])
+                continue
+            if it.is_desktop_entry:
+                # 열 때 다시 본다 — 목록을 읽은 뒤 권한·표시가 바뀌었을 수 있다
+                if not launcher_trusted(it.path):
+                    doubt.append(it.path)
+                    continue
+                if self._launch(it.path):
+                    continue
+            if it.is_dir or it.special:
+                run([file_manager(), it.uri or it.path])
+            else:
+                self._open_default(it.uri, it.path)
+        if doubt:
+            W, H = desk._screen()
+            cmd = launcher_command(doubt[0]) if len(doubt) == 1 else ""
+            desk.trust.ask(doubt, cmd, lambda: self._trust_and_open(doubt), W, H)
+
+    def _trust_and_open(self, paths):
+        for p in paths:
+            mark_trusted(p)
+            if not self._launch(p):
+                self._open_default(Gio.File.new_for_path(p).get_uri(), p)
+        self._refresh_later(100)                       # 이제 앱 이름·아이콘으로
+
+    def trash_items(self, items):
+        for it in items:
+            if it.special or not it.path:
+                continue
+            try:
+                Gio.File.new_for_path(it.path).trash(None)
+            except Exception as e:
+                dbg("휴지통 실패", e)
+        self.selected = set()
+        self._refresh_later(200)
+
+    def rename_item(self, it, new=False):
+        if it.special or not it.path:
+            return
+        desk = self.desk_of(it)
+        if desk is None:
+            return
+
+        def do(name):
+            if name == os.path.basename(it.path):
+                return None                            # 그대로 Enter — 이름을 그대로 둔다 (윈도우처럼)
+            dst = os.path.join(os.path.dirname(it.path), name)
+            if os.path.exists(dst):
+                return "같은 이름이 이미 있습니다."
+            try:
+                os.rename(it.path, dst)
+            except OSError as e:
+                return f"바꾸지 못했습니다: {e.strerror}"
+            old = os.path.basename(it.path)
+            if old in self.pos:                        # 자리도 새 이름으로
+                self.pos[name] = self.pos.pop(old)
+                self.save()
+            self.selected = {dst}
+            self.cursor = dst
+            return None
+        desk.rename.ask(it.x, it.y, os.path.basename(it.path), do, desk._screen()[1], new=new)
+
+    def _new_name(self, base, ext=""):
+        n, name = 1, base + ext
+        while os.path.exists(os.path.join(self.ddir, name)):
+            n += 1
+            name = f"{base} ({n}){ext}"
+        return name
+
+    def new_folder(self, desk, spot=None):
+        name = self._new_name("새 폴더")
+        os.makedirs(os.path.join(self.ddir, name))
+        self.want_spot(name, desk, *(spot or (MARGIN, MARGIN)))
+        GLib.timeout_add(250, lambda: (self._rename_new(name), False)[1])
+
+    def new_text(self, desk, spot=None):
+        name = self._new_name("새 텍스트 문서", ".txt")
+        open(os.path.join(self.ddir, name), "w").close()
+        self.want_spot(name, desk, *(spot or (MARGIN, MARGIN)))
+        GLib.timeout_add(250, lambda: (self._rename_new(name), False)[1])
+
+    def _rename_new(self, name):
+        self.refresh()
+        it = next((i for i in self.items if i.path and os.path.basename(i.path) == name), None)
+        if it:
+            self.selected = {it.key}
+            self.cursor = it.key
+            self.redraw()
+            self.rename_item(it, new=True)
+
+
+# ───────────────────────────────────────────────────────────────
+class Desk(Gtk.Window):
+    """모니터 하나의 바탕화면 — 배경과 이 모니터에 놓인 아이콘 (목록·자리·선택은 Board)."""
+
+    def __init__(self, board, monitor, primary, mon):
+        super().__init__()
+        self.board = board
+        self.monitor = monitor
+        self.primary = primary
+        self.mon = mon                     # 아이콘 자리를 적는 모니터 이름 (mon_id_of)
+        self.here = []                     # 이 모니터에 놓인 아이콘 (Board.relayout 이 나눠 준다)
+        self.hover = None
+        self.band = None                   # 끌어서 선택하는 사각형 (x0,y0,x1,y1)
+        self.press = None
+        self.wall_src = None               # 원본 픽스버프
+        self.wall_path = None
+        self.wall_cache = {}               # (w,h,mode) → cairo 표면
+        self.fade_from = None              # 전환 효과용 이전 표면
+        self.fade_t = 1.0
+        self.accent = (0.224, 0.773, 0.733)
+        self.menu = DeskMenu()
+        self.rename = RenamePopup()
+        self.trust = TrustPopup()
+        # 메뉴·이름 바꾸기·확인 창은 이 모니터에 (정하지 않으면 합성기가 초점 있는 모니터에 띄운다)
+        for pop in (self.menu, self.menu.sub, self.rename, self.trust):
+            GtkLayerShell.set_monitor(pop, monitor)
+            GtkLayerShell.set_monitor(pop.catcher, monitor)
+        self._fallback = set()             # 저장된 자리가 화면 밖·겹침·빠진 모니터라 임시로 딴 칸에 둔 것 (key)
+        self._grid = (1, 1)                # 지금 화면의 (열, 행)
+
+        make_translucent(self)
+        GtkLayerShell.init_for_window(self)
+        GtkLayerShell.set_namespace(self, "sekai-desk")
+        GtkLayerShell.set_layer(self, GtkLayerShell.Layer.BACKGROUND)
+        GtkLayerShell.set_monitor(self, monitor)
+        for e in (GtkLayerShell.Edge.TOP, GtkLayerShell.Edge.BOTTOM,
+                  GtkLayerShell.Edge.LEFT, GtkLayerShell.Edge.RIGHT):
+            GtkLayerShell.set_anchor(self, e, True)
+        GtkLayerShell.set_exclusive_zone(self, -1)       # 작업 표시줄 밑까지 배경을 깐다
+        GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.ON_DEMAND)
+
+        self.area = Gtk.DrawingArea()
+        self.area.set_can_focus(True)
+        self.area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK |
+                             Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK |
+                             Gdk.EventMask.KEY_PRESS_MASK)
+        self.area.connect("draw", self.on_draw)
+        self.area.connect("button-press-event", self.on_press)
+        self.area.connect("button-release-event", self.on_release)
+        self.area.connect("motion-notify-event", self.on_motion)
+        self.area.connect("leave-notify-event", lambda *_: self._set_hover(None))
+        self.area.connect("key-press-event", self.on_key)
+        self.area.connect("size-allocate", lambda *_: self.layout())
+        # 끌어다 놓기 — 다른 앱의 파일(uri) + 바탕화면 아이콘 자리 옮기기(우리 형식, 다른 모니터의 바탕화면에서도).
+        #   놓기(drop)는 직접 처리한다: GTK 기본 처리는 drag_finish 를 한 번 더 부르고,
+        #   옮기기면 원본 쪽에 지우라고(del) 한다
+        self.area.drag_dest_set(Gtk.DestDefaults.MOTION | Gtk.DestDefaults.HIGHLIGHT,
+                                [Gtk.TargetEntry.new(ICONS_TARGET, Gtk.TargetFlags.SAME_APP, 0)],
+                                Gdk.DragAction.MOVE | Gdk.DragAction.COPY)
+        self.area.drag_dest_add_uri_targets()
+        self.area.connect("drag-motion", self.on_drag_motion)
+        self.area.connect("drag-drop", self.on_drag_drop)
+        self.area.connect("drag-data-received", self.on_drop)
+        self.area.connect("drag-data-get", self.on_drag_get)
+        self.area.connect("drag-end", self.on_drag_end)
+        self.area.connect("drag-leave", lambda *_: self._set_hover(None))
+        self.add(self.area)
+        self.connect("destroy", self._on_destroy)
+        self.reload_settings()
+
+    def _on_destroy(self, *_):
+        """모니터를 뺐다 꽂을 때마다 새로 만들어진다 — 팝업·큰 그림을 놓는다
+        (안 놓으면 이 창이 해제되지 않고 계속 쌓였다). 아이콘 목록·감시는 Board 에 그대로."""
+        self.board.flush()
+        self.menu.close()                              # 하위 메뉴 타이머도 멈춘다
+        for pop in (self.menu.sub, self.menu, self.rename, self.trust):
+            pop.catcher.destroy()
+            pop.destroy()
+        self.wall_src = None
+        self.wall_cache = {}
+        self.fade_from = None
+        self.here = []
+
+    def geo(self):
+        return self.monitor.get_geometry()
+
+    # ── 설정 ──────────────────────────────────────────────
+    def reload_settings(self):
+        s = settings()
+        a = s.get("appearance") or {}
+        self.accent = hex_rgb(a.get("accent", "#39c5bb"))
+        try:
+            self.panel_h = int((s.get("panel") or {}).get("height", 48))
+        except (TypeError, ValueError):
+            self.panel_h = 48
+        w = s.get("wallpaper") or {}
+        path = w.get("path") or FALLBACK_WALL
+        if not os.path.exists(path):
+            path = FALLBACK_WALL
+        old_look = (getattr(self, "mode", None), getattr(self, "bgcolor", None))
+        self.mode = w.get("mode") if w.get("mode") in ("fill", "fit", "stretch", "center", "tile",
+                                                       "solid_color") else "fill"
+        self.bgcolor = hex_rgb(w.get("color", "#151517"), (0.08, 0.08, 0.09))
+        # 같은 이름의 파일을 새 그림으로 덮어쓴 경우도 알아본다 (시각·크기)
+        stamp = file_stamp(path)
+        if path != self.wall_path or stamp != getattr(self, "wall_stamp", None):
+            self.wall_stamp = stamp
+            old = self._current_surface()
+            try:
+                # 폰 사진은 EXIF 방향대로 세운다 (안 하면 사진 앱에서 배경으로 고른 세로 사진이 누워 보였다)
+                self.wall_src = GdkPixbuf.Pixbuf.new_from_file(path).apply_embedded_orientation()
+                self.wall_path = path
+            except Exception as e:
+                dbg("배경 읽기 실패", path, e)
+                self.wall_src = None
+            self.wall_cache.clear()
+            if old is not None:                        # 이전 배경에서 새 배경으로 스르륵
+                self.fade_from = old
+                self.fade_t = 0.0
+                GLib.timeout_add(16, self._fade_step)
+        elif old_look != (self.mode, self.bgcolor):
+            # 배치·바탕색이 바뀌었을 때만 다시 그린다 — 설정 앱이 저장할 때마다 SIGHUP 이 오는데,
+            #   그때마다 4K 원본을 고품질로 다시 줄이면 무겁다
+            self.wall_cache.clear()
+        self.area.queue_draw()
+        self.layout()
+
+    def _fade_step(self):
+        if self.fade_from is None:                    # 창이 닫혔다 (_on_destroy)
+            return False
+        self.fade_t = min(1.0, self.fade_t + 16 / 450)
+        self.area.queue_draw()
+        if self.fade_t >= 1.0:
+            self.fade_from = None
+            return False
+        return True
+
     # ── 배치 ──────────────────────────────────────────────
     def layout(self):
-        """아이콘 자리를 정한다.
+        """이 모니터에 놓인 아이콘의 자리를 정한다.
         자동 정렬: 정렬 순서대로 왼쪽 위부터 세로로 채우고, 넘치면 다음 줄 (윈도우 기본 배치).
-        손 배치: 저장된 자리에. 새 항목은 첫 빈 칸(또는 바라는 자리 근처), 화면 밖·겹친 자리는 가까운 빈 칸."""
-        if not self.primary:
-            return
+        손 배치: 저장된 자리에. 새 항목은 첫 빈 칸(또는 바라는 자리 근처), 화면 밖·겹친 자리·빠진 모니터의
+        아이콘은 가까운 빈 칸 (저장은 하지 않는다)."""
+        b = self.board
         W, H = self._screen()
         if W < CELL_W or H < CELL_H:
             return            # 아직 크기를 받기 전 (1×1) — 가짜 크기로 자리를 정해 저장하면 안 된다
         cols, rows = self._grid = grid_size(W, H, self.panel_h)
         self._fallback = set()
-        if self.auto:
-            for i, it in enumerate(self.items):
+        if b.auto:
+            for i, it in enumerate(self.here):
                 it.x, it.y = cell_origin(*divmod(i, rows))
             self.area.queue_draw()
             return
         maxx, maxy = W - CELL_W, H - self.panel_h - CELL_H
         taken, cells, pixels, moved, fresh = set(), [], [], [], []
-        for it in self.items:
-            p = self.pos.get(pos_key(it))
-            if isinstance(p, list):
-                cells.append((it, p))
-            elif isinstance(p, dict):
-                pixels.append((it, p))
-            else:
+        for it in self.here:
+            k = pos_key(it)
+            if k not in b.pos:
                 fresh.append(it)
+                continue
+            mon, cell, px = pos_parts(b.pos[k])
+            mine = (mon == self.mon) if mon else self.primary
+            if not mine:                               # 빠진 모니터의 아이콘 — 여기 잠깐
+                at = cell if cell is not None else cell_of(px["x"], px["y"])
+                moved.append((it, clamp_cell(tuple(at), cols, rows)))
+            elif cell is not None:
+                cells.append((it, cell))
+            else:
+                pixels.append((it, px))
         for it, (c, r) in cells:
             if 0 <= c < cols and 0 <= r < rows and (c, r) not in taken:
                 taken.add((c, r))
@@ -1005,110 +1302,63 @@ class Desk(Gtk.Window):
             self._fallback.add(it.key)
         now = time.monotonic()
         for it in fresh:                               # 처음 보는 항목 — 정렬 순서대로 첫 빈 칸
-            w = self._want.pop(pos_key(it), None)
-            if w and now - w[2] < 600:                 # 새 폴더를 만든 자리·끌어다 놓은 자리 근처
-                cell = nearest_free(clamp_cell(cell_of(w[0], w[1]), cols, rows), taken, cols, rows)
+            w = b._want.pop(pos_key(it), None)
+            dbg("[자리] 새 아이콘", pos_key(it), "→", self.mon, "바람:", w)
+            if w and w[0] == self.mon and now - w[3] < 600:   # 새 폴더를 만든 자리·끌어다 놓은 자리 근처
+                cell = nearest_free(clamp_cell(cell_of(w[1], w[2]), cols, rows), taken, cols, rows)
             else:
                 cell = first_free(taken, rows)
             taken.add(cell)
             it.x, it.y = cell_origin(*cell)
-            self.pos[pos_key(it)] = list(cell)
+            b.set_pos(it, self, cell=cell)
         if fresh:
-            self._save_later()
+            b.save_later()
         self.area.queue_draw()
 
-    def _want_spot(self, name, x, y):
-        """name 이 생기면 (x, y)(아이콘 왼쪽 위) 근처 빈 칸에 둔다"""
-        now = time.monotonic()
-        self._want = {k: v for k, v in self._want.items() if now - v[2] < 600}
-        self._want[name] = (x, y, now)
-
-    def _snapshot(self):
-        """자동 정렬을 끌 때 — 지금 자리 그대로 굳힌다 (윈도우처럼)"""
-        self.pos = {pos_key(it): list(cell_of(it.x, it.y)) for it in self.items}
-        self._fallback = set()
-
-    def _pin_fallback(self):
-        """임시 자리에 있던 아이콘을 그 자리로 굳힌다 — 다른 아이콘을 옮긴 뒤
-        원래 칸이 비었다고 혼자 튀어 돌아가지 않게"""
-        for it in self.items:
-            if it.key in self._fallback:
-                self.pos[pos_key(it)] = list(cell_of(it.x, it.y))
-        self._fallback = set()
-
-    def _move_icons(self, moves):
-        """아이콘을 바탕화면 안의 새 자리로. moves = [(Item, 왼쪽 위 x, y)] — 앞의 것이 먼저 칸을 잡는다"""
+    def move_icons(self, moves):
+        """아이콘을 이 모니터의 새 자리로. moves = [(Item, 왼쪽 위 x, y)] — 앞의 것이 먼저 칸을 잡는다"""
+        b = self.board
         if not moves:
             return
-        if self.auto:                                  # 손으로 옮기면 자동 정렬이 꺼진다 (윈도우처럼)
-            self._snapshot()
-            self.auto = False
-        self._pin_fallback()
+        if b.auto:                                     # 손으로 옮기면 자동 정렬이 꺼진다 (윈도우처럼)
+            b.snapshot()
+            b.auto = False
+        b.pin_fallback()
         W, H = self._screen()
         cols, rows = self._grid
         moving = {it.key for it, _x, _y in moves}
-        if self.snap:
+        if b.snap:
             # 가장 가까운 칸, 차 있으면 가장 가까운 빈 칸
-            taken = {cell_of(i.x, i.y) for i in self.items if i.key not in moving}
+            taken = {cell_of(i.x, i.y) for i in self.here if i.key not in moving}
             for it, x, y in moves:
                 cell = nearest_free(clamp_cell(cell_of(x, y), cols, rows), taken, cols, rows)
                 taken.add(cell)
-                self.pos[pos_key(it)] = list(cell)
+                b.set_pos(it, self, cell=cell)
         else:
             # 자유 좌표 — 화면(작업 표시줄 위) 안으로만 제한, 겹쳐도 된다
             maxx, maxy = max(0, W - CELL_W), max(0, H - self.panel_h - CELL_H)
             for it, x, y in moves:
-                self.pos[pos_key(it)] = {"x": int(min(max(x, 0), maxx)), "y": int(min(max(y, 0), maxy))}
-        self._save()
-        self.layout()
+                b.set_pos(it, self, px=(min(max(x, 0), maxx), min(max(y, 0), maxy)))
+        b.save()
+        b.relayout()
 
-    def _snap_all(self):
+    def snap_all(self):
         """격자에 맞춤을 켤 때 — 칸 밖에 있던 아이콘을 가까운 빈 칸으로 (칸 위의 것은 그대로)"""
+        b = self.board
         cols, rows = self._grid
         taken, rest = set(), []
-        for it in self.items:
+        for it in self.here:
             cell = cell_of(it.x, it.y)
             if (it.x, it.y) == cell_origin(*cell) and cell not in taken:
                 taken.add(cell)
-                self.pos[pos_key(it)] = list(cell)
+                b.set_pos(it, self, cell=cell)
             else:
                 rest.append(it)
         for it in rest:
             cell = nearest_free(clamp_cell(cell_of(it.x, it.y), cols, rows), taken, cols, rows)
             taken.add(cell)
-            self.pos[pos_key(it)] = list(cell)
+            b.set_pos(it, self, cell=cell)
         self._fallback = set()
-
-    def toggle_auto(self):
-        """보기 › 아이콘 자동 정렬"""
-        if self.auto:
-            self._snapshot()                           # 꺼도 아이콘은 지금 자리 그대로
-            self.auto = False
-        else:
-            self.auto = True
-            self.pos = {}
-            self._fallback = set()
-        self._save()
-        self.layout()
-
-    def toggle_snap(self):
-        """보기 › 아이콘을 격자에 맞춤"""
-        self.snap = not self.snap
-        if self.snap and not self.auto:
-            self._snap_all()
-        self._save()
-        self.layout()
-
-    def arrange_by(self, by):
-        """정렬 기준 — 자동 정렬이 꺼져 있어도 그 순서로 한 번 다시 늘어놓는다 (윈도우처럼)"""
-        self.sort = by
-        self.items.sort(key=lambda i: order_key(i, by))
-        if not self.auto:
-            rows = self._grid[1]
-            self.pos = {pos_key(it): list(divmod(i, rows)) for i, it in enumerate(self.items)}
-            self._fallback = set()
-        self._save()
-        self.layout()
 
     # ── 그리기 ────────────────────────────────────────────
     def _current_surface(self):
@@ -1160,17 +1410,16 @@ class Desk(Gtk.Window):
         else:
             cr.set_source_surface(cur, 0, 0)
             cr.paint()
-        if self.primary:
-            for it in self.items:
-                self._draw_item(cr, it)
-            if self.band:
-                x0, y0, x1, y1 = self.band
-                cr.rectangle(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
-                cr.set_source_rgba(*self.accent, 0.18)
-                cr.fill_preserve()
-                cr.set_source_rgba(*self.accent, 0.7)
-                cr.set_line_width(1)
-                cr.stroke()
+        for it in self.here:
+            self._draw_item(cr, it)
+        if self.band:
+            x0, y0, x1, y1 = self.band
+            cr.rectangle(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
+            cr.set_source_rgba(*self.accent, 0.18)
+            cr.fill_preserve()
+            cr.set_source_rgba(*self.accent, 0.7)
+            cr.set_line_width(1)
+            cr.stroke()
         return False
 
     def _round(self, cr, x, y, w, h, r):
@@ -1183,7 +1432,7 @@ class Desk(Gtk.Window):
 
     def _draw_item(self, cr, it):
         x, y = it.x, it.y
-        sel = it.key in self.selected
+        sel = it.key in self.board.selected
         if sel or self.hover == it.key:
             self._round(cr, x + 2, y + 2, CELL_W - 4, CELL_H - 4, 6)
             if sel:
@@ -1232,8 +1481,9 @@ class Desk(Gtk.Window):
         PangoCairo.show_layout(cr, layout)
 
     # ── 입력 ──────────────────────────────────────────────
+
     def item_at(self, x, y):
-        for it in reversed(self.items):                # 겹치면 나중에 그린(위에 보이는) 것
+        for it in reversed(self.here):                 # 겹치면 나중에 그린(위에 보이는) 것
             if it.x <= x < it.x + CELL_W and it.y <= y < it.y + CELL_H:
                 return it
         return None
@@ -1244,17 +1494,16 @@ class Desk(Gtk.Window):
             self.area.queue_draw()
 
     def on_motion(self, _w, ev):
-        if not self.primary:
-            return False
+        b = self.board
         if self.press and self.press.get("item") is None:
             x0, y0 = self.press["x"], self.press["y"]
             self.band = (x0, y0, ev.x, ev.y)
             bx0, bx1 = sorted((x0, ev.x))
             by0, by1 = sorted((y0, ev.y))
             base = self.press["base"]
-            hit = {it.key for it in self.items
+            hit = {it.key for it in self.here
                    if it.x < bx1 and it.x + CELL_W > bx0 and it.y < by1 and it.y + CELL_H > by0}
-            self.selected = base | hit
+            b.selected = base | hit
             self.area.queue_draw()
             return True
         if self.press and self.press.get("item") and not self.press.get("dragging"):
@@ -1265,39 +1514,36 @@ class Desk(Gtk.Window):
         return False
 
     def on_press(self, _w, ev):
+        b = self.board
         self.area.grab_focus()
-        if not self.primary:
-            if ev.button == 3:
-                self._menu_empty(ev)
-            return True
         it = self.item_at(ev.x, ev.y)
         ctrl = bool(ev.state & Gdk.ModifierType.CONTROL_MASK)
         if ev.type == Gdk.EventType._2BUTTON_PRESS and ev.button == 1 and it:
-            self.open_items([it])
+            b.open_items([it], self)
             return True
         if ev.button == 1:
             if it:
                 if ctrl:
-                    self.selected ^= {it.key}
-                elif it.key not in self.selected:
-                    self.selected = {it.key}
-                self.cursor = it.key
+                    b.selected ^= {it.key}
+                elif it.key not in b.selected:
+                    b.selected = {it.key}
+                b.cursor = it.key
                 self.press = {"x": ev.x, "y": ev.y, "item": it}
             else:
                 if not ctrl:
-                    self.selected = set()
-                self.press = {"x": ev.x, "y": ev.y, "item": None, "base": set(self.selected)}
-            self.area.queue_draw()
+                    b.selected = set()
+                self.press = {"x": ev.x, "y": ev.y, "item": None, "base": set(b.selected)}
+            b.redraw()                                 # 다른 모니터의 선택 표시도 지운다
         elif ev.button == 3:
             if it:
-                if it.key not in self.selected:
-                    self.selected = {it.key}
-                self.cursor = it.key
-                self.area.queue_draw()
+                if it.key not in b.selected:
+                    b.selected = {it.key}
+                b.cursor = it.key
+                b.redraw()
                 self._menu_item(ev)
             else:
-                self.selected = set()
-                self.area.queue_draw()
+                b.selected = set()
+                b.redraw()
                 self._menu_empty(ev)
         return True
 
@@ -1309,25 +1555,24 @@ class Desk(Gtk.Window):
         return True
 
     def on_key(self, _w, ev):
-        if not self.primary:
-            return False
+        b = self.board
         k = ev.keyval
         ctrl = bool(ev.state & Gdk.ModifierType.CONTROL_MASK)
-        sel = [it for it in self.items if it.key in self.selected]
+        sel = [it for it in b.items if it.key in b.selected]
         if k in (Gdk.KEY_Return, Gdk.KEY_KP_Enter) and sel:
-            self.open_items(sel)
+            b.open_items(sel, self)
         elif k == Gdk.KEY_Delete and sel:
-            self.trash_items(sel)
+            b.trash_items(sel)
         elif k == Gdk.KEY_F2 and len(sel) == 1:
-            self.rename_item(sel[0])
+            b.rename_item(sel[0])
         elif k == Gdk.KEY_F5:
-            self.refresh()
+            b.refresh()
         elif ctrl and k in (Gdk.KEY_a, Gdk.KEY_A):
-            self.selected = {it.key for it in self.items}
-            self.area.queue_draw()
+            b.selected = {it.key for it in b.items}    # 모든 모니터의 아이콘 (윈도우처럼)
+            b.redraw()
         elif k == Gdk.KEY_Escape:
-            self.selected = set()
-            self.area.queue_draw()
+            b.selected = set()
+            b.redraw()
         elif k in ARROWS:
             self._arrow(*ARROWS[k], bool(ev.state & Gdk.ModifierType.SHIFT_MASK))
         else:
@@ -1335,17 +1580,18 @@ class Desk(Gtk.Window):
         return True
 
     def _arrow(self, dx, dy, extend):
-        """화살표 — 그 방향의 가장 가까운 아이콘으로 (보이는 칸 배치 기준, 같은 줄·열을 먼저).
+        """화살표 — 그 방향의 가장 가까운 아이콘으로 (이 모니터의 보이는 칸 배치 기준, 같은 줄·열을 먼저).
         Shift 를 누르면 선택에 더한다. 끝에서는 멈춘다 (감아 돌지 않는다)."""
-        if not self.items:
+        b = self.board
+        if not self.here:
             return
-        cur = next((i for i in self.items if i.key == self.cursor and i.key in self.selected), None) \
-            or next((i for i in self.items if i.key in self.selected), None)
+        cur = next((i for i in self.here if i.key == b.cursor and i.key in b.selected), None) \
+            or next((i for i in self.here if i.key in b.selected), None)
         if cur is None:
-            nxt = min(self.items, key=lambda i: (i.x, i.y))    # 고른 게 없으면 왼쪽 위 첫 아이콘
+            nxt = min(self.here, key=lambda i: (i.x, i.y))     # 고른 게 없으면 왼쪽 위 첫 아이콘
         else:
             best = None
-            for it in self.items:
+            for it in self.here:
                 if it is cur:
                     continue
                 ox, oy = it.x - cur.x, it.y - cur.y
@@ -1360,41 +1606,52 @@ class Desk(Gtk.Window):
                 return
             nxt = best[1]
         if extend:
-            self.selected.add(nxt.key)
+            b.selected.add(nxt.key)
         else:
-            self.selected = {nxt.key}
-        self.cursor = nxt.key
-        self.area.queue_draw()
+            b.selected = {nxt.key}
+        b.cursor = nxt.key
+        b.redraw()
 
     # ── 끌어다 놓기 ───────────────────────────────────────
     def _drag_image(self, items, px, py):
         """끄는 동안 손가락을 따라다닐 그림 — 고른 아이콘들을 지금 배치 그대로 반투명하게 (윈도우처럼).
-        그림 안에서 누른 점을 핫스폿으로 둬서, 놓으면 그림이 보이던 자리에 아이콘이 선다 (_drop_icons)."""
-        x0, y0 = min(i.x for i in items), min(i.y for i in items)
-        w = int(max(i.x for i in items) - x0) + CELL_W
-        h = int(max(i.y for i in items) - y0) + CELL_H
+        그림 안에서 누른 점을 핫스폿으로 둬서, 놓으면 그림이 보이던 자리에 아이콘이 선다 (_drop_icons).
+        다른 모니터에 있는 고른 아이콘은 이 모니터 좌표로 옮겨 그린다."""
+        b = self.board
+        g = self.geo()
+        spots = []
+        for it in items:
+            og = (b.where.get(it.key) or self).geo()
+            spots.append((it, it.x + og.x - g.x, it.y + og.y - g.y))
+        x0, y0 = min(s[1] for s in spots), min(s[2] for s in spots)
+        w = int(max(s[1] for s in spots) - x0) + CELL_W
+        h = int(max(s[2] for s in spots) - y0) + CELL_H
         surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
         cr = cairo.Context(surf)
         cr.translate(-x0, -y0)
         cr.push_group()
-        for it in items:
+        for it, sx, sy in spots:
+            ox, oy = it.x, it.y
+            it.x, it.y = sx, sy
             self._draw_item(cr, it)
+            it.x, it.y = ox, oy
         cr.pop_group_to_source()
         cr.paint_with_alpha(0.7)
         surf.set_device_offset(-(px - x0), -(py - y0))  # GTK 는 장치 오프셋의 반대를 핫스폿으로 쓴다
         return surf
 
     def _start_drag(self, ev):
+        b = self.board
         self.press["dragging"] = True
         it0 = self.press["item"]
-        sel = [it for it in self.items if it.key in self.selected or it is it0]
+        sel = [it for it in b.items if it.key in b.selected or it is it0]
         px, py = self.press["x"], self.press["y"]
-        self._drag = {"keys": {it.key for it in sel}, "anchor": it0.key, "x": px, "y": py}
+        b.drag = {"desk": self, "keys": {it.key for it in sel}, "anchor": it0.key, "x": px, "y": py}
         # 다른 앱(Thunar 등)에 놓으면 지금처럼 파일 끌기 — 특별 항목은 파일이 아니니 뺀다.
-        #   바탕화면 안에 놓으면 자리 옮기기 (우리 형식, 같은 위젯에서만)
-        self._drag_uris = [it.uri for it in sel if not it.special and it.uri]
-        tl = Gtk.TargetList.new([Gtk.TargetEntry.new(ICONS_TARGET, Gtk.TargetFlags.SAME_WIDGET, 0)])
-        if self._drag_uris:
+        #   바탕화면(어느 모니터든)에 놓으면 자리 옮기기 (우리 형식, 이 프로그램 안에서만)
+        b.drag_uris = [it.uri for it in sel if not it.special and it.uri]
+        tl = Gtk.TargetList.new([Gtk.TargetEntry.new(ICONS_TARGET, Gtk.TargetFlags.SAME_APP, 0)])
+        if b.drag_uris:
             tl.add_uri_targets(1)
         ctx = self.area.drag_begin_with_coordinates(tl, Gdk.DragAction.MOVE | Gdk.DragAction.COPY,
                                                     1, ev, int(px), int(py))
@@ -1403,24 +1660,35 @@ class Desk(Gtk.Window):
 
     def on_drag_get(self, _w, _ctx, data, info, _t):
         if info == 1:
-            data.set_uris(self._drag_uris)
+            data.set_uris(self.board.drag_uris)
 
     def on_drag_end(self, *_):
-        self._drag = None
+        self.board.drag = None
         self.press = None
 
     def _own_drag(self, ctx):
-        return Gtk.drag_get_source_widget(ctx) == self.area
+        src = Gtk.drag_get_source_widget(ctx)
+        return src is not None and any(src == d.area for d in self.board.desks)
 
-    def on_drag_motion(self, _w, ctx, _x, _y, time_):
-        if self._own_drag(ctx):
+    def _trash_at(self, x, y, keys=()):
+        """(x, y) 가 휴지통 아이콘 위면 그 아이콘 (끄는 것에 휴지통이 들어 있으면 아니다)"""
+        it = self.item_at(x, y)
+        return it if it is not None and it.key == "::trash" and it.key not in keys else None
+
+    def on_drag_motion(self, _w, ctx, x, y, time_):
+        own = self._own_drag(ctx)
+        d = self.board.drag
+        # 휴지통 위면 휴지통을 강조한다 — 놓으면 휴지통으로 (윈도우처럼)
+        tr = self._trash_at(x, y, d["keys"] if own and d else ())
+        self._set_hover(tr.key if tr else None)
+        if own:
             Gdk.drag_status(ctx, Gdk.DragAction.MOVE, time_)   # 자리 옮기기 — 복사(+) 표시가 뜨지 않게
             return True
         return False
 
     def on_drag_drop(self, w, ctx, x, y, time_):
         if self._own_drag(ctx):
-            if self._drag:
+            if self.board.drag:
                 self._drop_icons(x, y)
             Gtk.drag_finish(ctx, True, False, time_)
             return True
@@ -1436,18 +1704,32 @@ class Desk(Gtk.Window):
         return True
 
     def _drop_icons(self, x, y):
-        """바탕화면 안에서 끌어 놓음 — 놓은 점과 누른 점의 차이만큼 옮긴다 (여러 개면 서로의 배치 그대로)"""
-        d = self._drag
-        dx, dy = x - d["x"], y - d["y"]
-        items = [it for it in self.items if it.key in d["keys"]]
-        if (dx, dy) == (0, 0) or (self.snap or self.auto) and all(
-                cell_of(it.x + dx, it.y + dy) == cell_of(it.x, it.y) for it in items):
+        """바탕화면에 끌어 놓음 — 놓은 점과 누른 점의 차이만큼 옮긴다 (여러 개면 서로의 배치 그대로).
+        다른 모니터에 놓으면 그 모니터로 — 화면 전체 좌표로 계산해 놓은 자리에 선다."""
+        b = self.board
+        d = b.drag
+        src = d["desk"]
+        g, sg = self.geo(), src.geo()
+        dx, dy = (x + g.x) - (d["x"] + sg.x), (y + g.y) - (d["y"] + sg.y)   # 화면 전체 좌표의 이동량
+        items = [it for it in b.items if it.key in d["keys"]]
+        if not items:
+            return
+        if self._trash_at(x, y, d["keys"]):            # 휴지통에 놓음 — 파일·폴더는 휴지통으로 (내 PC 등 특별 항목은 그대로)
+            self._set_hover(None)
+            b.trash_items([it for it in items if not it.special])
+            return
+        spots = []
+        for it in items:                               # 이 모니터 좌표로 옮긴 새 자리
+            og = (b.where.get(it.key) or src).geo()
+            spots.append((it, it.x + og.x - g.x + dx, it.y + og.y - g.y + dy))
+        if all(b.where.get(it.key) is self for it in items) and (
+                (dx, dy) == (0, 0) or (b.snap or b.auto) and all(
+                    cell_of(nx, ny) == cell_of(it.x, it.y) for it, nx, ny in spots)):
             return                                     # 제자리에 놓음 — 자동 정렬을 괜히 끄지 않는다
-        a = next((i for i in items if i.key == d["anchor"]), None)
-        ax, ay = (a.x, a.y) if a else (0, 0)
+        a = next((s for s in spots if s[0].key == d["anchor"]), spots[0])
         # 누른 아이콘이 먼저 칸을 잡고, 나머지는 그 가까운 것부터
-        items.sort(key=lambda i: (i.key != d["anchor"], abs(i.x - ax) + abs(i.y - ay)))
-        self._move_icons([(it, it.x + dx, it.y + dy) for it in items])
+        spots.sort(key=lambda s: (s[0].key != d["anchor"], abs(s[1] - a[1]) + abs(s[2] - a[2])))
+        self.move_icons(spots)
 
     def on_drop(self, _w, ctx, x, y, data, _info, time_):
         ok = self._receive(data.get_uris() or [], ctx.get_selected_action() == Gdk.DragAction.MOVE, x, y)
@@ -1455,11 +1737,25 @@ class Desk(Gtk.Window):
         Gtk.drag_finish(ctx, ok, False, time_)
 
     def _receive(self, uris, move, x, y):
-        """다른 앱에서 끌어 온 파일을 바탕화면 폴더로.
+        """다른 앱에서 끌어 온 파일을 바탕화면 폴더로 (놓은 모니터의 놓은 자리에).
         같은 파일 시스템 안의 이동은 rename 으로 바로. 복사·다른 디스크로의 이동·폴더는 cp/mv 를
         뒤에서 돌린다 (큰 파일을 복사하는 동안 바탕화면이 멈추지 않게). 이름이 겹치면 '이름 (2)'."""
+        b = self.board
+        if self._trash_at(x, y):                       # 휴지통 아이콘에 놓음 — 복사·이동 대신 휴지통으로
+            self._set_hover(None)
+            took = False
+            for u in uris:
+                f = Gio.File.new_for_uri(u)
+                if not f.has_uri_scheme("file"):
+                    continue
+                try:
+                    took = f.trash(None) or took
+                except GLib.Error as e:
+                    notify("휴지통으로 옮기지 못했습니다", f"‘{f.get_basename()}’\n{e.message}")
+            b.refresh_later(200)
+            return took
         sx, sy = x - CELL_W / 2, y - 8 - ICON / 2      # 아이콘 가운데가 놓은 점에 오게
-        real_d = os.path.realpath(self.ddir)
+        real_d = os.path.realpath(b.ddir)
         here, took = [], False
         verb = "옮기지" if move else "복사하지"
         for u in uris:
@@ -1471,7 +1767,7 @@ class Desk(Gtk.Window):
             name = os.path.basename(src)
             if os.path.realpath(os.path.dirname(src)) == real_d:
                 # 이미 바탕화면에 있는 것 (파일 관리자에서 바탕화면 폴더를 보다가 끌어 옴) — 자리만 옮긴다
-                it = next((i for i in self.items if i.path and os.path.basename(i.path) == name), None)
+                it = next((i for i in b.items if i.path and os.path.basename(i.path) == name), None)
                 if it:
                     here.append(it)
                 continue
@@ -1481,10 +1777,10 @@ class Desk(Gtk.Window):
                 notify(f"바탕 화면으로 {verb} 못했습니다",
                        f"‘{name}’ 안에 바탕 화면 폴더가 있습니다 — 폴더를 자기 안으로 넣을 수 없습니다.")
                 continue
-            dst_name = free_name(name, is_dir, lambda n: n in self._reserved or
-                                 os.path.lexists(os.path.join(self.ddir, n)))
-            dst = os.path.join(self.ddir, dst_name)
-            self._want_spot(dst_name, sx, sy)
+            dst_name = free_name(name, is_dir, lambda n: n in b._reserved or
+                                 os.path.lexists(os.path.join(b.ddir, n)))
+            dst = os.path.join(b.ddir, dst_name)
+            b.want_spot(dst_name, self, sx, sy)
             if move:
                 try:
                     os.rename(src, dst)
@@ -1495,196 +1791,61 @@ class Desk(Gtk.Window):
                         notify(f"바탕 화면으로 {verb} 못했습니다", f"‘{name}’\n{e.strerror}")
                         continue
             argv = ["mv", "-T", "--", src, dst] if move else ["cp", "-a", "-T", "--", src, dst]
-            took = self._run_job(argv, verb, dst_name) or took
+            took = b.run_job(argv, verb, dst_name) or took
         if here:
             # 격자면 놓은 칸 근처 빈 칸에 차례로, 자유 배치면 놓은 점부터 아래로
-            self._move_icons([(it, sx, sy if self.snap else sy + i * CELL_H) for i, it in enumerate(here)])
+            self.move_icons([(it, sx, sy if b.snap else sy + i * CELL_H) for i, it in enumerate(here)])
             took = True
         if took:
-            self._refresh_later(100)
+            b.refresh_later(100)
         return took
 
-    def _run_job(self, argv, verb, name):
-        try:
-            proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDOUT_SILENCE |
-                                      Gio.SubprocessFlags.STDERR_PIPE)
-        except GLib.Error as e:
-            notify(f"바탕 화면으로 {verb} 못했습니다", f"‘{name}’\n{e.message}")
-            return False
-        self._reserved.add(name)
-        self._jobs.add(proc)
-        proc.communicate_async(None, None, self._job_done, (verb, name))
-        return True
-
-    def _job_done(self, proc, res, data):
-        verb, name = data
-        self._jobs.discard(proc)
-        self._reserved.discard(name)
-        err = ""
-        try:
-            _ok, _out, eb = proc.communicate_finish(res)
-            err = eb.get_data().decode("utf-8", "replace") if eb else ""
-        except GLib.Error as e:
-            err = e.message
-        if not proc.get_successful():
-            lines = [ln.strip() for ln in err.splitlines() if ln.strip()]
-            notify(f"바탕 화면으로 {verb} 못했습니다", f"‘{name}’" + (f"\n{lines[-1]}" if lines else ""))
-        self._refresh_later(150)
-
-    # ── 동작 ──────────────────────────────────────────────
-    def _launch(self, path):
-        try:
-            app = Gio.DesktopAppInfo.new_from_filename(path)
-            if app is not None:
-                app.launch([], None)
-                return True
-        except Exception as e:
-            dbg("앱 실행 실패", e)
-        return False
-
-    def _open_default(self, it_uri, it_path=None):
-        try:
-            Gio.AppInfo.launch_default_for_uri(it_uri, None)
-        except Exception:
-            run(["xdg-open", it_path or it_uri])
-
-    def open_items(self, items):
-        doubt = []
-        for it in items:
-            if it.key == "::install":
-                run(["sekai-installer"])
-                continue
-            if it.is_desktop_entry:
-                # 열 때 다시 본다 — 목록을 읽은 뒤 권한·표시가 바뀌었을 수 있다
-                if not launcher_trusted(it.path):
-                    doubt.append(it.path)
-                    continue
-                if self._launch(it.path):
-                    continue
-            if it.is_dir or it.special:
-                run([file_manager(), it.uri or it.path])
-            else:
-                self._open_default(it.uri, it.path)
-        if doubt:
-            W, H = self._screen()
-            cmd = launcher_command(doubt[0]) if len(doubt) == 1 else ""
-            self.trust.ask(doubt, cmd, lambda: self._trust_and_open(doubt), W, H)
-
-    def _trust_and_open(self, paths):
-        for p in paths:
-            mark_trusted(p)
-            if not self._launch(p):
-                self._open_default(Gio.File.new_for_path(p).get_uri(), p)
-        self._refresh_later(100)                       # 이제 앱 이름·아이콘으로
-
-    def trash_items(self, items):
-        for it in items:
-            if it.special or not it.path:
-                continue
-            try:
-                Gio.File.new_for_path(it.path).trash(None)
-            except Exception as e:
-                dbg("휴지통 실패", e)
-        self.selected = set()
-        self._refresh_later(200)
-
-    def rename_item(self, it):
-        if it.special or not it.path:
-            return
-
-        def do(name):
-            dst = os.path.join(os.path.dirname(it.path), name)
-            if os.path.exists(dst):
-                return "같은 이름이 이미 있습니다."
-            try:
-                os.rename(it.path, dst)
-            except OSError as e:
-                return f"바꾸지 못했습니다: {e.strerror}"
-            old = os.path.basename(it.path)
-            if old in self.pos:                        # 자리도 새 이름으로
-                self.pos[name] = self.pos.pop(old)
-                self._save()
-            self.selected = {dst}
-            self.cursor = dst
-            return None
-        self.rename.ask(it.x, it.y, os.path.basename(it.path), do, self._screen()[1])
-
-    def new_folder(self, spot=None):
-        base = "새 폴더"
-        n, name = 1, base
-        while os.path.exists(os.path.join(self.ddir, name)):
-            n += 1
-            name = f"{base} ({n})"
-        os.makedirs(os.path.join(self.ddir, name))
-        if spot:
-            self._want_spot(name, *spot)
-        GLib.timeout_add(250, lambda: (self._rename_new(name), False)[1])
-
-    def new_text(self, spot=None):
-        base = "새 텍스트 문서"
-        n, name = 1, base + ".txt"
-        while os.path.exists(os.path.join(self.ddir, name)):
-            n += 1
-            name = f"{base} ({n}).txt"
-        open(os.path.join(self.ddir, name), "w").close()
-        if spot:
-            self._want_spot(name, *spot)
-        GLib.timeout_add(250, lambda: (self._rename_new(name), False)[1])
-
-    def _rename_new(self, name):
-        self.refresh()
-        it = next((i for i in self.items if i.path and os.path.basename(i.path) == name), None)
-        if it:
-            self.selected = {it.key}
-            self.cursor = it.key
-            self.area.queue_draw()
-            self.rename_item(it)
-
+    # ── 메뉴 ──────────────────────────────────────────────
     def _screen(self):
         return self.area.get_allocated_width(), self.area.get_allocated_height()
 
     def _menu_empty(self, ev):
+        """빈 곳 오른쪽 클릭 — 어느 모니터에서나 같은 메뉴 (윈도우처럼). 새로 만든 것은 누른 칸 근처에"""
+        b = self.board
         W, H = self._screen()
-        entries = []
-        if self.primary:
-            # 새로 만든 것은 누른 칸 근처에 (자동 정렬이 꺼져 있을 때 — 윈도우처럼)
-            spot = (ev.x - CELL_W / 2, ev.y - CELL_H / 2)
-            view = [("아이콘 자동 정렬", None, self.toggle_auto, "✓" if self.auto else ""),
-                    ("아이콘을 격자에 맞춤", None, self.toggle_snap, "✓" if self.snap else "")]
-            order = [(label, None, lambda by=by: self.arrange_by(by), "●" if by == self.sort else "")
-                     for by, label in SORTS]
-            entries += [("새 폴더", "folder-new-symbolic", lambda: self.new_folder(spot)),
-                        ("새 텍스트 문서", "document-new-symbolic", lambda: self.new_text(spot)),
-                        None,
-                        ("보기", "view-grid-symbolic", view),
-                        ("정렬 기준", "view-sort-ascending-symbolic", order),
-                        ("새로 고침", "view-refresh-symbolic", self.refresh),
-                        ("여기서 터미널 열기", "utilities-terminal-symbolic",
-                         lambda: run([settings().get("apps", {}).get("terminal") or "sekai-terminal"], cwd=self.ddir)),
-                        ("파일 관리자에서 열기", "folder-open-symbolic",
-                         lambda: run([file_manager(), self.ddir])),
-                        None]
-        entries += [("배경 바꾸기", "preferences-desktop-wallpaper-symbolic",
-                     lambda: run(["sekai-settings", "--page=wallpaper"])),
-                    ("디스플레이 설정", "video-display-symbolic",
-                     lambda: run(["sekai-settings", "--page=display"])),
-                    ("개인 설정", "preferences-desktop-theme-symbolic",
-                     lambda: run(["sekai-settings", "--page=appearance"]))]
+        spot = (ev.x - CELL_W / 2, ev.y - CELL_H / 2)
+        view = [("아이콘 자동 정렬", None, b.toggle_auto, "✓" if b.auto else ""),
+                ("아이콘을 격자에 맞춤", None, b.toggle_snap, "✓" if b.snap else "")]
+        order = [(label, None, lambda by=by: b.arrange_by(by), "●" if by == b.sort else "")
+                 for by, label in SORTS]
+        entries = [("새 폴더", "folder-new-symbolic", lambda: b.new_folder(self, spot)),
+                   ("새 텍스트 문서", "document-new-symbolic", lambda: b.new_text(self, spot)),
+                   None,
+                   ("보기", "view-grid-symbolic", view),
+                   ("정렬 기준", "view-sort-ascending-symbolic", order),
+                   ("새로 고침", "view-refresh-symbolic", b.refresh),
+                   ("여기서 터미널 열기", "utilities-terminal-symbolic",
+                    lambda: run([settings().get("apps", {}).get("terminal") or "sekai-terminal"], cwd=b.ddir)),
+                   ("파일 관리자에서 열기", "folder-open-symbolic",
+                    lambda: run([file_manager(), b.ddir])),
+                   None,
+                   ("배경 바꾸기", "preferences-desktop-wallpaper-symbolic",
+                    lambda: run(["sekai-settings", "--page=wallpaper"])),
+                   ("디스플레이 설정", "video-display-symbolic",
+                    lambda: run(["sekai-settings", "--page=display"])),
+                   ("개인 설정", "preferences-desktop-theme-symbolic",
+                    lambda: run(["sekai-settings", "--page=appearance"]))]
         self.menu.show_at(ev.x, ev.y, entries, W, H)
 
     def _menu_item(self, ev):
+        b = self.board
         W, H = self._screen()
-        sel = [it for it in self.items if it.key in self.selected]
-        entries = [("열기", "document-open-symbolic", lambda: self.open_items(sel))]
+        sel = [it for it in b.items if it.key in b.selected]
+        entries = [("열기", "document-open-symbolic", lambda: b.open_items(sel, self))]
         real = [it for it in sel if not it.special]
         if any(it.key == "::trash" for it in sel):
             entries.append(("휴지통 비우기", "user-trash-full-symbolic", self.empty_trash))
         if len(real) == 1:
-            entries.append(("이름 바꾸기", "document-edit-symbolic", lambda: self.rename_item(real[0])))
+            entries.append(("이름 바꾸기", "document-edit-symbolic", lambda: b.rename_item(real[0])))
             entries.append(("경로 복사", "edit-copy-symbolic",
                             lambda: run(["wl-copy", real[0].path])))
         if real:
-            entries += [None, ("휴지통으로 이동", "user-trash-symbolic", lambda: self.trash_items(real))]
+            entries += [None, ("휴지통으로 이동", "user-trash-symbolic", lambda: b.trash_items(real))]
         self.menu.show_at(ev.x, ev.y, entries, W, H)
 
     def empty_trash(self):
@@ -1722,21 +1883,24 @@ def main():
 
     disp = Gdk.Display.get_default()
     desks = []
-    Gtk.IconTheme.get_default().connect(
-        "changed", lambda *_: [d._refresh_later(150) for d in desks if hasattr(d, "_refresh_later")])
+    board = Board()
+    Gtk.IconTheme.get_default().connect("changed", lambda *_: board.refresh_later(150))
 
     def build():
-        """모니터마다 바탕화면 하나. 아이콘은 주 모니터에만."""
+        """모니터마다 바탕화면 하나 — 아이콘은 Board 가 모니터에 나눠 준다 (주 모니터 + 옮겨 둔 모니터)"""
         for d in desks:
             d.destroy()
         desks.clear()
         n = disp.get_n_monitors()
-        prim = primary_gdk(disp) if n else None
+        hmons = hypr_monitors()
+        prim = primary_gdk(disp, hmons) if n else None
         for i in range(n):
             m = disp.get_monitor(i)
-            d = Desk(m, primary=(m == prim))
+            d = Desk(board, m, primary=(m == prim), mon=mon_id_of(m, hmons))
+            dbg("[모니터]", i, d.mon, "주" if d.primary else "", (m.get_geometry().x, m.get_geometry().y))
             d.show_all()
             desks.append(d)
+        board.set_desks(desks)
         return False
 
     build()
@@ -1765,6 +1929,7 @@ def main():
             later()
         for d in desks:
             d.reload_settings()
+        board.relayout()
         return False
 
     def on_hup(*_):
