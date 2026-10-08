@@ -105,7 +105,11 @@ if [ -n "$last" ] && text=$(read_owned "$disp" "$last"); then
     } > "$run" 2>/dev/null && CONF=$run
     # 주 디스플레이 (사용자가 설정에서 고른 것) — 로그인 입력 칸을 거기에 (sekai-greeter)
     prim=$(printf '%s\n' "$text" | sed -n 's/^# primary = \([A-Za-z0-9._-]\{1,32\}\)$/\1/p' | head -1)
-    [ -n "$prim" ] && export SEKAI_PRIMARY="$prim"
+    if [ -n "$prim" ]; then
+        export SEKAI_PRIMARY="$prim"
+        # 커서도 처음부터 주 디스플레이 가운데에 (합성기는 기본으로 처음 발견한 모니터 가운데에 둔다)
+        [ "$CONF" = "${run:-}" ] && echo "cursor:default_monitor = $prim" >> "$run"
+    fi
 fi
 
 run_greeter "$CONF"

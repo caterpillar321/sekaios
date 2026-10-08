@@ -364,9 +364,12 @@ def build(store):
 
         cur_mode = _nice_mode(mon.get("width", 0), mon.get("height", 0), mon.get("refreshRate", 0.0))
         rates = _by_res(_modes(mon))
-        # "자동"이 실제로 무엇이 되는지 보여 준다 — 모니터가 알려 준 기본 모드(보통 목록 첫째, 대개 60 Hz)
+        # "자동"이 실제로 무엇이 되는지 보여 준다 — 모니터가 알려 준 기본 해상도(목록 첫째)의 가장 높은 주사율
+        #   (합성기가 윈도우처럼 고른다. 거부되면 그 해상도의 기본 주사율로 물러난다)
         first = (mon.get("availableModes") or [""])[0]
         f_res, f_hz = _split(first)
+        if rates.get(f_res):
+            f_hz = rates[f_res][0]
         auto_label = (f"자동 ({f_res.replace('x', ' × ')}, {_hz_label(f_hz)})" if f_res and f_hz
                       else "자동 (모니터 권장)")
         res_items = [("preferred", auto_label)] + [
@@ -376,11 +379,18 @@ def build(store):
         def rate_items(res, rates=rates):            # 기본 인자로 묶는다 — 반복문의 늦은 바인딩 방지
             return [(h, _hz_label(h)) for h in rates.get(res, [])]
 
-        def fill_rates(rc, res, active=None, rates=rates, rate_items=rate_items):
-            """주사율 목록을 해상도에 맞게 다시 채운다 (신호 없이)"""
+        def fill_rates(rc, res, active=None, rates=rates, rate_items=rate_items, f_res=f_res, mon=mon):
+            """주사율 목록을 해상도에 맞게 다시 채운다 (신호 없이)
+            해상도가 "자동"이면 권장 해상도의 주사율을 보이고 지금 주사율을 고른다 — 주사율만 바로 바꿀 수 있게"""
             prev, quiet["on"] = quiet["on"], True
             try:
                 rc.remove_all()
+                if res == "preferred":
+                    res = f_res
+                    now = float(mon.get("refreshRate", 0) or 0)
+                    near = [h for h in rates.get(res, []) if abs(float(h) - now) < 0.6]
+                    if near and (mon.get("width"), mon.get("height")) == monscale.mode_size(res):
+                        active = near[0]
                 items = rate_items(res) or [("auto", "자동")]
                 if active and active not in [k for k, _ in items] and rates.get(res):
                     items.append((active, _hz_label(active)))   # 저장된 값이 목록에서 빠졌으면(59.94 등) 그대로 보인다
@@ -388,7 +398,7 @@ def build(store):
                     rc.append(k, label)
                 if not (active and rc.set_active_id(active)):
                     rc.set_active(0)
-                rc.set_sensitive(res != "preferred" and bool(rates.get(res)))
+                rc.set_sensitive(bool(rates.get(res)))
             finally:
                 quiet["on"] = prev
 
@@ -409,10 +419,19 @@ def build(store):
             ctl[n]["fill_scale"](ctl[n]["scale"], v, entry(n).get("scale") or float(ctl[n]["scale"].get_active_id() or 1.0))
             apply_mode(n, v, rc.get_active_id())
 
-        def on_rate(v, n=name):
+        def on_rate(v, n=name, f_res=f_res):
             if quiet["on"] or v is None or v == "auto":
                 return
-            apply_mode(n, ctl[n]["res"].get_active_id(), v)
+            res = ctl[n]["res"].get_active_id()
+            if res == "preferred":
+                # "자동"에서 주사율만 고르면 권장 해상도 + 그 주사율로 정한다
+                res = f_res
+                prev, quiet["on"] = quiet["on"], True
+                try:
+                    ctl[n]["res"].set_active_id(res)
+                finally:
+                    quiet["on"] = prev
+            apply_mode(n, res, v)
 
         res_combo = combo(res_items, s_res if s_res in rates else "preferred", on_res)
         rate_combo = Gtk.ComboBoxText()

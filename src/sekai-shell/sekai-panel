@@ -2114,9 +2114,20 @@ def main():
     panel.show_all()
     # 모니터마다 작업 표시줄 — 꽂고 뺄 때도 다시 맞춘다
     panel.sync_monitors()
-    if monitors.primary_name() and os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
-        # 주 디스플레이를 골라 두었으면 로그인 직후 초점(새 창이 뜨는 곳)을 그리로
-        hypr.dispatch(f"focusmonitor {monitors.primary_hypr_name()}")
+    if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        # 로그인 직후 초점(새 창이 뜨는 곳)과 커서를 주 디스플레이 가운데로 (윈도우처럼).
+        #   합성기는 커서를 첫 모니터 가운데에 두고, no_warps 라 focusmonitor 로는 커서가 안 따라온다 —
+        #   커서가 남은 모니터로 마우스를 움직이는 순간 초점이 되돌아가 창이 엉뚱한 화면에 떴다.
+        hm = monitors.hypr_monitors()
+        prim = monitors.primary_hypr_name(hm)
+        m = next((x for x in hm if x.get("name") == prim), None)
+        if m:
+            sc = float(m.get("scale") or 1) or 1
+            w, h = m.get("width", 0) / sc, m.get("height", 0) / sc
+            if int(m.get("transform", 0)) % 2:
+                w, h = h, w
+            hypr.dispatch(f"focusmonitor {prim}")
+            hypr.dispatch(f"movecursor {int(m.get('x', 0) + w / 2)} {int(m.get('y', 0) + h / 2)}")
     _mon_src = {"id": 0}
 
     def _monitors_changed(*_):

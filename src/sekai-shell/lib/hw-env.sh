@@ -43,7 +43,7 @@ sekai_gpu_check
 #   sekai-greeter-session) — 그래도 안 되면 기본 화면 모드.
 sekai_gpu_pick() {
     [ -n "${AQ_DRM_DEVICES:-}" ] && return 0            # 사용자가 정했으면 그대로
-    first="" rest="" idle="" n=0
+    first="" rest="" idle="" inner="" n=0
     for c in /dev/dri/card[0-9]*; do
         [ -e "$c" ] || continue
         n=$((n + 1))
@@ -55,12 +55,21 @@ sekai_gpu_pick() {
             fi
             continue
         fi
-        if [ -z "$first" ] && [ "$(cat /sys/class/drm/"$k"/device/boot_vga 2>/dev/null)" = 1 ]; then
+        if [ -z "$inner" ] && cat /sys/class/drm/"$k"-eDP-*/status /sys/class/drm/"$k"-LVDS-*/status \
+                /sys/class/drm/"$k"-DSI-*/status 2>/dev/null | grep -qx connected; then
+            inner=$c
+        elif [ -z "$first" ] && [ "$(cat /sys/class/drm/"$k"/device/boot_vga 2>/dev/null)" = 1 ]; then
             first=$c
         else
             rest="$rest${rest:+:}$c"
         fi
     done
+    # 노트북 내장 화면(eDP·LVDS·DSI)이 달린 카드를 맨 앞에 — GNOME(mutter)·KDE(KWin)·aquamarine 의 기본 규칙과 같게.
+    #   목록을 우리가 적어 넘기면 aquamarine 의 내장 화면 우선 규칙이 꺼진다
+    if [ -n "$inner" ]; then
+        [ -n "$first" ] && rest="$first${rest:+:}$rest"
+        first=$inner
+    fi
     [ "$n" -gt 1 ] || return 0                           # 카드가 하나면 고를 것이 없다
     list="$first${first:+${rest:+:}}$rest"
     [ -n "$list" ] || return 0

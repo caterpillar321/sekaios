@@ -8,7 +8,7 @@ OUT=/build/deb
 #   예전엔 여기서 원본에 patch-*.py 를 적용했다. 이제 그 고친 것들은 포크의 커밋이다 (git log v0.50.1..sekai).
 #   재현할 수 있게 커밋을 고정한다 — 합성기를 고치면 포크에 커밋·푸시하고 여기 REF 와 rev_for 를 올린다.
 SEKAICOMP_URL="https://github.com/caterpillar321/worldlink.git"
-SEKAICOMP_REF="fa13ff3fa7b3b76944d3fa379429b19ab82bfb6c"
+SEKAICOMP_REF="c6d8e57e23dfce55a8bc3b2d52e8f25f46c93973"
 MAINT="SekaiOS <sekai@localhost>"
 REV="sekai2"
 # 패키지별 리비전 (고친 패키지만 올린다 → apt 가 그 패키지만 업그레이드)
@@ -76,7 +76,13 @@ REV="sekai2"
 #      sekai35: 레이어 창의 부분 표면도 damage — 시작 메뉴 안 GTK3 팝오버(전원 메뉴) 강조가 조각으로만 보이던 것 (포크 46e5384) — hyprbars sekai32 · hyprexpo sekai20
 #      sekai36: 사용자에게 보이는 글의 "Hyprland" 를 WorldLink 로 — 설정 오류 막대·알림·충돌 보고서·X11 창 관리자 이름 (포크 d69fd76) — hyprbars sekai33 · hyprexpo sekai21
 #      sekai37: 자동 배율 — 고른 모드로 계산(첫 적용 때 늘 1 이던 것), 물리 크기를 모르면(TV·프로젝터·VM) 1, 짧은 변 논리 720px 이상 (포크 fa13ff3) — hyprbars sekai34 · hyprexpo sekai22
-rev_for() { case "$1" in hyprbars) echo sekai34 ;; hyprexpo) echo sekai22 ;; worldlink|sekaicomp|hyprland) echo sekai37 ;; *) echo "$REV" ;; esac; }
+#      sekai38: 자동(preferred) 모드 — 기본 해상도는 그대로, 그 해상도의 가장 높은 주사율로(윈도우처럼), 거부되면 기본 모드 (포크 ba5b5f5) — hyprbars sekai35 · hyprexpo sekai23
+#      sekai39: 시작할 때 커서를 cursor:default_monitor(주 디스플레이)가 붙을 때까지 숨긴다(최대 3초) — 먼저 켜진 모니터에 잠깐 보였다 (포크 b5502f6) — hyprbars sekai36 · hyprexpo sekai24 (게시 안 함)
+#      sekai40: 숨김이 끝나면 모든 모니터를 다시 그림 — 소프트웨어 커서(NVIDIA+여러 GPU)가 페이지 넘김 대기 중 버려진 그리기 때문에 로그인 화면 옆 모니터에 굳었다 (포크 9841076) — hyprbars sekai37 · hyprexpo sekai25 (게시 안 함)
+#      sekai41: NVIDIA 여러 GPU 에서 소프트웨어 커서는 렌더 GPU 가 아닌 GPU 의 모니터만 — 쉬는 GPU 까지 넘기자 NVIDIA 다중 GPU 데스크톱 전부가 소프트웨어 커서가 됐다 (포크 472c541) — hyprbars sekai38 · hyprexpo sekai26
+#      sekai42: 자동 모드 안전 규칙 — VGA·아날로그 DVI 는 권장 모드만, 기본 해상도가 50Hz 미만이면(4K@30) 50Hz 되는 같은 비율 최대 해상도 먼저 (KWin 처럼) ·
+#               커서 자동(no_hardware_cursors 2): 모든 모니터에서 하드웨어 커서를 먼저 시도하고 실패한 모니터만 소프트웨어 (mutter·KWin·wlroots 처럼) (포크 c6d8e57) — hyprbars sekai39 · hyprexpo sekai27
+rev_for() { case "$1" in hyprbars) echo sekai39 ;; hyprexpo) echo sekai27 ;; worldlink|sekaicomp|hyprland) echo sekai42 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"

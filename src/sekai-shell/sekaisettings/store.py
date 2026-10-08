@@ -577,6 +577,8 @@ class Store:
         if prim and self.get("display").get(prim, {}).get("enabled", True):
             # 주 디스플레이 — 로그인하면 첫 워크스페이스(창이 처음 뜨는 곳)가 여기
             lines.append(f"workspace = 1, monitor:{prim}, default:true")
+            # 커서도 처음부터 주 디스플레이 가운데에 (합성기는 기본으로 처음 발견한 모니터 가운데에 둔다)
+            lines.append(f"cursor:default_monitor = {prim}")
         lines.append("")
 
         # 가상 데스크톱 — 로그인하면 이 개수·이름으로 만들어져 있게 (sekaishell/desktops.py)
