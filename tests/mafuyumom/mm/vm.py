@@ -269,6 +269,7 @@ def install_latest(q):
     """packages/ 의 최신 SekaiOS·WorldLink 패키지를 깔고 다시 부팅해 로그인 (mafuyumom · shinei 가 함께 쓴다)"""
     pats = ["sekai-de_*_all.deb", "sekai-shell_*_all.deb", "sekaios-base_*_all.deb", "worldlink_*_amd64.deb",
             "sekaicomp_*_all.deb", "hyprland_*_all.deb", "hyprbars_*_amd64.deb", "hyprexpo_*_amd64.deb",
+            "aquamarine_*_amd64.deb",                       # 합성기 백엔드 — 우리 패치가 얹힌다 (patches/aquamarine)
             "sekai-wine-11.0_*_amd64.deb"]
     debs = [d for d in (newest(p) for p in pats) if d]
     print("  · 최신 패키지:", ", ".join(os.path.basename(d) for d in debs), flush=True)

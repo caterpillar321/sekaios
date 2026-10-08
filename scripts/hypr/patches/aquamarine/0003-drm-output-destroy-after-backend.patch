@@ -1,0 +1,22 @@
+diff --git a/src/backend/drm/DRM.cpp b/src/backend/drm/DRM.cpp
+index aa7a497..c05d1c9 100644
+--- a/src/backend/drm/DRM.cpp
++++ b/src/backend/drm/DRM.cpp
+@@ -1554,9 +1554,14 @@ void Aquamarine::SDRMConnector::onPresent() {
+ }
+ 
+ Aquamarine::CDRMOutput::~CDRMOutput() {
+-    backend->backend->removeIdleEvent(frameIdle);
+-    connector->isPageFlipPending   = false;
+-    connector->frameEventScheduled = false;
++    // the backend (and its connectors) can already be gone when outputs are destroyed at shutdown — the login screen's
++    // compositor crashed here on every exit once several GPUs were handed to it (upstream 6d0b356, plus the connector)
++    if (backend && backend->backend)
++        backend->backend->removeIdleEvent(frameIdle);
++    if (connector) {
++        connector->isPageFlipPending   = false;
++        connector->frameEventScheduled = false;
++    }
+ }
+ 
+ bool Aquamarine::CDRMOutput::commit() {

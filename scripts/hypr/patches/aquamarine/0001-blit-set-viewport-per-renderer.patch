@@ -1,0 +1,20 @@
+diff --git a/src/backend/drm/Renderer.cpp b/src/backend/drm/Renderer.cpp
+index 093838d..5126927 100644
+--- a/src/backend/drm/Renderer.cpp
++++ b/src/backend/drm/Renderer.cpp
+@@ -1053,11 +1053,10 @@ CDRMRenderer::SBlitResult CDRMRenderer::blit(SP<IBuffer> from, SP<IBuffer> to, S
+     float glMtx[9];
+     matrixMultiply(glMtx, monitorProj, mtx);
+ 
+-    static Vector2D lastViewportSize = {-1, -1};
+-    if (lastViewportSize != toDma.size) {
+-        GLCALL(glViewport(0, 0, toDma.size.x, toDma.size.y));
+-        lastViewportSize = toDma.size;
+-    }
++    // the viewport is per GL context — every renderer (GPU) has its own. A size cache shared by all renderers (static)
++    // skipped glViewport for a second GPU's first blit at the same size, leaving its viewport at 0x0: nothing was drawn
++    // over the clear colour and the monitor showed solid magenta (upstream dropped the cache in b2f6c1a).
++    GLCALL(glViewport(0, 0, toDma.size.x, toDma.size.y));
+ 
+     GLCALL(glActiveTexture(GL_TEXTURE0));
+     GLCALL(fromTex->bind());

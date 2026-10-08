@@ -83,7 +83,14 @@ REV="sekai2"
 #      sekai42: 자동 모드 안전 규칙 — VGA·아날로그 DVI 는 권장 모드만, 기본 해상도가 50Hz 미만이면(4K@30) 50Hz 되는 같은 비율 최대 해상도 먼저 (KWin 처럼) ·
 #               커서 자동(no_hardware_cursors 2): 모든 모니터에서 하드웨어 커서를 먼저 시도하고 실패한 모니터만 소프트웨어 (mutter·KWin·wlroots 처럼) (포크 c6d8e57) — hyprbars sekai39 · hyprexpo sekai27
 #      sekai43: 하드웨어 커서가 3번 잇달아 실패한 모니터는 소프트웨어 커서로 굳힌다 — 커서를 받지 못하는 보조 GPU(Quadro)에서 움직일 때마다 시도·실패·기록 (로그인 한 번에 557번) (포크 32e3cf3) — hyprbars sekai40 · hyprexpo sekai28
-rev_for() { case "$1" in hyprbars) echo sekai40 ;; hyprexpo) echo sekai28 ;; worldlink|sekaicomp|hyprland) echo sekai43 ;; *) echo "$REV" ;; esac; }
+#   aquamarine sekai3: 다른 GPU 로 화면을 넘길 때 그 GPU 의 그리기 영역(viewport)을 늘 맞춘다 — 같은 크기면 건너뛰는 캐시가 모든
+#      GPU 에 하나라 두 번째 GPU 는 0×0 이 되어 모니터가 단색 보라였다 · CPU 복사의 읽기 객체를 따로 두고 PBO 로 읽는다
+#      (patches/aquamarine/0001·0002, 원본 b2f6c1a·8a0eb4f 의 해당 부분)
+#   aquamarine sekai4: 백엔드가 먼저 사라진 뒤 출력을 지울 때 널 참조 — GPU 를 여럿 넘긴 뒤 로그인 화면 합성기가 끝날 때마다
+#      세그폴트 (patches/aquamarine/0003, 원본 6d0b356)
+#   aquamarine sekai5: 렌더러가 먼저 사라진 뒤 버퍼를 지울 때 그 렌더러로 들어가지 않는다 — 0002 의 읽기 객체가 세션 합성기를
+#      로그아웃 때 죽였다 (~CEglContextGuard)
+rev_for() { case "$1" in aquamarine) echo sekai5 ;; hyprbars) echo sekai40 ;; hyprexpo) echo sekai28 ;; worldlink|sekaicomp|hyprland) echo sekai43 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
@@ -368,6 +375,7 @@ build_cmake() {
 
     already_built "$pkg" "$ver" && return 0
     fetch "$repo" "$tag"
+    apply_patches "$repo" "$dir"
     say "빌드(cmake): $pkg $ver"
     rm -rf "$stage"   # 빌드 디렉터리는 유지 (증분 빌드)
     cmake -S "$dir" -B "$dir/build" -G Ninja \
@@ -382,6 +390,19 @@ build_cmake() {
       || { tail -20 "/build/log/$pkg.install.log"; die "설치 실패: $pkg"; }
     declare -F "post_$pkg" >/dev/null && "post_$pkg" "$stage"
     mkdeb "$pkg" "$ver" "$stage" "$desc" "$dir" "$tag"
+}
+
+# ── 원본 라이브러리에 얹는 작은 수정 (/build/patches/<저장소>/*.patch, 이름 순) ──
+#   포크할 만큼은 아닌 고친 것 — 받아 둔 소스를 원래대로 되돌린 뒤 매번 다시 얹는다
+apply_patches() {
+    local repo="$1" dir="$2" p
+    [ -d "/build/patches/$repo" ] || return 0
+    git -C "$dir" checkout -q -- . || die "소스 되돌리기 실패: $repo"
+    for p in /build/patches/"$repo"/*.patch; do
+        [ -e "$p" ] || continue
+        git -C "$dir" apply "$p" || die "패치 실패: $repo $(basename "$p")"
+        say "패치: $repo $(basename "$p")"
+    done
 }
 
 # ── Meson 프로젝트 빌드 ──────────────────────────────

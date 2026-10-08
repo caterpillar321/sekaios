@@ -1,0 +1,88 @@
+diff --git a/src/backend/drm/Renderer.cpp b/src/backend/drm/Renderer.cpp
+index 5126927..3254e7d 100644
+--- a/src/backend/drm/Renderer.cpp
++++ b/src/backend/drm/Renderer.cpp
+@@ -761,9 +761,9 @@ constexpr GLenum PIXEL_BUFFER_FORMAT = GL_RGBA;
+ 
+ void             CDRMRenderer::readBuffer(Hyprutils::Memory::CSharedPointer<IBuffer> buf, std::span<uint8_t> out) {
+     CEglContextGuard eglContext(*this);
+-    auto             att = buf->attachments.get<CDRMRendererBufferAttachment>();
++    auto             att = buf->attachments.get<CDRMRendererReadAttachment>();
+     if (!att) {
+-        att = makeShared<CDRMRendererBufferAttachment>(self, buf, nullptr, 0, 0, CGLTex{}, std::vector<uint8_t>());
++        att = makeShared<CDRMRendererReadAttachment>(self, buf, nullptr, 0, 0, CGLTex{}, std::vector<uint8_t>());
+         buf->attachments.add(att);
+     }
+ 
+@@ -791,7 +791,25 @@ void             CDRMRenderer::readBuffer(Hyprutils::Memory::CSharedPointer<IBuf
+     }
+ 
+     GLCALL(glBindFramebuffer(GL_FRAMEBUFFER, att->fbo));
+-    GLCALL(proc.glReadnPixelsEXT(0, 0, dma.size.x, dma.size.y, GL_RGBA, GL_UNSIGNED_BYTE, out.size(), out.data()));
++
++    // read through a pixel pack buffer: the driver DMAs into its own (pinned) memory, much faster — notably on NVIDIA — than
++    // glReadPixels straight into pageable client memory; then copy out. Falls back to the direct read if mapping fails.
++    bool done = false;
++    if (!att->pbo) {
++        GLCALL(glGenBuffers(1, &att->pbo));
++        GLCALL(glBindBuffer(GL_PIXEL_PACK_BUFFER, att->pbo));
++        GLCALL(glBufferData(GL_PIXEL_PACK_BUFFER, out.size(), nullptr, GL_STREAM_READ));
++    } else
++        GLCALL(glBindBuffer(GL_PIXEL_PACK_BUFFER, att->pbo));
++    GLCALL(glReadPixels(0, 0, dma.size.x, dma.size.y, GL_RGBA, GL_UNSIGNED_BYTE, nullptr));
++    if (void* mapped = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, out.size(), GL_MAP_READ_BIT)) {
++        std::memcpy(out.data(), mapped, out.size());
++        GLCALL(glUnmapBuffer(GL_PIXEL_PACK_BUFFER));
++        done = true;
++    }
++    GLCALL(glBindBuffer(GL_PIXEL_PACK_BUFFER, 0));
++    if (!done)
++        GLCALL(proc.glReadnPixelsEXT(0, 0, dma.size.x, dma.size.y, GL_RGBA, GL_UNSIGNED_BYTE, out.size(), out.data()));
+ 
+     GLCALL(glBindFramebuffer(GL_FRAMEBUFFER, 0));
+ }
+@@ -1104,6 +1122,8 @@ void CDRMRenderer::onBufferAttachmentDrop(CDRMRendererBufferAttachment* attachme
+         GLCALL(glDeleteRenderbuffers(1, &attachment->rbo));
+     if (attachment->fbo)
+         GLCALL(glDeleteFramebuffers(1, &attachment->fbo));
++    if (attachment->pbo)
++        GLCALL(glDeleteBuffers(1, &attachment->pbo));
+     if (attachment->eglImage)
+         proc.eglDestroyImageKHR(egl.display, attachment->eglImage);
+     if (attachment->tex && attachment->tex->image)
+@@ -1168,5 +1188,10 @@ void CGLTex::setTexParameter(GLenum pname, GLint param) {
+ CDRMRendererBufferAttachment::CDRMRendererBufferAttachment(Hyprutils::Memory::CWeakPointer<CDRMRenderer> renderer_, Hyprutils::Memory::CSharedPointer<IBuffer> buffer,
+                                                            EGLImageKHR image, GLuint fbo_, GLuint rbo_, CGLTex&& tex_, std::vector<uint8_t> intermediateBuf_) :
+     eglImage(image), fbo(fbo_), rbo(rbo_), tex(makeUnique<CGLTex>(std::move(tex_))), intermediateBuf(intermediateBuf_), renderer(renderer_) {
+-    bufferDestroy = buffer->events.destroy.listen([this] { renderer->onBufferAttachmentDrop(this); });
++    // at shutdown the renderer (and its EGL context) can be gone before the buffer — its GL objects went with the context,
++    // so there is nothing to drop (calling into it crashed the session's compositor on logout)
++    bufferDestroy = buffer->events.destroy.listen([this] {
++        if (!renderer.expired())
++            renderer->onBufferAttachmentDrop(this);
++    });
+ }
+diff --git a/src/backend/drm/Renderer.hpp b/src/backend/drm/Renderer.hpp
+index 99a15f7..df7b028 100644
+--- a/src/backend/drm/Renderer.hpp
++++ b/src/backend/drm/Renderer.hpp
+@@ -54,10 +54,19 @@ namespace Aquamarine {
+         Hyprutils::Memory::CUniquePointer<CGLTex>     tex;
+         Hyprutils::Signal::CHyprSignalListener        bufferDestroy;
+         std::vector<uint8_t>                          intermediateBuf;
++        GLuint                                        pbo = 0; // readBuffer's pixel pack buffer
+ 
+         Hyprutils::Memory::CWeakPointer<CDRMRenderer> renderer;
+     };
+ 
++    // readBuffer's objects (the primary renderer reading a buffer back for a CPU copy) get their own attachment type, so they
++    // are created and dropped in the reading renderer's context instead of being mixed into the blitting (secondary)
++    // renderer's attachment on the same buffer (upstream split them the same way in 8a0eb4f)
++    class CDRMRendererReadAttachment : public CDRMRendererBufferAttachment {
++      public:
++        using CDRMRendererBufferAttachment::CDRMRendererBufferAttachment;
++    };
++
+     // CEglContextGuard is a RAII abstraction for the EGL context.
+     // On initialization, it sets the EGL context to the renderer's display,
+     // and on destruction, it restores the previous EGL context.

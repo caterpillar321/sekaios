@@ -4,6 +4,9 @@
 (모니터가 못 받아들이는 모드라 화면이 안 보여도 저절로 돌아오게).
 """
 import copy
+import glob
+import os
+import subprocess
 
 import gi
 gi.require_version("Gtk", "3.0")
@@ -104,6 +107,58 @@ def _dedup_rates(hzs):
 def _hz_label(hz):
     v = float(hz)
     return f"{v:.0f} Hz" if abs(v - round(v)) < 0.02 else f"{v:.2f} Hz"
+
+
+def _card_of(name):
+    """모니터(합성기 이름, 예: DP-2)가 꽂힌 카드 — card1"""
+    for st in sorted(glob.glob(f"/sys/class/drm/card*-{name}/status")):
+        try:
+            with open(st) as f:
+                if f.read().strip() != "connected":
+                    continue
+        except OSError:
+            continue
+        return os.path.basename(os.path.dirname(st)).split("-", 1)[0]
+    return None
+
+
+def _vendor(card):
+    try:
+        with open(f"/sys/class/drm/{card}/device/vendor") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def _card_label(card):
+    """카드 이름 — lspci 의 장치 이름 (예: Quadro RTX 4000). 모르면 card1"""
+    try:
+        slot = os.path.basename(os.path.realpath(f"/sys/class/drm/{card}/device"))
+        out = subprocess.run(["lspci", "-vmm", "-s", slot], capture_output=True, text=True, timeout=3).stdout
+        for line in out.splitlines():
+            if line.startswith("Device:"):
+                dev = line.split(":", 1)[1].strip()
+                if "[" in dev and dev.endswith("]"):          # "GB202 [GeForce RTX 5090]" → 대괄호 안
+                    dev = dev[dev.rindex("[") + 1:-1]
+                return dev
+    except Exception:
+        pass
+    return card
+
+
+def _copy_note(name):
+    """이 모니터가 화면을 그리는 NVIDIA 카드와 다른 NVIDIA 카드에 꽂혔으면 안내 글 — NVIDIA 카드끼리는 화면을
+    바로 넘기지 못해(드라이버가 그래픽 버퍼 공유를 지원하지 않음) 매 프레임 CPU 로 복사한다. 아니면 None"""
+    render = os.path.basename((os.environ.get("AQ_DRM_DEVICES") or "").split(":")[0])
+    card = _card_of(name)
+    if not render or not card or card == render:
+        return None
+    if _vendor(card) != "0x10de" or _vendor(render) != "0x10de":
+        return None
+    here, main = _card_label(card), _card_label(render)
+    return (f"이 모니터는 {here}에 꽂혀 있습니다. 화면은 {main}이(가) 그리는데, NVIDIA 그래픽 카드끼리는 화면을 "
+            f"바로 넘길 수 없어 CPU 로 복사합니다 — 게임·영상이 덜 부드러울 수 있습니다. "
+            f"{main}이나 메인보드의 단자에 꽂으면 더 부드럽습니다.")
 
 
 def _res_size(res, mon):
@@ -470,6 +525,12 @@ def build(store):
             "G-Sync·FreeSync — 게임의 프레임에 맞춰 주사율을 바꿔 끊김·찢어짐을 줄입니다",
             control=vrr_combo)
         p.add_widget(vrr_note)
+        note = _copy_note(name)
+        if note:
+            copy_lbl = Gtk.Label(label=note, xalign=0)
+            copy_lbl.get_style_context().add_class("notice")
+            copy_lbl.set_line_wrap(True)
+            p.add_widget(copy_lbl)
         if int(saved.get("vrr", 0)) == 1:
             GLib.timeout_add(500, check_vrr, name, 1)
 
