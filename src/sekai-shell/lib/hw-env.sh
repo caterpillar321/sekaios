@@ -78,6 +78,10 @@ sekai_gpu_pick() {
         list="$list:$idle"
     fi
     export AQ_DRM_DEVICES="$list"
+    # 다른 GPU 에 꽂힌 모니터로 넘기는 화면은 일반 배치(LINEAR)로 — 그리는 GPU 의 타일 배치(NVIDIA BLOCK_LINEAR 등)를
+    #   받는 GPU 가 못 읽으면 CPU 를 거치는 우회 복사로 빠지는데, aquamarine 0.9.2 의 그 길은 고장이라 모니터가 단색
+    #   보라로만 나왔다 (5090 → Quadro RTX 4000, 2026-10-08). aquamarine 은 0.9.2 다음 판부터 이게 기본값이다 (be166e1)
+    [ -n "${AQ_FORCE_LINEAR_BLIT:-}" ] || export AQ_FORCE_LINEAR_BLIT=1
 }
 sekai_gpu_pick
 

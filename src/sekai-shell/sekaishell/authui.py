@@ -521,6 +521,15 @@ class CardWindow(Gtk.Window):
             GtkLayerShell.set_layer(self, GtkLayerShell.Layer.OVERLAY)
             GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.EXCLUSIVE if exclusive
                                             else GtkLayerShell.KeyboardMode.ON_DEMAND)
+            # 주 디스플레이에 (윈도우 UAC 처럼) — 정하지 않으면 합성기가 초점 있는 모니터에 띄워,
+            #   꺼졌거나 안 보는 모니터에 떠서 못 찾았다 (Quadro 에 꽂은 모니터가 단색 화면일 때, 2026-10-08)
+            try:
+                from .monitors import primary_gdk
+                prim = primary_gdk()
+                if prim is not None:
+                    GtkLayerShell.set_monitor(self, prim)
+            except Exception:
+                pass
         else:
             # 기본 화면 모드: 제목줄·최소화·최대화 없이 항상 위, 작업 표시줄·창 전환에 나오지 않게
             self.set_keep_above(True)
