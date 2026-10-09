@@ -12,7 +12,7 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, GLib, GObject, Gtk, Pango  # noqa: E402
 
 from . import taskmgr_data as D  # noqa: E402
-from .taskmgr_common import (FALLBACK_ICON, SortHeaders, accent_rgb, cmp_num, cmp_text,  # noqa: E402
+from .taskmgr_common import (FALLBACK_ICON, RowMenuMixin, SortHeaders, accent_rgb, cmp_num, cmp_text,  # noqa: E402
                              confirm, conv_down, heat, key_is_delete, key_is_menu, menu_item,
                              notice, open_location, popup, stat_header, text_column)
 
@@ -137,7 +137,7 @@ def _scrolled(view):
     return sc
 
 
-class ProcessesPage:
+class ProcessesPage(RowMenuMixin):
     id = "processes"
     title = "프로세스"
     searchable = True
@@ -507,16 +507,6 @@ class ProcessesPage:
             return True
         return False
 
-    def _on_press(self, v, ev):
-        if ev.type != Gdk.EventType.BUTTON_PRESS or ev.button != 3:
-            return False
-        hit = v.get_path_at_pos(int(ev.x), int(ev.y))
-        if hit is None:
-            return True
-        v.get_selection().select_path(hit[0])
-        v.set_cursor(hit[0], None, False)
-        self._menu(ev)
-        return True
 
     def _menu(self, ev):
         key, t = self._selected()
@@ -553,7 +543,7 @@ E_TYPES = (str, GObject.Object, str, int, str, str, float, str, float, str, str,
 E_NUMERIC = {E_PID, E_CPU, E_MEM}
 
 
-class DetailsPage:
+class DetailsPage(RowMenuMixin):
     id = "details"
     title = "세부 정보"
     searchable = True
@@ -676,16 +666,6 @@ class DetailsPage:
             return True
         return False
 
-    def _on_press(self, v, ev):
-        if ev.type != Gdk.EventType.BUTTON_PRESS or ev.button != 3:
-            return False
-        hit = v.get_path_at_pos(int(ev.x), int(ev.y))
-        if hit is None:
-            return True
-        v.get_selection().select_path(hit[0])
-        v.set_cursor(hit[0], None, False)
-        self._menu(ev)
-        return True
 
     def _menu(self, ev):
         p = self._selected()

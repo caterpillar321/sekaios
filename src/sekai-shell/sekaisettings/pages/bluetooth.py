@@ -14,6 +14,7 @@ from gi.repository import Gtk, GLib, Pango  # noqa: E402
 from sekaishell import bluetooth
 
 from ..widgets import Page, button, info, row, switch
+from ..widgets import notice as _notice, reveal as _reveal, clear as _clear, StatusLine  # 공용 (카나데)
 
 
 def _has_adapter():
@@ -59,31 +60,6 @@ def _signal(rssi):
     if rssi is None:
         return ""
     return "신호 강함" if rssi >= -60 else "신호 보통" if rssi >= -75 else "신호 약함"
-
-
-def _notice(text=""):
-    l = Gtk.Label(label=text, xalign=0)
-    l.get_style_context().add_class("notice")
-    l.set_line_wrap(True)
-    return l
-
-
-def _reveal(w, on):
-    """no_show_all 인 위젯 보이기/숨기기 — show_all 이 안쪽으로 내려가지 않으니 안쪽은 따로
-    (안쪽에서 따로 no_show_all 을 켠 위젯은 그대로 숨어 있다)"""
-    if on and not w.get_visible():
-        w.show()
-        if isinstance(w, Gtk.Container):
-            for c in w.get_children():
-                c.show_all()
-    elif not on and w.get_visible():
-        w.hide()
-
-
-def _clear(lb):
-    for c in lb.get_children():
-        lb.remove(c)
-        c.destroy()
 
 
 class _Asker:
@@ -203,7 +179,7 @@ class _Asker:
         self.close()
 
 
-class BluetoothPage:
+class BluetoothPage(StatusLine):
     def __init__(self, store):
         self.bt = bluetooth.get()
         self.p = Page("블루투스", "헤드폰·스피커·키보드·마우스·휴대폰 같은 블루투스 장치를 연결합니다.")
@@ -304,22 +280,6 @@ class BluetoothPage:
             self.bt.set_discoverable(False)
 
     # ── 알림 한 줄 ──
-    def say(self, text, error=False):
-        if self.dead:
-            return
-        if self.say_src:
-            GLib.source_remove(self.say_src)
-            self.say_src = 0
-        self.msg.set_text(text or "")
-        self.msg.set_visible(bool(text))
-        if text and not error:                  # 잘 된 소식은 잠깐만
-
-            def hide():
-                self.say_src = 0
-                self.msg.hide()
-                return False
-            self.say_src = GLib.timeout_add_seconds(8, hide)
-
     def _set_busy(self):
         # 일이 도는 동안은 설정 창이 이 페이지를 다시 그리지 않는다 (진행 상태·결과를 잃지 않게)
         self.p.busy = bool(self.ops)

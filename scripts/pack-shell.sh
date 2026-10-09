@@ -679,6 +679,7 @@ install -Dm755 "$ISRC/sekai-install"           "$STAGE_I/usr/sbin/sekai-install"
 install -Dm755 "$ISRC/sekai-install-backend"   "$STAGE_I/usr/lib/sekai-installer/sekai-install-backend"
 install -Dm755 "$ISRC/sekai-partition"         "$STAGE_I/usr/lib/sekai-installer/sekai-partition"
 install -Dm644 "$ISRC/sekai_manual.py"         "$STAGE_I/usr/lib/sekai-installer/sekai_manual.py"
+install -Dm644 "$ISRC/sekai_disk.py"           "$STAGE_I/usr/lib/sekai-installer/sekai_disk.py"
 install -Dm644 "$ISRC/sekai-installer.desktop" "$STAGE_I/usr/share/applications/sekai-installer.desktop"
 copyright "$STAGE_I" sekai-installer
 mkdir -p "$STAGE_I/DEBIAN"

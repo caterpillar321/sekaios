@@ -12,11 +12,11 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib  # noqa: E402
 
-from ..store import display_key
+from sekaishell.store import display_key
 from ..util import hyprctl, keyword, spawn
 from ..widgets import Page, button, combo, row, switch
 from .arrange import ArrangeView
-from .. import monscale
+from sekaishell import monscale
 
 
 TRANSFORMS = [(0, "가로 (기본)"), (1, "세로 90°"), (2, "가로 180°"), (3, "세로 270°"),

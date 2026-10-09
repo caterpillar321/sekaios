@@ -2,18 +2,19 @@
 
 색은 컴퓨터 관리·작업 관리자와 같다 — settings.css 앞에 강조색·모드를 붙이고 이 앱의 모양(NOTEPAD_CSS)을 더한다.
 """
-import json
 import os
-import sys
 import time
 
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
+from gi.repository import Gio, GLib, Gtk, Pango  # noqa: E402
 
-from sekaishell import dbg  # noqa: E402
-from sekaishell.taskmgr_common import appearance  # noqa: E402,F401
+from sekaishell.ui import flat_button  # noqa: E402
+
+from sekaishell.ui import icon_image  # noqa: E402
+
+from sekaishell.appkit import AppTheme, JsonState, appearance  # noqa: E402,F401
 
 APP_ID = "org.sekaios.Notepad"
 APP_NAME = "메모장"
@@ -172,71 +173,20 @@ label.np-preview { padding: 10px 12px; border-radius: 6px; background: @np_bar; 
 """
 
 
-def load_css(a):
-    """settings.css + 강조색·모드 + 이 앱의 모양 → 화면 전체에 (앱의 모든 창)"""
-    prelude = "".join(f"@define-color {k} {a[k]};\n" for k in ("accent", "bg", "surface", "fg"))
-    body = ""
-    for p in CSS_PATHS:
-        if os.path.exists(p):
-            with open(p, encoding="utf-8") as f:
-                body = f.read()
-            break
-    prov = Gtk.CssProvider()
-    try:
-        prov.load_from_data((prelude + body + _MODE_COLORS.get(a["mode"], _MODE_COLORS["dark"])
-                             + NOTEPAD_CSS).encode())
-    except GLib.Error as e:
-        print("[sekai-notepad] CSS 오류:", e.message, file=sys.stderr, flush=True)
-        return None
-    Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_USER)
-    from sekaishell import theme as _sekai_theme
-    _sekai_theme.apply_contrast_css()   # 대비 테마면 테두리·초점을 앱 CSS 위에
-    return prov
-
-
-def load_state():
-    try:
-        with open(STATE, encoding="utf-8") as f:
-            d = json.load(f)
-        return d if isinstance(d, dict) else {}
-    except (OSError, ValueError):
-        return {}
-
-
-def save_state(d):
-    try:
-        os.makedirs(os.path.dirname(STATE), exist_ok=True)
-        tmp = f"{STATE}.{os.getpid()}.tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(d, f, ensure_ascii=False, indent=1)
-        os.replace(tmp, STATE)
-    except (OSError, TypeError, ValueError) as e:
-        dbg("메모장 상태 저장 실패", e)
+def icon_button(names, tooltip, cb, size=16, css="np-flat"):
+    return flat_button(icon(names, size), tooltip, cb, css)
 
 
 def icon(names, size=16):
-    """후보 중 테마에 있는 첫 아이콘 (기호 아이콘 — 없으면 빈 그림 대신 Adwaita 의 것)"""
-    th = Gtk.IconTheme.get_default()
-    for n in [names] if isinstance(names, str) else names:
-        if n and th.has_icon(n):
-            img = Gtk.Image.new_from_icon_name(n, Gtk.IconSize.BUTTON)
-            img.set_pixel_size(size)
-            return img
-    img = Gtk.Image.new_from_icon_name(names[-1] if isinstance(names, list) else names, Gtk.IconSize.BUTTON)
-    img.set_pixel_size(size)
-    return img
+    """기호 아이콘 — 없으면 빈 그림 대신 마지막 후보(Adwaita 가 그린다)"""
+    return icon_image(names, size, fallback=None)
+
+def _css(a):
+    return _MODE_COLORS.get(a["mode"], _MODE_COLORS["dark"]) + NOTEPAD_CSS
 
 
-def icon_button(names, tooltip, cb, size=16, css="np-flat"):
-    b = Gtk.Button()
-    b.add(icon(names, size))
-    b.set_tooltip_text(tooltip)
-    b.set_relief(Gtk.ReliefStyle.NONE)
-    b.set_can_focus(False)
-    b.get_style_context().add_class(css)
-    if cb:
-        b.connect("clicked", lambda *_: cb())
-    return b
+THEME = AppTheme("sekai-notepad", _css)          # settings.css + 색 + 메모장 모양 — 설정 앱을 따라간다
+STATE_FILE = JsonState(STATE, "메모장 상태")
 
 
 # ── 글꼴 ─────────────────────────────────────────────────────
@@ -337,11 +287,6 @@ def io_error_text(err):
     if isinstance(err, OSError):
         return err.strerror or str(err)
     return str(err)
-
-
-def is_permission_error(err):
-    return isinstance(err, GLib.Error) and (err.matches(Gio.io_error_quark(), Gio.IOErrorEnum.PERMISSION_DENIED) or
-                                            err.matches(Gio.io_error_quark(), Gio.IOErrorEnum.READ_ONLY))
 
 
 # ── 묻는 창 ──────────────────────────────────────────────────

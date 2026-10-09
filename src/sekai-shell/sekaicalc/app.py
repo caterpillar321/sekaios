@@ -7,17 +7,16 @@
 색은 컴퓨터 관리·작업 관리자와 같다 — settings.css 앞에 강조색·모드를 붙이고 이 앱의 모양(CALC_CSS)을 더하며,
 설정 앱에서 모드·강조색을 바꾸면 곧바로 따라간다.
 """
-import json
 import os
 import sys
 
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Gio, GLib, Gtk  # noqa: E402
 
-from sekaishell import dbg, theme  # noqa: E402
-from sekaishell.taskmgr_common import appearance  # noqa: E402
+from sekaishell import theme  # noqa: E402
+from sekaishell.appkit import AppTheme, JsonState, appearance  # noqa: E402
 
 from .window import CalcWindow  # noqa: E402
 
@@ -226,35 +225,16 @@ def _on_accent(hexcolor):
     return "#000000" if lum > 0.28 else "#ffffff"
 
 
-def _load_css(a):
-    prelude = "".join(f"@define-color {k} {a[k]};\n" for k in ("accent", "bg", "surface", "fg"))
-    prelude += f"@define-color c_on_accent {_on_accent(a['accent'])};\n"
-    body = ""
-    for p in CSS_PATHS:
-        if os.path.exists(p):
-            with open(p, encoding="utf-8") as f:
-                body = f.read()
-            break
-    prov = Gtk.CssProvider()
-    try:
-        prov.load_from_data((prelude + body + _MODE_COLORS.get(a["mode"], _MODE_COLORS["dark"])
-                             + CALC_CSS).encode())
-    except GLib.Error as e:
-        print("[sekai-calc] CSS 오류:", e.message, file=sys.stderr, flush=True)
-        return None
-    Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_USER)
-    from sekaishell import theme as _sekai_theme
-    _sekai_theme.apply_contrast_css()   # 대비 테마면 테두리·초점을 앱 CSS 위에
-    return prov
+def _prelude(a):
+    return f"@define-color c_on_accent {_on_accent(a['accent'])};\n"
 
 
-def _load_state():
-    try:
-        with open(STATE, encoding="utf-8") as f:
-            d = json.load(f)
-        return d if isinstance(d, dict) else {}
-    except (OSError, ValueError):
-        return {}
+def _css(a):
+    return _MODE_COLORS.get(a["mode"], _MODE_COLORS["dark"]) + CALC_CSS
+
+
+_THEME = AppTheme("sekai-calc", _css, prelude=_prelude)
+_STATE = JsonState(STATE, "계산기 상태")
 
 
 class CalcApp(Gtk.Application):
@@ -262,17 +242,20 @@ class CalcApp(Gtk.Application):
         super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
         self.state = {}
         self.win = None
-        self._css = None
-        self._cfg_src = 0
+
+    def _theme_changed(self, a):
+        """설정 앱에서 색·모드가 바뀌어 CSS 를 다시 얹은 뒤 — 이 앱이 더 할 일"""
+        if self.win is not None:
+            self.win.queue_draw()
 
     def do_startup(self):
         Gtk.Application.do_startup(self)
         GLib.set_application_name("계산기")
-        self.state = _load_state()
+        self.state = _STATE.load()
         a = appearance()
         theme.apply_gtk_settings(Gtk.Settings.get_default(), a["mode"])
-        self._css = _load_css(a)
-        self._watch_settings()
+        _THEME.load(a)
+        _THEME.follow(self._theme_changed)
 
     def do_command_line(self, cl):
         args = cl.get_arguments()[1:]
@@ -296,44 +279,10 @@ class CalcApp(Gtk.Application):
         return 0
 
     def save_state(self):
-        try:
-            os.makedirs(os.path.dirname(STATE), exist_ok=True)
-            tmp = f"{STATE}.{os.getpid()}.tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self.state, f, ensure_ascii=False, indent=1)
-            os.replace(tmp, STATE)
-        except (OSError, TypeError, ValueError) as e:
-            dbg("계산기 상태 저장 실패", e)
+        _STATE.save(self.state)
 
     # ── 색 따라가기 (컴퓨터 관리와 같은 방법 — 설정 앱이 settings.json 을 바꿔치기하므로 폴더를 본다) ──
-    def _watch_settings(self):
-        cfg_dir = os.path.expanduser("~/.config/sekai")
-        try:
-            os.makedirs(cfg_dir, exist_ok=True)
-            self._cfg_mon = Gio.File.new_for_path(cfg_dir).monitor_directory(Gio.FileMonitorFlags.WATCH_MOVES, None)
-        except (GLib.Error, OSError) as e:
-            dbg("설정 폴더를 볼 수 없습니다:", e)
-            return
 
-        def changed(_m, f, other, _ev):
-            names = {x.get_basename() for x in (f, other) if x is not None}
-            if "settings.json" not in names:
-                return
-            if self._cfg_src:
-                GLib.source_remove(self._cfg_src)
-            self._cfg_src = GLib.timeout_add(200, self._reload_theme)
-        self._cfg_mon.connect("changed", changed)
-
-    def _reload_theme(self):
-        self._cfg_src = 0
-        a = appearance()
-        if self._css is not None:
-            Gtk.StyleContext.remove_provider_for_screen(Gdk.Screen.get_default(), self._css)
-        self._css = _load_css(a)
-        theme.apply_gtk_settings(Gtk.Settings.get_default(), a["mode"])
-        if self.win is not None:
-            self.win.queue_draw()
-        return False
 
     # ── 개발용: SEKAI_SHOT=/경로.png 이면 창을 찍고 끝낸다 (설정 앱·작업 관리자와 같은 방법) ──
     def _maybe_shot(self):

@@ -10,6 +10,8 @@ case "$1" in prereqs) prereqs; exit 0 ;; esac
 CONF=/etc/sekai-encryption.conf
 [ -r "$CONF" ] || exit 0
 LUKS_UUID=""; LUKS_NAME=""; TPM=0; PIN=0; PCR7=""
+# 설치기·설정 › 드라이브 암호화가 쓰는 KEY=값 파일
+# shellcheck source=/dev/null
 . "$CONF"
 [ "$TPM" = 1 ] && [ -n "$LUKS_UUID" ] && [ -n "$LUKS_NAME" ] || exit 0
 [ -b "/dev/mapper/$LUKS_NAME" ] && exit 0

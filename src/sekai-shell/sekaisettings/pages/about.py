@@ -7,8 +7,8 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk  # noqa: E402
 
-from ..util import LOCK_NOW, human_bytes, run, spawn
-from ..widgets import Page, button, combo, info, row, switch
+from ..util import LOCK_NOW, human_bytes, spawn
+from ..widgets import Page, button, combo, info, row
 
 
 def _os_release():
@@ -112,7 +112,7 @@ def build_about(store):
 
 def build_power(store):
     from sekaishell import power
-    from sekaishell.quicksettings import battery_text
+    from sekaishell.power import battery_text
     p = Page("전원 및 잠금", "전원 모드 · 배터리 · 화면을 끄고 잠그는 시간을 정합니다.")
     has_idle = bool(shutil.which("swayidle"))
 

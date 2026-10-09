@@ -20,8 +20,9 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango  # noqa: E402
 
-from sekaishell import appmgr, dbg, theme  # noqa: E402
-from sekaishell.taskmgr_common import appearance  # noqa: E402
+from sekaishell.ui import text_label  # noqa: E402
+from sekaishell import appmgr, dbg  # noqa: E402
+from sekaishell.appkit import AppTheme  # noqa: E402
 
 APP_ID = "org.sekaios.AppInstaller"
 APP_NAME = "앱 설치 관리자"
@@ -59,36 +60,7 @@ label.ai-progress-text { color: @text2; font-size: 9.75pt; }
 """
 
 
-def _load_css(a):
-    prelude = "".join(f"@define-color {k} {a[k]};\n" for k in ("accent", "bg", "surface", "fg"))
-    body = ""
-    for p in CSS_PATHS:
-        if os.path.exists(p):
-            with open(p, encoding="utf-8") as f:
-                body = f.read()
-            break
-    prov = Gtk.CssProvider()
-    try:
-        prov.load_from_data((prelude + body + AI_CSS).encode())
-    except GLib.Error as e:
-        print("[sekai-appinstall] CSS 오류:", e.message, file=sys.stderr, flush=True)
-        return None
-    Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_USER)
-    from sekaishell import theme as _sekai_theme
-    _sekai_theme.apply_contrast_css()   # 대비 테마면 테두리·초점을 앱 CSS 위에
-    return prov
-
-
-def _label(text="", cls=None, wrap=True, selectable=False):
-    lb = Gtk.Label(label=text, xalign=0)
-    if wrap:
-        lb.set_line_wrap(True)
-        lb.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
-        lb.set_max_width_chars(60)
-    lb.set_selectable(selectable)
-    if cls:
-        lb.get_style_context().add_class(cls)
-    return lb
+_label = text_label
 
 
 def _boxed(cls, icon, text):
@@ -101,6 +73,9 @@ def _boxed(cls, icon, text):
     box.pack_start(lb, True, True, 0)
     box.label = lb
     return box
+
+
+_THEME = AppTheme("sekai-appinstall", AI_CSS)
 
 
 class InstallWindow(Gtk.ApplicationWindow):
@@ -426,14 +401,12 @@ class AppInstaller(Gtk.Application):
     def __init__(self):
         super().__init__(application_id=APP_ID,
                          flags=Gio.ApplicationFlags.HANDLES_OPEN)
-        self._css = None
 
     def do_startup(self):
         Gtk.Application.do_startup(self)
         GLib.set_application_name(APP_NAME)
-        a = appearance()
-        theme.apply_gtk_settings(Gtk.Settings.get_default(), a["mode"])
-        self._css = _load_css(a)
+        _THEME.reload()                                  # 설정 앱의 색·모드 — 바꾸면 곧바로 따라간다
+        _THEME.follow(lambda _a: [w.queue_draw() for w in self.get_windows()])
 
     def do_open(self, files, _n, _hint):
         for f in files:

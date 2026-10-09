@@ -1,0 +1,840 @@
+"""SekaiOS 설정 — 저장소 (설정 앱·작업 표시줄·빠른 설정·첫 부팅·세션 시작이 함께 쓴다).
+
+  ~/.config/sekai/settings.json   ← 진실의 원천. 사람이 읽을 수 있는 JSON.
+  ~/.config/hypr/sekai.conf       ← 여기서 "생성"된다. hyprland.conf 가 source 한다.
+
+값을 바꾸면 (1) JSON 에 쓰고 (2) sekai.conf 를 다시 쓰고
+(3) hyprctl keyword 로 살아있는 세션에 즉시 반영한다.
+전체 reload 를 피하는 이유: reload 는 플러그인 설정까지 다시 파싱해서
+타이틀바 버튼이 중복되는 등 부작용이 있었다.
+"""
+import copy
+import fcntl
+import json
+import os
+import pwd
+import re
+import signal
+import subprocess
+import tempfile
+
+from . import dbg, monscale, theme
+from .sysutil import atomic_write, hex_to_rgba, hyprctl, keyword, run
+
+HOME = os.path.expanduser("~")
+CFG_DIR = os.path.join(HOME, ".config", "sekai")
+CFG_FILE = os.path.join(CFG_DIR, "settings.json")
+HYPR_DIR = os.path.join(HOME, ".config", "hypr")
+HYPR_FRAG = os.path.join(HYPR_DIR, "sekai.conf")
+
+DEFAULTS = {
+    "appearance": {
+        "mode": "dark",           # dark / light — 아래 네 색을 sekaishell/theme.py 의 묶음으로 바꾼다
+        "accent": "#39c5bb",      # 미쿠 틸
+        "folder_accent": True,    # 폴더 아이콘을 강조색으로 (sekaishell/foldercolor.py)
+        "bg": "#151517",
+        "surface": "#1e1e22",     # 작업 표시줄·메뉴·팝업의 면
+        "fg": "#f1f1f3",
+        "titlebar_bg": "#2c2c30", # 창 제목줄 — GTK 다크 앱 본문(#2d2d2d)에 맞춤
+        "rounding": 10,
+        "border_size": 1,
+        "gaps_in": 6,
+        "gaps_out": 0,          # 최대화한 창이 화면에 꽉 차게 (윈도우처럼)
+        "inactive_opacity": 1.0,
+        "blur": True,
+        "shadow": True,
+        "animations": True,
+        "titlebar": True,
+        "titlebar_height": 34,
+        "cursor_size": 24,
+    },
+    "wallpaper": {
+        "path": "/usr/share/backgrounds/sekai/hatsune.jpg",
+        "mode": "fill",          # fill / fit / stretch / center / tile
+        "color": "#151517",
+    },
+    "input": {
+        "kb_layout": "us",
+        "kb_variant": "",
+        "kb_options": "korean:ralt_hangul,korean:rctrl_hanja",
+        "repeat_rate": 25,
+        "repeat_delay": 600,
+        "sensitivity": -0.3,     # 포인터 속도 10단계(윈도우 기본) — libinput 0 은 윈도우보다 빠르다 (pages/devices.py SPEED_MID)
+        "accel": True,           # 포인터 정확도 향상 (가속) — 끄면 flat
+        "natural_scroll": False,
+        "tp_natural_scroll": True,
+        "tp_tap": True,
+        "tp_enabled": True,      # 터치패드 켜기 (장치마다 device[…]:enabled — sekaishell/touchpad.py)
+        "tp_dwt": True,          # 입력하는 동안 터치패드 끄기
+        "gesture3": True,        # 세 손가락 쓸기 (작업 보기 · 바탕 화면 · 앱 전환 — 작업 표시줄)
+        "gesture4": True,        # 네 손가락 좌우 쓸기 (데스크톱 넘기기 — 합성기 gestures:workspace_swipe)
+        "follow_mouse": 2,       # 2 = 윈도우처럼 클릭해야 초점 이동 (1 = 마우스를 따라)
+    },
+    "display": {},               # {"desc:<모니터 설명>" 또는 "DP-1": {...}} — display_key
+    "layout": {
+        "primary": "",           # 주 디스플레이 (모니터 이름). 비면 첫 모니터
+    },
+    "panel": {
+        "height": 48,
+        "clock_format": "%H:%M",
+        "show_date": False,
+        "search": "box",         # 작업 표시줄 검색 — box(검색 상자) · icon(아이콘만) · hide (윈도우 11 과 같게 상자가 기본)
+    },
+    "apps": {
+        "terminal": "sekai-terminal",
+        "browser": "chromium",
+        "files": "sekai-files",
+    },
+    "locale": {
+        "lang": "ko_KR.UTF-8",   # 그래픽 세션 언어 (sekai-session 이 읽는다)
+    },
+    "notifications": {
+        "timeout": 6,            # 토스트가 떠 있는 시간(초)
+        "history": 200,          # 보관할 알림 개수
+    },
+    "power": {
+        "screen_off": 600,       # 초, 0 = 안 함
+        "lock": 900,
+        "suspend": 0,
+        # 노트북이 배터리로 돌 때 (sekai-idle) — 윈도우 균형 전원 계획의 배터리 값
+        "screen_off_battery": 300, "lock_battery": 600, "suspend_battery": 900,
+        "saver_at": 20,          # 배터리 절약 모드를 저절로 켜는 잔량 (%), 0 = 안 함
+        # 전원 단추 · 덮개 (sekaishell/power.py ACTIONS) — "" = 윈도우 기본 (덮개 절전, 전원 단추 노트북 절전 · 데스크톱 종료)
+        "button_ac": "", "button_battery": "", "lid_ac": "", "lid_battery": "",
+    },
+    # 단축키 — 기본값은 hyprland.conf 의 bind 줄 (sekaishell/keybinds.py). 여기엔 바꾼 것만
+    # 접근성 (설정 › 접근성) — 윈도우 11 의 접근성과 같은 항목들
+    "a11y": {
+        "text_scale": 1.0,           # 텍스트 크기 — GTK 의 text-scaling-factor (SekaiOS 앱 글자는 pt 라 같이 커진다)
+        "magnifier_step": 1.0,       # 돋보기 한 번에 키우는 만큼 (1.0 = 100%)
+        "color_filter": False,       # 색 필터 — 합성기 화면 셰이더 (/usr/share/sekai/shaders)
+        "color_filter_kind": "grayscale",
+        "contrast": False,           # 대비 테마 — 켜면 모드를 contrast 로, 끄면 아래 둘로 되돌린다
+        "prev_mode": "dark",
+        "prev_accent": "",
+        "cursor_color": "white",     # white = Sekai-Cursor-White · black = Sekai-Cursor-Black (DMZ)
+        "sticky_keys": False,        # 고정 키 (WorldLink input:sekai_sticky_keys)
+        "a11y_shortcuts": True,      # Shift 다섯 번 · 오른쪽 Shift 8초로 켤지 묻기
+        "filter_keys": False,        # 필터 키 — 아래 두 값 (0 = 그 기능 끔)
+        "bounce_ms": 500,            #   반복 입력 무시
+        "slow_ms": 0,                #   누르고 있어야 입력
+        "osk": False,                # 화상 키보드 (wvkbd) — 로그인할 때 띄울지
+        "narrator": False,           # 내레이터 (Orca) — 로그인할 때 켤지
+    },
+    "keybinds": {
+        "changed": {},           # 기본 키 조합 → 새 조합 ("" = 끔), 예: {"SUPER+E": "SUPER+w"}
+        "custom": [],            # [{"name", "command", "key"}]
+    },
+    # 가상 데스크톱의 개수·이름은 ~/.config/sekai/desktops.json (sekaishell/desktops.py — 작업 표시줄도 바꾼다)
+    "multitasking": {
+        "taskbar": "current",    # 작업 표시줄에 보일 창: current = 지금 데스크톱만 / all = 모든 데스크톱 (윈도우 기본값과 같게)
+        "alttab": "current",     # Alt+Tab 에 보일 창
+    },
+}
+
+_FRAG_HEADER = """# ═══════════════════════════════════════════════════════════
+#  이 파일은 sekai-settings 가 자동으로 생성합니다.
+#  직접 고치면 다음 저장 때 덮어써집니다.
+#  손으로 바꾸고 싶으면 hyprland.conf 에 직접 쓰세요
+#  (이 파일이 나중에 source 되므로 여기 값이 우선합니다).
+# ═══════════════════════════════════════════════════════════
+"""
+
+
+_BAD = object()
+_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+_COLOR_KEYS = {("appearance", k) for k in ("accent", "bg", "surface", "fg", "titlebar_bg")} | \
+    {("wallpaper", "color")}
+# 모니터 한 대의 설정 (display 섹션은 기본값이 비어 있어 따로 적어 둔다)
+_DISPLAY_KEYS = {"mode": "", "position": "", "scale": 1.0, "transform": 0, "vrr": 0, "enabled": True}
+
+# ── 모니터 설정의 열쇠 ──
+#   윈도우처럼 화면 설정은 단자가 아니라 모니터마다 기억한다 — 열쇠는 "desc:<제조사 모델 일련번호>"(EDID 에서 온
+#   설명, Hyprland 규칙의 desc: 그대로). 같은 단자에 다른 모니터를 꽂으면 그 모니터의 설정(없으면 권장 모드)이 쓰이고,
+#   옛 모니터를 다시 꽂으면 옛 설정이 돌아온다. 설명이 없는 모니터(가상 머신 등)와 예전 설정은 단자 이름.
+#   (전엔 단자 이름에만 묶여, 165Hz 모니터 자리에 60Hz 모니터를 꽂으면 로그인 화면·바탕화면이 못 받는 모드로 떴다)
+_DESC = re.compile(r"[A-Za-z0-9._()+/-][A-Za-z0-9 ._()+/-]{0,94}[A-Za-z0-9._()+/-]")   # 쉼표·# 없음 (규칙 문법)
+_DISPLAY_KEY_OK = re.compile(r"desc:" + _DESC.pattern + r"|[A-Za-z0-9._-]{1,32}")
+
+
+def display_key(mon):
+    """hyprctl monitors 의 모니터 하나 → 설정 열쇠"""
+    desc = str(mon.get("description") or "").strip()
+    return "desc:" + desc if _DESC.fullmatch(desc) else str(mon.get("name") or "")
+# 고를 수 있는 값이 정해진 것
+_CHOICES = {("multitasking", "taskbar"): ("current", "all"),
+            ("multitasking", "alttab"): ("current", "all")}
+
+
+def _clean_keybinds(vals):
+    """단축키 섹션 — 키 조합 모양·타입이 틀린 항목은 버린다 (틀린 줄이 조각에 들어가면 Hyprland 가 오류를 띄운다)"""
+    try:
+        from sekaishell import keybinds
+        return keybinds.clean_section(vals)
+    except Exception as e:
+        dbg("단축키 설정을 읽지 못함 — 기본값 사용:", e)
+        return {}
+
+
+def _coerce(v, d):
+    """저장된 값 v 를 기본값 d 의 타입에 맞춘다. 맞출 수 없으면 _BAD."""
+    if isinstance(d, bool):                    # bool 은 int 의 하위 타입이라 먼저 본다
+        if isinstance(v, bool):
+            return v
+        return bool(v) if isinstance(v, int) and v in (0, 1) else _BAD
+    if isinstance(d, int):
+        if isinstance(v, bool):
+            return _BAD
+        if isinstance(v, int):
+            return v
+        return int(v) if isinstance(v, float) and v.is_integer() else _BAD
+    if isinstance(d, float):
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else _BAD
+    if isinstance(d, str):
+        return v if isinstance(v, str) else _BAD
+    return v
+
+
+def _sanitize(saved):
+    """손으로 고치거나 다른 버전이 쓴 설정 파일을 기본값의 모양에 맞춘다.
+    "appearance": null, 숫자 자리의 글자, 깨진 색 같은 것이 있으면 시작하다 죽었다 (a['accent'] 등).
+    틀린 값은 버린다 — 그 자리는 기본값이 쓰인다. 모르는 섹션·키는 그대로 둔다 (새 버전이 쓴 것일 수 있다)."""
+    if not isinstance(saved, dict):
+        dbg("설정 파일의 최상위가 사전이 아닙니다 — 기본값 사용")
+        return {}
+    out = {}
+    for sec, vals in saved.items():
+        base = DEFAULTS.get(sec)
+        if not isinstance(base, dict):
+            out[sec] = vals
+            continue
+        if not isinstance(vals, dict):
+            dbg(f"설정 [{sec}] 이 사전이 아닙니다 ({type(vals).__name__}) — 기본값 사용")
+            continue
+        if sec == "keybinds":
+            out[sec] = _clean_keybinds(vals)
+            continue
+        clean = {}
+        for k, v in vals.items():
+            if sec == "display":               # {"DP-1": {...}} — 모니터마다 사전
+                if not isinstance(v, dict):
+                    dbg(f"설정 [display] {k} 이 사전이 아닙니다 — 버림")
+                    continue
+                mon = {}
+                for mk, mv in v.items():
+                    fixed = _coerce(mv, _DISPLAY_KEYS[mk]) if mk in _DISPLAY_KEYS else mv
+                    if fixed is _BAD:
+                        dbg(f"설정 [display] {k}.{mk} = {mv!r} — 타입이 틀려 버림")
+                        continue
+                    mon[mk] = fixed
+                clean[k] = mon
+                continue
+            if k not in base:
+                clean[k] = v
+                continue
+            fixed = _coerce(v, base[k])
+            if fixed is _BAD or ((sec, k) in _COLOR_KEYS and not _HEX.match(fixed)) or \
+                    ((sec, k) in _CHOICES and fixed not in _CHOICES[(sec, k)]):
+                dbg(f"설정 [{sec}] {k} = {v!r} — 틀린 값이라 기본값({base[k]!r})을 씀")
+                continue
+            clean[k] = fixed
+        out[sec] = clean
+    return out
+
+
+def _merge(base, over):
+    """기본값 위에 저장된 값을 덮어쓴다 (한 단계 중첩까지)."""
+    out = copy.deepcopy(base)
+    for k, v in (over or {}).items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k].update(v)
+        else:
+            out[k] = v
+    return out
+
+
+_read_cache = {"sig": None, "data": None}
+
+
+def read():
+    """설정 파일을 기본값 위에 덮은 값 — 읽기만 (Store().load 와 달리 깨진 파일을 치우지 않는다).
+    작업 표시줄·알림·작업 관리자처럼 값만 보는 곳이 다 이것을 거친다 (sekaishell.config.settings) —
+    예전에는 저마다 파일을 읽고 기본값을 따로 들고 있어 설정 앱과 어긋날 수 있었다 (카나데).
+    파일이 바뀌지 않았으면 다시 읽지 않는다 (작업 표시줄은 자주 묻는다)"""
+    try:
+        st = os.stat(CFG_FILE)
+        sig = (st.st_mtime_ns, st.st_size, st.st_ino)
+    except OSError:
+        sig = None
+    if sig != _read_cache["sig"] or _read_cache["data"] is None:
+        data = copy.deepcopy(DEFAULTS)
+        if sig is not None:
+            try:
+                with open(CFG_FILE, encoding="utf-8") as f:
+                    data = _merge(DEFAULTS, _sanitize(json.load(f)))
+            except (OSError, ValueError):
+                pass
+        _read_cache.update(sig=sig, data=data)
+    return copy.deepcopy(_read_cache["data"])
+
+
+# ── 값 변환기 (Hyprland 표기로) ─────────────────────────────
+def _int(v):    return int(v)
+def _f2(v):     return f"{float(v):.2f}"
+def _bool(v):   return "true" if v else "false"
+def _01(v):     return 1 if v else 0
+def _str(v):    return str(v)
+def _layout(v): return str(v) or "us"
+def _rgba(v):   return hex_to_rgba(v)
+def _accent(v): return hex_to_rgba(v, 0.53)
+
+
+# 접근성 — 커서 색(테마)과 색 필터 셰이더
+CURSOR_THEMES = {"white": "Sekai-Cursor-White", "black": "Sekai-Cursor-Black"}
+SHADER_DIR = "/usr/share/sekai/shaders"
+COLOR_FILTERS = ("grayscale", "inverted", "grayscale-inverted", "deuteranopia", "protanopia", "tritanopia")
+
+
+def color_filter_path(kind):
+    if kind not in COLOR_FILTERS:
+        return None
+    p = os.path.join(SHADER_DIR, f"{kind}.frag")
+    return p if os.path.isfile(p) else None
+
+
+def apply_cursor(theme_name, size):
+    """커서 테마·크기를 바로 (hyprctl setcursor) — GTK 앱이 쓰는 GSettings·settings.ini 도 맞춘다"""
+    run(["hyprctl", "setcursor", theme_name, str(size)])
+    run(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", theme_name])
+    run(["gsettings", "set", "org.gnome.desktop.interface", "cursor-size", str(size)])
+    for d in ("gtk-3.0", "gtk-4.0"):
+        try:
+            theme._write_ini(os.path.join(HOME, ".config", d, "settings.ini"),
+                             {"gtk-cursor-theme-name": theme_name, "gtk-cursor-theme-size": size})
+        except OSError:
+            pass
+
+
+def _apply_wm_mode(mode):
+    """모드가 바뀌었을 때 창 관리자 쪽 — keyword·GTK 설정으로는 바뀌지 않는 것들 (set_mode·되돌리기 공용)"""
+    if os.environ.get("WAYLAND_DISPLAY"):
+        # 제목줄 버튼 색은 설정을 다시 읽어야 바뀐다 (hyprbars 가 다시 읽을 때 버튼을 새로 만든다)
+        run(["hyprctl", "reload"])
+    else:
+        # 기본 화면 모드(X11): xfwm4 창 테두리 테마를 바로 바꾼다
+        run(["xfconf-query", "-c", "xfwm4", "-p", "/general/theme",
+             "-s", "Sekai-Light" if mode == "light" else "Sekai"])
+
+
+class Store:
+    def __init__(self):
+        self.data = copy.deepcopy(DEFAULTS)
+        self._listeners = []
+        # 페이지를 다시 그려 달라는 요청을 받을 곳 — 설정 창이 넣는다 (on_rebuild(page_id 또는 None, 지연 ms, 섹션)).
+        #   저장소는 GTK 를 모른다 (세션 시작 스크립트도 쓰므로)
+        self.on_rebuild = None
+        self.load()
+
+    # ── 입출력 ──────────────────────────────────────────
+    def load(self):
+        try:
+            with open(CFG_FILE, encoding="utf-8") as f:
+                self.data = _merge(DEFAULTS, _sanitize(json.load(f)))
+            dbg("설정 읽음", CFG_FILE)
+        except FileNotFoundError:
+            dbg("설정 파일 없음 — 기본값 사용")
+        except Exception as e:
+            # 깨진 파일은 다음 저장 때 덮어쓰이기 전에 옆에 남겨 둔다 (사용자 설정을 되살릴 수 있게)
+            dbg("설정 읽기 실패, 기본값 사용:", e)
+            try:
+                os.replace(CFG_FILE, CFG_FILE + ".broken")
+            except OSError:
+                pass
+
+    def _diff(self):
+        out = {}
+        for sec, vals in self.data.items():
+            base = DEFAULTS.get(sec)
+            if isinstance(vals, dict) and isinstance(base, dict):
+                d = {k: v for k, v in vals.items() if base.get(k, object()) != v}
+                if d:
+                    out[sec] = d
+            elif vals != base:
+                out[sec] = vals
+        return out
+
+    def save(self):
+        os.makedirs(CFG_DIR, exist_ok=True)
+        text = json.dumps(self._diff(), indent=2, ensure_ascii=False) + "\n"
+        # 저장은 한 번에 하나씩 (설정 앱 말고도 첫 부팅 설정·세션 시작 스크립트가 이 파일을 다룬다)
+        with open(os.path.join(CFG_DIR, ".settings.lock"), "w") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)
+            atomic_write(CFG_FILE, text)
+        self.write_hypr_fragment()
+        self.notify_panel()
+
+    # ── 접근 ────────────────────────────────────────────
+    def get(self, section, key=None, default=None):
+        sec = self.data.get(section, {})
+        if key is None:
+            return sec
+        return sec.get(key, DEFAULTS.get(section, {}).get(key, default))
+
+    def set(self, section, key, value, apply=True):
+        self.data.setdefault(section, {})[key] = value
+        # 먼저 저장 — 적용 과정에서 신호를 받은 프로그램(sekai-desk, sekai-idle)이
+        # 파일을 다시 읽으므로
+        self.save()
+        if apply:
+            self.apply_one(section, key, value)
+        for cb in self._listeners:
+            try:
+                cb(section, key, value)
+            except Exception as e:
+                dbg("리스너 예외", e)
+
+    def connect(self, cb):
+        self._listeners.append(cb)
+
+    def disconnect(self, cb):
+        """페이지를 다시 그릴 때 — 없어진 페이지의 리스너가 사라진 위젯을 건드리지 않게"""
+        try:
+            self._listeners.remove(cb)
+        except ValueError:
+            pass
+
+    def set_mode(self, mode):
+        """다크 / 라이트 — 네 기본색을 그 모드의 묶음으로 바꾸고, 셸·창 제목줄·일반 앱에 알린다"""
+        if mode not in theme.PALETTES:
+            return
+        a = self.data.setdefault("appearance", {})
+        a["mode"] = mode
+        a.update(theme.PALETTES[mode])
+        self.save()                         # 조각 파일 다시 쓰기 + 패널·바탕화면에 SIGHUP
+        theme.apply_system(mode)            # GTK·Chromium 등
+        self.apply_folders()
+        _apply_wm_mode(mode)
+        for cb in self._listeners:
+            try:
+                cb("appearance", "mode", mode)
+            except Exception as e:
+                dbg("리스너 예외", e)
+
+    def set_keybinds(self, changed, custom):
+        """단축키 — 저장하고(조각·X11 파일도) 바뀐 키 조합만 지금 세션에 다시 건다.
+        apply_one 으로는 안 된다: 무엇을 뗄지 알려면 바뀌기 전 값이 있어야 한다"""
+        old = copy.deepcopy(self.get("keybinds"))
+        self.data["keybinds"] = _clean_keybinds({"changed": changed, "custom": custom}) or \
+            copy.deepcopy(DEFAULTS["keybinds"])
+        self.save()
+        try:
+            from sekaishell import keybinds
+            keybinds.apply_live(old, self.get("keybinds"))
+        except Exception as e:
+            dbg("단축키를 세션에 반영하지 못함 — 다시 로그인하면 반영된다", e)
+        for cb in self._listeners:
+            try:
+                cb("keybinds", "changed", self.get("keybinds"))
+            except Exception as e:
+                dbg("리스너 예외", e)
+
+    def reset_section(self, section):
+        if section == "keybinds":
+            # 모두 기본값 — 뗄 키를 알아야 해서 따로 (apply_all 은 단축키를 모른다)
+            self.set_keybinds({}, [])
+            self.request_rebuild(section=section)
+            return
+        old_mode = theme.mode_of(self.get("appearance"))
+        self.data[section] = copy.deepcopy(DEFAULTS.get(section, {}))
+        self.save()
+        self.apply_all()
+        if section == "appearance":
+            # 색·모드가 바뀌었다 — 창의 CSS·GTK 설정과 일반 앱이 따라오게 (set_mode 와 같은 알림)
+            mode = theme.mode_of(self.get("appearance"))
+            theme.apply_system(mode)
+            self.apply_folders()
+            if mode != old_mode:
+                _apply_wm_mode(mode)
+            for key in ("accent", "mode"):
+                for cb in self._listeners:
+                    try:
+                        cb("appearance", key, self.get("appearance", key))
+                    except Exception as e:
+                        dbg("리스너 예외", e)
+        # 화면의 스위치·콤보가 옛 값을 보여 주지 않게 이 섹션을 쓰는 페이지들을 다시 그린다
+        self.request_rebuild(section=section)
+
+    def request_rebuild(self, page_id=None, delay_ms=0, section=None):
+        """설정 창에 페이지를 다시 그려 달라고 — page_id 가 없으면 section 을 쓰는 페이지들
+        (둘 다 없으면 모든 페이지)"""
+        if self.on_rebuild is not None:
+            try:
+                self.on_rebuild(page_id, delay_ms, section)
+            except Exception as e:
+                dbg("다시 그리기 요청 실패", e)
+
+    # ── Hyprland 조각 생성 ──────────────────────────────
+    def write_hypr_fragment(self):
+        a = self.get("appearance")
+        i = self.get("input")
+        lines = [_FRAG_HEADER]
+
+        lines.append("general {")
+        lines.append(f"    gaps_in = {int(a['gaps_in'])}")
+        lines.append(f"    gaps_out = {int(a['gaps_out'])}")
+        lines.append(f"    border_size = {int(a['border_size'])}")
+        lines.append(f"    col.active_border = {hex_to_rgba(a['accent'], 0.53)}")
+        lines.append("}")
+        lines.append("")
+
+        lines.append("decoration {")
+        lines.append(f"    rounding = {int(a['rounding'])}")
+        lines.append(f"    inactive_opacity = {float(a['inactive_opacity']):.2f}")
+        lines.append("    blur {")
+        lines.append(f"        enabled = {'true' if a['blur'] else 'false'}")
+        lines.append("    }")
+        lines.append("    shadow {")
+        lines.append(f"        enabled = {'true' if a['shadow'] else 'false'}")
+        lines.append("    }")
+        lines.append("}")
+        lines.append("")
+
+        lines.append("animations {")
+        lines.append(f"    enabled = {'true' if a['animations'] else 'false'}")
+        lines.append("}")
+        lines.append("")
+
+        x = self.get("a11y")
+        lines.append(f"env = XCURSOR_SIZE,{int(a['cursor_size'])}")
+        lines.append(f"env = XCURSOR_THEME,{CURSOR_THEMES.get(x.get('cursor_color'), 'Sekai-Cursor-White')}")
+        lines.append("")
+        # 접근성 — 색 필터(화면 셰이더) · 대비 테마의 굵은 노란 테두리
+        if x.get("color_filter") and color_filter_path(x.get("color_filter_kind")):
+            lines.append(f"decoration:screen_shader = {color_filter_path(x.get('color_filter_kind'))}")
+        if a.get("mode") == "contrast":
+            lines.append("general:border_size = 3")
+            lines.append("general:col.active_border = rgba(ffff00ff)")
+            lines.append("general:col.inactive_border = rgba(ffffffff)")
+        lines.append("")
+
+        lines.append("input {")
+        lines.append(f"    kb_layout = {i['kb_layout'] or 'us'}")
+        if i.get("kb_variant"):
+            lines.append(f"    kb_variant = {i['kb_variant']}")
+        if i.get("kb_options"):
+            lines.append(f"    kb_options = {i['kb_options']}")
+        lines.append(f"    repeat_rate = {int(i['repeat_rate'])}")
+        lines.append(f"    repeat_delay = {int(i['repeat_delay'])}")
+        lines.append(f"    sensitivity = {float(i['sensitivity']):.2f}")
+        lines.append(f"    accel_profile = {'adaptive' if i.get('accel', True) else 'flat'}")
+        lines.append(f"    natural_scroll = {'true' if i['natural_scroll'] else 'false'}")
+        lines.append(f"    follow_mouse = {int(i['follow_mouse'])}")
+        lines.append(f"    sekai_sticky_keys = {1 if x.get('sticky_keys') else 0}")
+        lines.append(f"    sekai_bounce_keys = {int(x.get('bounce_ms') or 0) if x.get('filter_keys') else 0}")
+        lines.append(f"    sekai_slow_keys = {int(x.get('slow_ms') or 0) if x.get('filter_keys') else 0}")
+        lines.append(f"    sekai_a11y_shortcuts = {1 if x.get('a11y_shortcuts', True) else 0}")
+        lines.append("    touchpad {")
+        lines.append(f"        natural_scroll = {'true' if i['tp_natural_scroll'] else 'false'}")
+        lines.append(f"        tap-to-click = {'true' if i['tp_tap'] else 'false'}")
+        lines.append(f"        disable_while_typing = {'true' if i.get('tp_dwt', True) else 'false'}")
+        lines.append("    }")
+        lines.append("}")
+        lines.append("")
+        lines.append(f"gestures:workspace_swipe = {'true' if i.get('gesture4', True) else 'false'}")
+        from sekaishell import touchpad
+        lines += touchpad.hypr_lines(i.get("tp_enabled", True))
+        lines.append("")
+
+        lines.append("plugin {")
+        lines.append("    hyprbars {")
+        lines.append(f"        bar_height = {int(a['titlebar_height'])}")
+        lines.append(f"        enabled = {1 if a['titlebar'] else 0}")
+        lines.append(f"        bar_color = {hex_to_rgba(a['titlebar_bg'])}")
+        lines.append(f"        col.text = {hex_to_rgba(a['fg'])}")
+        # 창 조작 버튼 — 오른쪽부터 역순 배치 → 화면에는 최소화 · 최대화 · 닫기.
+        #   아이콘 sekai:* 는 SekaiOS 가 패치한 hyprbars 가 선으로 그린다 (크기 16 → 아이콘 10px)
+        bb, bf = hex_to_rgba(a["titlebar_bg"]), hex_to_rgba(a["fg"])
+        for icon, cmd in (("sekai:close", "hyprctl dispatch killactive"),
+                          ("sekai:max", "hyprctl dispatch sekaimaximize toggle"),
+                          ("sekai:min", "hyprctl dispatch sekaiminimize on")):
+            lines.append(f"        hyprbars-button = {bb}, 16, {icon}, {cmd}, {bf}")
+        lines.append("    }")
+        lines.append("}")
+        lines.append("")
+
+        for name, m in sorted(self.get("display").items()):
+            if not _DISPLAY_KEY_OK.fullmatch(name):      # 손으로 고친 설정 파일 등 — 규칙을 깨뜨리지 않게
+                continue
+            if not m.get("enabled", True):
+                lines.append(f"monitor = {name}, disable")
+                continue
+            mode = m.get("mode") or "preferred"
+            pos = m.get("position") or "auto"
+            scale = self._fit_scale(name, m)
+            line = f"monitor = {name}, {mode}, {pos}, {scale}"
+            if m.get("transform"):
+                line += f", transform, {int(m['transform'])}"
+            if m.get("vrr"):
+                line += f", vrr, {int(m['vrr'])}"       # 1 = 켜기, 2 = 전체 화면일 때만
+            lines.append(line)
+        prim = self.get("layout", "primary")
+        if prim and self.get("display").get(prim, {}).get("enabled", True):
+            # 주 디스플레이 — 로그인하면 첫 워크스페이스(창이 처음 뜨는 곳)가 여기
+            lines.append(f"workspace = 1, monitor:{prim}, default:true")
+            # 커서도 처음부터 주 디스플레이 가운데에 (합성기는 기본으로 처음 발견한 모니터 가운데에 둔다)
+            lines.append(f"cursor:default_monitor = {prim}")
+        lines.append("")
+
+        # 가상 데스크톱 — 로그인하면 이 개수·이름으로 만들어져 있게 (sekaishell/desktops.py)
+        try:
+            from sekaishell import desktops
+            lines += desktops.rule_lines(desktops.load()) + [""]
+        except Exception as e:
+            dbg("가상 데스크톱 규칙을 만들지 못함", e)
+        # 단축키 — 맨 끝에. 여기가 잘못돼도 위의 설정과 (hyprland.conf 의) 기본 단축키는 그대로다
+        kb = self.get("keybinds")
+        try:
+            from sekaishell import keybinds
+            lines += keybinds.hypr_lines(kb)
+        except Exception as e:
+            dbg("단축키 줄을 만들지 못함 — 기본 단축키만 쓴다", e)
+
+        atomic_write(HYPR_FRAG, "\n".join(lines))
+        dbg("조각 생성", HYPR_FRAG)
+        # 기본 화면 모드(X11)의 sxhkd 설정도 같은 단축키로 (세션 시작 때도 여기를 거친다 — sekai-session)
+        try:
+            from sekaishell import keybinds
+            keybinds.write_x11(kb)
+        except Exception as e:
+            dbg("기본 화면 모드 단축키 파일을 쓰지 못함", e)
+        self.publish_display()
+
+    # ── 즉시 반영 ───────────────────────────────────────
+    # (섹션, 키) → (hyprctl 키워드, 값 변환기)
+    #   테이블은 클래스 레벨에 둔다. 값 변환은 반드시 지연 호출해야 한다
+    #   (미리 계산하면 int("us") 같은 게 터진다).
+    _KEYWORDS = {
+        ("appearance", "gaps_in"):          ("general:gaps_in", _int),
+        ("appearance", "gaps_out"):         ("general:gaps_out", _int),
+        ("appearance", "border_size"):      ("general:border_size", _int),
+        ("appearance", "rounding"):         ("decoration:rounding", _int),
+        ("appearance", "inactive_opacity"): ("decoration:inactive_opacity", _f2),
+        ("appearance", "blur"):             ("decoration:blur:enabled", _bool),
+        ("appearance", "shadow"):           ("decoration:shadow:enabled", _bool),
+        ("appearance", "animations"):       ("animations:enabled", _bool),
+        ("appearance", "titlebar_height"):  ("plugin:hyprbars:bar_height", _int),
+        ("appearance", "titlebar"):         ("plugin:hyprbars:enabled", _01),
+        ("appearance", "accent"):           ("general:col.active_border", _accent),
+        ("appearance", "titlebar_bg"):      ("plugin:hyprbars:bar_color", _rgba),
+        ("appearance", "fg"):               ("plugin:hyprbars:col.text", _rgba),
+        ("input", "kb_layout"):             ("input:kb_layout", _layout),
+        ("input", "kb_variant"):            ("input:kb_variant", _str),
+        ("input", "kb_options"):            ("input:kb_options", _str),
+        ("input", "repeat_rate"):           ("input:repeat_rate", _int),
+        ("input", "repeat_delay"):          ("input:repeat_delay", _int),
+        ("input", "sensitivity"):           ("input:sensitivity", _f2),
+        ("input", "accel"):                 ("input:accel_profile", lambda v: "adaptive" if v else "flat"),
+        ("input", "natural_scroll"):        ("input:natural_scroll", _bool),
+        ("input", "follow_mouse"):          ("input:follow_mouse", _int),
+        ("input", "tp_natural_scroll"):     ("input:touchpad:natural_scroll", _bool),
+        ("input", "tp_tap"):                ("input:touchpad:tap-to-click", _bool),
+        ("input", "tp_dwt"):                ("input:touchpad:disable_while_typing", _bool),
+        ("input", "gesture4"):              ("gestures:workspace_swipe", _bool),
+    }
+
+    def publish_display(self):
+        """로그인 화면이 같은 해상도로 뜨게 monitor 줄을 공용 폴더에 적는다.
+        (로그인 화면은 내 홈을 못 읽는다. 받는 쪽이 형식을 엄격히 검사한다)"""
+        d = "/var/lib/sekai/displays"
+        if not os.path.isdir(d):
+            return
+        try:
+            with open(HYPR_FRAG, encoding="utf-8") as f:
+                mon = [ln for ln in f if ln.startswith("monitor = ")]
+            prim = self.get("layout", "primary") or ""
+            if prim:
+                mon.append(f"# primary = {prim}\n")      # 로그인 화면이 입력 칸을 주 디스플레이에
+            # 자판 배열 — 로그인 화면에서 이 사람을 고르면 이 배열로 (윈도우처럼. sekai-greeter 가 형식을 검사해 쓴다)
+            i = self.get("input")
+            for k in ("kb_layout", "kb_variant", "kb_options"):
+                v = str(i.get(k) or "").strip()
+                if "\n" not in v:
+                    mon.append(f"# {k} = {v}\n")
+            path = os.path.join(d, pwd.getpwuid(os.getuid()).pw_name + ".conf")
+            # 누구나 쓰는 폴더 — 이름으로 바로 열면 남이 미리 둔 FIFO·링크에 막히거나 쓴다.
+            #   예측할 수 없는 새 임시 파일(O_EXCL)에 쓰고 바꿔 넣는다
+            fd, tmp = tempfile.mkstemp(dir=d, prefix=".sekai-display-")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.writelines(mon)
+                    os.fchmod(f.fileno(), 0o644)      # 로그인 화면(_greetd)이 읽는다
+                os.replace(tmp, path)
+            except BaseException:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+        except Exception as e:
+            dbg("해상도 게시 실패", e)
+    def apply_one(self, section, key, value):
+        hit = self._KEYWORDS.get((section, key))
+        if hit:
+            kw, conv = hit
+            try:
+                keyword(kw, conv(value))
+            except Exception as e:
+                dbg("변환 실패", section, key, value, e)
+        elif (section, key) == ("input", "tp_enabled"):
+            from sekaishell import touchpad
+            touchpad.apply(bool(value))
+        elif section == "wallpaper":
+            self.apply_wallpaper()
+        elif section == "display":
+            self.apply_display()
+        elif section == "a11y":
+            self.apply_a11y(key)
+        elif section == "appearance" and key in ("accent", "folder_accent"):
+            self.apply_folders()
+        elif section == "appearance" and key == "cursor_size":
+            self.apply_a11y("cursor_size")           # 다시 로그인하지 않아도 바로 (hyprctl setcursor)
+        elif section == "power":
+            # sekai-idle 이 설정을 다시 읽고 swayidle 을 새로 띄운다
+            for pid in run(["pgrep", "-f", r"^\S*python3\S* \S*sekai-idle( |$)"]).split():
+                try:
+                    os.kill(int(pid), signal.SIGHUP)
+                except Exception:
+                    pass
+
+    # ── 폴더 색 (강조색) ─────────────────────────────────
+    def apply_folders(self):
+        """폴더 아이콘 테마를 강조색으로 다시 칠하고(바뀌었을 때만) 아이콘 테마 이름을 일반 앱에도 — 백그라운드로"""
+        import threading
+        a = self.get("appearance")
+        on, accent, mode = bool(a.get("folder_accent", True)), a.get("accent"), theme.mode_of(a)
+
+        def work():
+            from sekaishell import foldercolor
+            try:
+                changed = foldercolor.generate(accent) if on else (foldercolor.remove() or True)
+                theme.apply_system(mode)
+                if changed:
+                    self.notify_panel()          # 작업 표시줄·바탕화면도 새 아이콘 테마로 (저장 때 보낸 신호는 만들기 전이었다)
+            except Exception as e:
+                dbg("폴더 색 실패", e)
+        threading.Thread(target=work, daemon=True).start()
+
+    # ── 접근성 즉시 반영 ────────────────────────────────
+    def apply_a11y(self, key=None):
+        """key 가 없으면 전부. 합성기 값은 hyprctl keyword, 글자 크기·커서는 GSettings 와 GTK 설정 파일도"""
+        x = self.get("a11y")
+        if key in (None, "color_filter", "color_filter_kind"):
+            path = color_filter_path(x.get("color_filter_kind")) if x.get("color_filter") else None
+            keyword("decoration:screen_shader", path or "[[EMPTY]]")
+        if key in (None, "sticky_keys"):
+            keyword("input:sekai_sticky_keys", 1 if x.get("sticky_keys") else 0)
+        if key in (None, "a11y_shortcuts"):
+            keyword("input:sekai_a11y_shortcuts", 1 if x.get("a11y_shortcuts", True) else 0)
+        if key in (None, "filter_keys", "bounce_ms", "slow_ms"):
+            on = bool(x.get("filter_keys"))
+            keyword("input:sekai_bounce_keys", int(x.get("bounce_ms") or 0) if on else 0)
+            keyword("input:sekai_slow_keys", int(x.get("slow_ms") or 0) if on else 0)
+        if key in (None, "text_scale"):
+            run(["gsettings", "set", "org.gnome.desktop.interface", "text-scaling-factor",
+                 f"{float(x.get('text_scale') or 1.0):.2f}"])
+        if key in (None, "cursor_color") or key == "cursor_size":
+            apply_cursor(CURSOR_THEMES.get(x.get("cursor_color"), "Sekai-Cursor-White"), int(self.get("appearance", "cursor_size")))
+        if key == "osk":
+            run(["sekai-ctl", "osk", "on" if x.get("osk") else "off"])
+
+    def set_contrast(self, on):
+        """대비 테마 — 켜면 지금 모드·강조색을 적어 두고 contrast 로, 끄면 되돌린다"""
+        x = self.data.setdefault("a11y", {})
+        a = self.data.setdefault("appearance", {})
+        if on and a.get("mode") != "contrast":
+            x["prev_mode"] = a.get("mode", "dark")
+            x["prev_accent"] = a.get("accent", DEFAULTS["appearance"]["accent"])
+            x["contrast"] = True
+            a["accent"] = theme.CONTRAST_ACCENT
+            self.set_mode("contrast")
+        elif not on and a.get("mode") == "contrast":
+            x["contrast"] = False
+            if x.get("prev_accent"):
+                a["accent"] = x["prev_accent"]
+            self.set_mode(x.get("prev_mode") if x.get("prev_mode") in ("dark", "light") else "dark")
+        self.apply_one("appearance", "accent", self.get("appearance", "accent"))
+
+    def apply_all(self):
+        self.write_hypr_fragment()
+        for section in ("appearance", "input"):
+            for k, v in self.get(section).items():
+                self.apply_one(section, k, v)
+        self.apply_a11y()
+        self.apply_display()
+        self.apply_wallpaper()
+        self.notify_panel()
+
+
+    def migrate_display(self, mons):
+        """예전 설정(단자 이름)을 지금 그 단자에 꽂힌 모니터의 설정으로 옮긴다 — 바뀌었으면 True (저장은 부른 쪽이).
+        그 모니터 설정이 이미 있으면 예전 것은 버린다 (두 규칙이 한 모니터에 걸리지 않게)"""
+        disp = self.data.setdefault("display", {})
+        changed = False
+        for m in mons or []:
+            name, key = m.get("name"), display_key(m)
+            if not name or key == name or name not in disp:
+                continue
+            disp.setdefault(key, disp[name])
+            del disp[name]
+            changed = True
+        return changed
+
+    def _fit_scale(self, name, m):
+        """저장된 배율을 그 모니터·모드에서 합성기가 받는 값으로 (monscale) — 예전에 저장한 150% 등도 여기서 맞춘다.
+        배율을 고른 적이 없으면 auto — 합성기가 화면 크기(PPI)로 권장 배율을 고른다 (윈도우의 "권장")"""
+        if m.get("scale") is None:
+            return "auto"
+        size = monscale.mode_size(m.get("mode"))
+        if size is None:                            # "preferred" — 모니터의 기본 모드 크기
+            mon = next((x for x in (hyprctl("monitors", "all", js=True) or [])
+                        if name in (x.get("name"), display_key(x))), None)
+            if mon:
+                size = (monscale.mode_size((mon.get("availableModes") or [""])[0])
+                        or (mon.get("width", 0), mon.get("height", 0)))
+        if not size:
+            return monscale.fmt(m.get("scale", 1.0))
+        return monscale.fmt(monscale.fit(size[0], size[1], m.get("scale", 1.0)))
+
+    def apply_display(self):
+        for name, m in self.get("display").items():
+            if not _DISPLAY_KEY_OK.fullmatch(name):
+                continue
+            if not m.get("enabled", True):
+                keyword("monitor", f"{name}, disable")
+                continue
+            mode = m.get("mode") or "preferred"
+            arg = f"{name}, {mode}, {m.get('position') or 'auto'}, {self._fit_scale(name, m)}"
+            if m.get("transform"):
+                arg += f", transform, {int(m['transform'])}"
+            # vrr 는 끌 때도 0 을 명시해야 켜져 있던 것이 꺼진다
+            arg += f", vrr, {int(m.get('vrr', 0))}"
+            keyword("monitor", arg)
+
+    def apply_wallpaper(self):
+        try:
+            subprocess.Popen(["sekai-wallpaper", "--apply"],
+                             start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as e:                     # 없으면 배경만 못 바꾼다 — 되돌리기 등 나머지는 계속
+            dbg("배경화면 적용 실패", e)
+
+    # ── 패널에 알리기 ───────────────────────────────────
+    def notify_panel(self):
+        """sekai-panel 에 SIGHUP → 설정 다시 읽고 CSS 재적용."""
+        # 바탕화면(sekai-desk)도 강조색·작업 표시줄 높이를 쓴다
+        out = run(["pgrep", "-f", r"^\S*python3\S* \S*sekai-(panel|desk)( |$)"])
+        for pid in out.split():
+            try:
+                os.kill(int(pid), signal.SIGHUP)
+            except Exception:
+                pass

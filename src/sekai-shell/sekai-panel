@@ -16,6 +16,8 @@ if os.path.isdir(os.path.join(HERE, "sekaishell")):
 
 from sekaishell.layer import GtkLayerShell  # noqa: E402  (X11 기본 화면 모드에선 흉내)
 from sekaishell import layer as _layer                   # noqa: E402
+from sekaishell import config as _config                 # noqa: E402
+from sekaishell.launchers import desktop_dir             # noqa: E402
 from sekaishell.popup import ClickCatcher, PanelPopup, make_translucent  # noqa: E402
 from sekaishell.tray import TrayBox                     # noqa: E402
 from sekaishell.notify import NotificationService       # noqa: E402
@@ -77,7 +79,6 @@ def draw_logo(cr, size, kind=None):
 # ───────────────────────────────────────────────────────────────
 
 # ── SekaiOS 설정 (sekai-settings 가 쓴다) ──────────────────────
-SEKAI_CFG = os.path.expanduser("~/.config/sekai/settings.json")
 
 # 창 주소 → 처음 본 순서. 작업 표시줄 단추는 연 순서로 둔다 — hyprctl clients 는 쌓임 순서라
 #   창을 고를 때마다(맨 앞으로 올라오니) 바뀌어, 누르는 순간 단추가 자리를 바꿨다
@@ -97,46 +98,24 @@ def _open_order(clients):
     return sorted(clients, key=lambda c: _SEEN.get(c.get("address"), 0))
 
 
-_SEKAI_DEFAULTS = {
-    "appearance": {"accent": "#39c5bb", "bg": "#151517",
-                   "surface": "#1e1e22", "fg": "#f1f1f3"},
-    "panel": {"height": 48, "clock_format": "%H:%M", "show_date": False},
-    "apps": {"terminal": "sekai-terminal", "browser": "chromium", "files": "sekai-files"},
-}
-
-
 def sekai_settings():
-    """설정 파일을 읽어 기본값 위에 덮어쓴 dict 를 돌려준다."""
-    import copy
-    out = copy.deepcopy(_SEKAI_DEFAULTS)
-    try:
-        with open(SEKAI_CFG, encoding="utf-8") as f:
-            data = json.load(f)
-        for k, v in data.items():
-            if isinstance(v, dict) and isinstance(out.get(k), dict):
-                out[k].update(v)
-            else:
-                out[k] = v
-    except Exception:
-        pass
-    return out
+    """설정 값 (설정 저장소의 기본값까지 합친 것) — 예전에는 기본값 사본(_SEKAI_DEFAULTS)을 따로 들고 있었다"""
+    return _config.settings()
 
 
 def sekai_conf(section, key, default=None):
-    return sekai_settings().get(section, {}).get(key, default)
+    return _config.settings(section, key, default)
 
 
 def css_prelude():
     """style.css 앞에 붙일 @define-color 정의들."""
-    a = sekai_settings().get("appearance", {})
-    g = _SEKAI_DEFAULTS["appearance"]
+    a = _config.settings("appearance")
     return (
         "@define-color accent %s;\n"
         "@define-color bg %s;\n"
         "@define-color surface %s;\n"
         "@define-color fg %s;\n"
-    ) % (a.get("accent", g["accent"]), a.get("bg", g["bg"]),
-         a.get("surface", g["surface"]), a.get("fg", g["fg"]))
+    ) % (a["accent"], a["bg"], a["surface"], a["fg"])
 
 class Hypr:
     def __init__(self):
@@ -368,19 +347,6 @@ def load_apps():
             })
     apps.sort(key=lambda a: sort_key(a["name"]))
     return apps
-
-
-def desktop_dir():
-    """바탕 화면 폴더 — sekai-desk 가 보여 주는 곳과 같게 (xdg-user-dir DESKTOP, 없으면 ~/Desktop)"""
-    try:
-        p = subprocess.run(["xdg-user-dir", "DESKTOP"], capture_output=True,
-                           text=True, timeout=2).stdout.strip()
-    except Exception:
-        p = ""
-    if not p or p == os.path.expanduser("~"):
-        p = os.path.expanduser("~/Desktop")
-    os.makedirs(p, exist_ok=True)
-    return p
 
 
 def user_dir(kind):
@@ -1183,7 +1149,6 @@ class StartMenu(Gtk.Window, SearchMixin):
         self.flow.show_all()
 
 
-
 class SearchFlyout(Gtk.Window, SearchMixin):
     """작업 표시줄의 검색 (윈도우 11 처럼) — 검색 상자·아이콘을 누르거나 Win+S.
     시작 메뉴와 같은 검색이지만 넓게: 위에 갈래 단추(전체·앱·설정·파일), 왼쪽에 결과, 오른쪽에 고른 것의
@@ -1683,7 +1648,7 @@ def set_search_mode(mode):
     """작업 표시줄 우클릭 메뉴에서 — 설정 앱과 같은 저장으로 (저장하면 SIGHUP 으로 모든 작업 표시줄이 다시 읽는다)"""
     def work():
         try:
-            from sekaisettings.store import Store
+            from sekaishell.store import Store
             Store().set("panel", "search", mode)
         except Exception as e:
             dbg("검색 상자 설정 저장 실패", e)
@@ -2364,27 +2329,6 @@ class Panel(Gtk.Window, TaskbarMixin):
         self.cal_year.set_text(f"{t.tm_year}년")
 
     # ── 워크스페이스 ────────────────────────────────────
-    def rebuild_workspaces(self):
-        # 작업 표시줄에서는 제거됨. 별도 워크스페이스 UI 에서 재사용 예정.
-        if not hasattr(self, "wsbox"):
-            return False
-        for c in self.wsbox.get_children():
-            self.wsbox.remove(c)
-        wss = self.hypr.query("workspaces") or []
-        active = (self.hypr.query("activeworkspace") or {}).get("id")
-        used = {w["id"] for w in wss if w.get("windows", 0) > 0 and w.get("id", 0) > 0}
-        for i in range(1, 6):
-            b = Gtk.Button(label=str(i))
-            ctx = b.get_style_context()
-            ctx.add_class("ws-btn")
-            if i == active:
-                ctx.add_class("active")
-            elif i in used:
-                ctx.add_class("used")
-            b.connect("clicked", lambda _w, n=i: self.hypr.dispatch(f"workspace {n}"))
-            self.wsbox.pack_start(b, False, False, 0)
-        self.wsbox.show_all()
-        return False
 
     def draw_logo(self, widget, cr):
         a = widget.get_allocation()

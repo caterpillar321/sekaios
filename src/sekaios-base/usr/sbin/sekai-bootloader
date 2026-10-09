@@ -133,14 +133,14 @@ esp_disk_part() {
     local src pk
     src=$(findmnt -no SOURCE "$ESP")
     pk=$(lsblk -no PKNAME "$src" | head -1)
-    echo "/dev/$pk $(cat /sys/class/block/$(basename "$src")/partition)"
+    echo "/dev/$pk $(cat "/sys/class/block/$(basename "$src")/partition")"
 }
 
 cleanup_refind() {
     # 예전(rEFInd) 설치본의 흔적 — 더는 쓰지 않는다
     rm -f  "$EFIDIR/refind_x64.efi" "$EFIDIR/refind.conf"
     rm -rf "$EFIDIR/icons" "$EFIDIR/fonts" "$EFIDIR/themes" "$EFIDIR/drivers_x64" "$EFIDIR/banners"
-    rm -rf "$ESP/$ID"          # ESP 에 복사해 두던 커널
+    rm -rf "${ESP:?}/${ID:?}"    # ESP 에 복사해 두던 커널
 }
 
 cmd="${1:-}"; shift || true

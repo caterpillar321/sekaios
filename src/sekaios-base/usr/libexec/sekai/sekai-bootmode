@@ -33,7 +33,7 @@ class Stopped(Exception):
     """systemd 가 멈추라고 했다 (TimeoutStartSec·끄기) — boot-video 를 되돌리고 끝나려고 예외로 받는다"""
 
 
-def on_term(signum, frame):
+def on_term(_signum, _frame):
     signal.signal(signal.SIGTERM, signal.SIG_IGN)   # 되돌리는 중에 또 끊기지 않게
     raise Stopped()
 

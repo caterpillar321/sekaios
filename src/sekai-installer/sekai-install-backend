@@ -231,7 +231,7 @@ BOOT_DEV="${PFX}2"
 if [ "$SWAP_MB" -gt 0 ]; then SWAP_DEV="${PFX}3"; else SWAP_DEV=""; fi
 ROOT_DEV="${PFX}${PN}"
 LUKS_DEV=""
-for i in 1 2 3 4 5; do [ -b "$ROOT_DEV" ] && break; sleep 1; done
+for _ in 1 2 3 4 5; do [ -b "$ROOT_DEV" ] && break; sleep 1; done
 [ -b "$ESP_DEV" ] && [ -b "$ROOT_DEV" ] || die "파티션을 만들지 못했습니다"
 # 새 파티션 자리에 남아 있던 옛 파일 시스템 서명을 지운다 (자동 연결·mkfs 가 옛것으로 착각하지 않게)
 for p in "$ESP_DEV" "$BOOT_DEV" ${SWAP_DEV:+"$SWAP_DEV"} "$ROOT_DEV"; do

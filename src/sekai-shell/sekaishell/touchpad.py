@@ -1,7 +1,7 @@
 """터치패드 켜고 끄기 — 설정 › 키보드 및 마우스 › 터치패드, Fn 키(XF86TouchpadToggle · On · Off).
 
 Hyprland 엔 "터치패드 전부" 스위치가 없어 장치마다 device[<이름>]:enabled 를 건다 (다음 로그인용은
-sekaisettings.store 의 조각 파일에 device { } 묶음으로). 터치패드인지는 udev 가 붙인 ID_INPUT_TOUCHPAD 로 —
+sekaishell.store 의 조각 파일에 device { } 묶음으로). 터치패드인지는 udev 가 붙인 ID_INPUT_TOUCHPAD 로 —
 /run/udev/data 는 누구나 읽을 수 있다. 이름은 Hyprland 가 쓰는 꼴(소문자, 빈칸 → -)로.
 
 합성기는 그 장치의 device { } 묶음이 이미 있을 때만 device[<이름>]:enabled 를 듣는다 — 묶음이 없으면(새로 설치한

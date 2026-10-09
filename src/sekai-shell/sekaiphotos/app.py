@@ -16,10 +16,10 @@ import sys
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Gio, GLib, Gtk  # noqa: E402
 
 from sekaishell import dbg, theme  # noqa: E402
-from sekaishell.taskmgr_common import appearance  # noqa: E402
+from sekaishell.appkit import AppTheme, appearance, shot_when_asked  # noqa: E402
 
 from .imageio import Pool  # noqa: E402
 from .window import PhotosWindow  # noqa: E402
@@ -89,28 +89,6 @@ popover.ph-rename, popover.ph-rename > * { background: @card; color: @fg; }
 """
 
 
-def _load_css(a):
-    prelude = "".join(f"@define-color {k} {a[k]};\n" for k in ("accent", "bg", "surface", "fg"))
-    prelude += "@define-color ph_canvas %s;\n" % (
-        "mix(@bg, #000000, 0.35)" if a.get("mode") != "light" else "mix(@bg, #ffffff, 0.2)")
-    body = ""
-    for p in CSS_PATHS:
-        if os.path.exists(p):
-            with open(p, encoding="utf-8") as f:
-                body = f.read()
-            break
-    prov = Gtk.CssProvider()
-    try:
-        prov.load_from_data((prelude + body + PHOTOS_CSS).encode())
-    except GLib.Error as e:
-        print("[sekai-photos] CSS 오류:", e.message, file=sys.stderr, flush=True)
-        return None
-    Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_USER)
-    from sekaishell import theme as _sekai_theme
-    _sekai_theme.apply_contrast_css()   # 대비 테마면 테두리·초점을 앱 CSS 위에
-    return prov
-
-
 def parse_args(args):
     """(파일 인자들, 새 창인지) — 파일 인자는 부른 쪽의 작업 폴더 기준으로 do_command_line 이 GFile 로 바꾼다"""
     files, new, only_files = [], False, False
@@ -126,23 +104,28 @@ def parse_args(args):
     return files, new
 
 
+def _prelude(a):
+    return "@define-color ph_canvas %s;\n" % (
+        "mix(@bg, #000000, 0.35)" if a.get("mode") != "light" else "mix(@bg, #ffffff, 0.2)")
+
+
+_THEME = AppTheme("sekai-photos", PHOTOS_CSS, prelude=_prelude)
+
+
 class PhotosApp(Gtk.Application):
     def __init__(self):
         super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
         self.pools = None
-        self._css = None
-        self._cfg_mon = None
-        self._cfg_src = 0
 
     def do_startup(self):
         Gtk.Application.do_startup(self)
         GLib.set_application_name("사진")
         a = appearance()
         theme.apply_gtk_settings(Gtk.Settings.get_default(), a["mode"])
-        self._css = _load_css(a)
+        _THEME.load(a)
         # 읽기 2 · 고품질 그리기 1 · 파일 쓰기 1 (파일을 바꾸는 일은 한 줄로 차례대로)
         self.pools = (Pool(2, "load"), Pool(1, "render"), Pool(1, "io"))
-        self._watch_settings()
+        _THEME.follow(self._theme_changed)
 
     def do_command_line(self, cl):
         names, new = parse_args(cl.get_arguments()[1:])
@@ -169,52 +152,17 @@ class PhotosApp(Gtk.Application):
         win.present()
 
         # 개발용: SEKAI_SHOT=/경로.png 이면 창을 찍고 종료한다 (설정 앱·작업 관리자와 같은 방법)
-        shot = os.environ.get("SEKAI_SHOT")
-        if shot and fresh:
-            def grab():
-                gw = win.get_window()
-                if gw is not None:
-                    pb = Gdk.pixbuf_get_from_window(gw, 0, 0, gw.get_width(), gw.get_height())
-                    if pb:
-                        pb.savev(shot, "png", [], [])
-                        print("shot:", shot, gw.get_width(), "x", gw.get_height())
-                win.close()
-                return False
-            GLib.timeout_add(int(os.environ.get("SEKAI_SHOT_DELAY", "2500")), grab)
+        if fresh:
+            shot_when_asked(win, win.close)
         return 0
 
     # ── 설정(색) 따라가기 ──
-    def _watch_settings(self):
-        """설정 앱이 settings.json 을 바꿔치기(원자적 저장)하므로 폴더를 본다"""
-        cfg_dir = os.path.expanduser("~/.config/sekai")
-        try:
-            os.makedirs(cfg_dir, exist_ok=True)
-            self._cfg_mon = Gio.File.new_for_path(cfg_dir).monitor_directory(Gio.FileMonitorFlags.WATCH_MOVES, None)
-        except (GLib.Error, OSError) as e:
-            dbg("설정 폴더를 볼 수 없습니다:", e)
-            return
-
-        def changed(_m, f, other, _ev):
-            names = {x.get_basename() for x in (f, other) if x is not None}
-            if "settings.json" not in names:
-                return
-            if self._cfg_src:
-                GLib.source_remove(self._cfg_src)
-            self._cfg_src = GLib.timeout_add(200, self._reload_theme)
-        self._cfg_mon.connect("changed", changed)
-
-    def _reload_theme(self):
-        self._cfg_src = 0
-        a = appearance()
-        if self._css is not None:
-            Gtk.StyleContext.remove_provider_for_screen(Gdk.Screen.get_default(), self._css)
-        self._css = _load_css(a)
-        theme.apply_gtk_settings(Gtk.Settings.get_default(), a["mode"])
+    def _theme_changed(self, a):
+        """설정 앱에서 색·모드가 바뀌어 CSS 를 다시 얹은 뒤 — 이 앱이 더 할 일"""
         for w in self.get_windows():
             if isinstance(w, PhotosWindow):
                 w.theme_changed()
                 w.queue_draw()
-        return False
 
 
 def main(argv=None):

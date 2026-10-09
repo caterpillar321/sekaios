@@ -5,38 +5,21 @@
 """
 import gi
 gi.require_version("Gtk", "3.0")
-gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, Gtk, Pango  # noqa: E402
+from gi.repository import Gtk, Pango  # noqa: E402
+
+from sekaishell.ui import flat_button as _flat_button  # noqa: E402
+
+from sekaishell.ui import icon_image  # noqa: E402
 
 from .engine import fmt  # noqa: E402
 
 
-def icon(names, size=16):
-    th = Gtk.IconTheme.get_default()
-    for n in names:
-        if th.has_icon(n):
-            img = Gtk.Image.new_from_icon_name(n, Gtk.IconSize.BUTTON)
-            img.set_pixel_size(size)
-            return img
-    img = Gtk.Image.new_from_icon_name(names[-1], Gtk.IconSize.BUTTON)
-    img.set_pixel_size(size)
-    return img
-
-
 def flat_button(child, tooltip=None, cb=None, css="c-flat"):
-    b = Gtk.Button()
-    if isinstance(child, str):
-        b.set_label(child)
-    else:
-        b.add(child)
-    b.set_relief(Gtk.ReliefStyle.NONE)
-    b.set_can_focus(False)
-    b.get_style_context().add_class(css)
-    if tooltip:
-        b.set_tooltip_text(tooltip)
-    if cb:
-        b.connect("clicked", lambda *_: cb())
-    return b
+    return _flat_button(child, tooltip, cb, css)
+
+
+def icon(names, size=16):
+    return icon_image(names, size, fallback=None)
 
 
 class _List(Gtk.Box):
@@ -229,5 +212,3 @@ class NavPane(Gtk.Box):
                 ctx.remove_class("on")
 
 
-def key_is(ev, *names):
-    return ev.keyval in tuple(getattr(Gdk, "KEY_" + n) for n in names)

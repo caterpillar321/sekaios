@@ -26,7 +26,7 @@ import gi
 gi.require_version("Gio", "2.0")
 from gi.repository import Gio, GLib  # noqa: E402
 
-from . import dbg
+from . import dbg, sysfs
 
 BUS_TYPE = Gio.BusType.SYSTEM
 BLUEZ = "org.bluez"
@@ -160,14 +160,6 @@ _SERVICES = {
 
 def service_name(uuid):
     return _SERVICES.get((uuid or "").lower()[:8], uuid or "")
-
-
-def _read(path):
-    try:
-        with open(path, encoding="utf-8") as f:
-            return f.read().strip()
-    except OSError:
-        return ""
 
 
 def _addr_of(path):
@@ -452,9 +444,9 @@ class Bluetooth:
         for n in names:
             if not n.startswith("rfkill") or not n[6:].isdigit():
                 continue
-            if _read(f"{base}/{n}/type") != "bluetooth":
+            if sysfs.read(f"{base}/{n}/type") != "bluetooth":
                 continue
-            rf[int(n[6:])] = (_read(f"{base}/{n}/soft") == "1", _read(f"{base}/{n}/hard") == "1")
+            rf[int(n[6:])] = (sysfs.read(f"{base}/{n}/soft") == "1", sysfs.read(f"{base}/{n}/hard") == "1")
         self._rf = rf
 
     def _update_blocked(self):
@@ -485,7 +477,7 @@ class Bluetooth:
         """어댑터(…/hci0) 자신의 rfkill 번호 — 노트북 무선 스위치 같은 다른 rfkill 은 건드리지 않게"""
         hci = (adapter or "").rsplit("/", 1)[-1]
         for idx in self._rf:
-            if hci and _read(f"/sys/class/rfkill/rfkill{idx}/name") == hci:
+            if hci and sysfs.read(f"/sys/class/rfkill/rfkill{idx}/name") == hci:
                 return idx
         return None
 
@@ -644,10 +636,6 @@ class Bluetooth:
         self._set(path, DEVICE, "Trusted", GLib.Variant("b", bool(on)),
                   lambda ok, err, _n: _call_cb(cb, ok, err))
 
-    def set_alias(self, path, name, cb=None):
-        """장치 이름 바꾸기. 빈 문자열이면 장치가 알려 준 이름으로"""
-        self._set(path, DEVICE, "Alias", GLib.Variant("s", name or ""),
-                  lambda ok, err, _n: _call_cb(cb, ok, err))
 
     # ── 짝 맺기 에이전트 ────────────────────────────────────
     def register_agent(self, ui):

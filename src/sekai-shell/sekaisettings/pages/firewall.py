@@ -17,8 +17,8 @@ from gi.repository import GLib, Gtk  # noqa: E402
 from sekaishell.firewall import _fw_call, listening_apps  # noqa: E402
 
 from ..util import dbg, failure_reason, run_async  # noqa: E402
-from ..widgets import Page, button, combo, row, switch  # noqa: E402
-from .network import conn_label  # noqa: E402
+from ..widgets import Page, button, combo, row, switch, subsection  # noqa: E402
+from sekaishell.nm import conn_label  # noqa: E402
 
 HELPER = "/usr/libexec/sekai/sekai-firewall"
 ICON = ["security-high", "security-high-symbolic", "network-wired"]
@@ -118,15 +118,7 @@ class FirewallPage:
         threading.Thread(target=work, daemon=True).start()
 
     def _sect(self, title=None):
-        if title:
-            lbl = Gtk.Label(label=title, xalign=0)
-            lbl.get_style_context().add_class("section-title")
-            self.body.pack_start(lbl, False, False, 0)
-        lb = Gtk.ListBox()
-        lb.set_selection_mode(Gtk.SelectionMode.NONE)
-        lb.get_style_context().add_class("section")
-        self.body.pack_start(lb, False, False, 0)
-        return lb
+        return subsection(self.body, title)
 
     def _draw(self, st):
         for ch in self.body.get_children():

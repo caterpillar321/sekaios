@@ -1030,18 +1030,5 @@ class Agent:
             GLib.timeout_add(180, self._next)
 
 
-def main():
-    if not Gtk.init_check(sys.argv)[0]:
-        log("화면에 연결할 수 없습니다")
-        sys.exit(1)
-    try:
-        agent = Agent()
-    except GLib.Error as e:
-        log("시스템 버스에 연결할 수 없습니다:", e.message)
-        sys.exit(1)
-    Gtk.main()
-    sys.exit(agent.exit_code)
-
-
 if __name__ == "__main__":
-    main()
+    authui.run_agent(Agent, log)

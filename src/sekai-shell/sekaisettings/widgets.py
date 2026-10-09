@@ -4,34 +4,14 @@
    [아이콘]  제목                              [컨트롤]
              설명
 """
-import os
-
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gtk, GdkPixbuf, Gdk  # noqa: E402
+from gi.repository import GLib, Gtk, Gdk  # noqa: E402
 
+from sekaishell import ui as _ui  # noqa: E402
 
-def icon_image(names, size=16):
-    """후보 이름들을 순서대로 시도해 첫 번째로 찾아지는 아이콘을 쓴다."""
-    theme = Gtk.IconTheme.get_default()
-    if isinstance(names, str):
-        names = [names]
-    for n in names:
-        if not n:
-            continue
-        if os.path.isabs(n) and os.path.exists(n):
-            try:
-                pb = GdkPixbuf.Pixbuf.new_from_file_at_size(n, size, size)
-                return Gtk.Image.new_from_pixbuf(pb)
-            except Exception:
-                continue
-        if theme.has_icon(n):
-            img = Gtk.Image.new_from_icon_name(n, Gtk.IconSize.BUTTON)
-            img.set_pixel_size(size)
-            return img
-    img = Gtk.Image.new_from_icon_name("application-x-executable", Gtk.IconSize.BUTTON)
-    img.set_pixel_size(size)
-    return img
+combo = _ui.combo          # 공용으로 옮겼다 — 빠른 설정의 Wi-Fi 창도 쓴다
+icon_image = _ui.icon_image
 
 
 class Page(Gtk.ScrolledWindow):
@@ -104,7 +84,7 @@ class RowBox(Gtk.Container):
                 self.control = None
             self.queue_resize()
 
-    def do_forall(self, include_internals, callback, *data):
+    def do_forall(self, _include_internals, callback, *data):
         # (GObject 가 만들어지는 도중 — __init__ 이 _kids 를 두기 전 — 에도 불린다)
         for w in list(getattr(self, "_kids", ())):
             callback(w, *data)
@@ -277,28 +257,6 @@ def slider(value, lo, hi, step=1, on_change=None, digits=0, width=220):
     return sc
 
 
-def combo(items, active=None, on_change=None):
-    """items = [(id, 표시이름), ...]
-    지금 값이 목록에 없으면(지운 앱, 손으로 고친 설정 등) 첫 항목이 아니라 그 값을 그대로 보인다 —
-    예전엔 첫 항목이 골라진 것처럼 보여 실제 설정과 화면이 달랐다. 목록이 비면 "없음"을 흐리게."""
-    c = Gtk.ComboBoxText()
-    for i, (key, label) in enumerate(items):
-        c.append(str(key), label)
-    if active is not None and str(active) != "" and not c.set_active_id(str(active)):
-        c.append(str(active), f"{active} (지금 값)")
-        c.set_active_id(str(active))
-    if c.get_active() < 0:
-        if items:
-            c.set_active(0)
-        else:
-            c.append("", "없음")
-            c.set_active(0)
-            c.set_sensitive(False)
-    if on_change:
-        c.connect("changed", lambda w: on_change(w.get_active_id()))
-    return c
-
-
 def entry(text, on_change=None, width=20, placeholder=None):
     e = Gtk.Entry()
     e.set_text(str(text or ""))
@@ -341,3 +299,97 @@ def info(text):
     l.get_style_context().add_class("row-value")
     l.set_selectable(True)
     return l
+
+
+# ── 페이지들이 저마다 만들던 작은 도우미 (네트워크·블루투스·프린터·소리·단축키 …) — 카나데가 찾은 중복 ──
+def notice(text=""):
+    """페이지 안의 안내 한 줄 (줄바꿈)"""
+    l = Gtk.Label(label=text, xalign=0)
+    l.get_style_context().add_class("notice")
+    l.set_line_wrap(True)
+    return l
+
+
+def subsection(parent, title=None, hidden=False):
+    """parent 상자 안에 섹션(제목 + 리스트박스) — Page.section 과 같은 모양을 페이지 밖 상자에"""
+    if title:
+        lbl = Gtk.Label(label=title, xalign=0)
+        lbl.get_style_context().add_class("section-title")
+        parent.pack_start(lbl, False, False, 0)
+    lb = Gtk.ListBox()
+    lb.set_selection_mode(Gtk.SelectionMode.NONE)
+    lb.get_style_context().add_class("section")
+    lb.set_no_show_all(hidden)
+    parent.pack_start(lb, False, False, 0)
+    return lb
+
+
+def clear(container):
+    """안의 위젯을 모두 떼어 없앤다"""
+    for w in container.get_children():
+        container.remove(w)
+        w.destroy()
+
+
+def reveal(w, on):
+    """보이기·숨기기 — 처음 보일 때 안쪽도 함께 (no_show_all 로 만든 줄)"""
+    if on and not w.get_visible():
+        w.show()
+        if isinstance(w, Gtk.Container):
+            for c in w.get_children():
+                c.show_all()
+    elif not on and w.get_visible():
+        w.hide()
+
+
+def busy_box(text):
+    """돌아가는 표시 + 글 — 오래 걸리는 작업 동안"""
+    b = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    sp = Gtk.Spinner()
+    sp.start()
+    b.pack_start(sp, False, False, 0)
+    b.pack_start(info(text), False, False, 0)
+    return b
+
+
+def parent_window(w):
+    """위젯이 든 창 (대화 상자의 부모로) — 아직 창에 안 붙었으면 None"""
+    top = w.get_toplevel() if w is not None else None
+    return top if isinstance(top, Gtk.Window) and top.is_toplevel() else None
+
+
+def confirm(parent, text, sub, ok_label, on_ok):
+    """[취소][ok_label] 경고 확인 — 기다리지 않는다, 확인을 누르면 on_ok()"""
+    d = Gtk.MessageDialog(transient_for=parent, modal=True, message_type=Gtk.MessageType.WARNING,
+                          buttons=Gtk.ButtonsType.NONE, text=text)
+    d.format_secondary_text(sub)
+    d.add_buttons("취소", Gtk.ResponseType.CANCEL, ok_label, Gtk.ResponseType.OK)
+    d.set_default_response(Gtk.ResponseType.CANCEL)
+
+    def responded(dlg, resp):
+        dlg.destroy()
+        if resp == Gtk.ResponseType.OK:
+            on_ok()
+    d.connect("response", responded)
+    d.show_all()
+
+
+class StatusLine:
+    """페이지 아래 상태 한 줄 — self.msg(Label)·self.dead·self.say_src 를 쓰는 클래스에 섞는다.
+    잘 된 소식은 8초 뒤 사라지고, 오류는 남는다"""
+
+    def say(self, text, error=False):
+        if self.dead:
+            return
+        if self.say_src:
+            GLib.source_remove(self.say_src)
+            self.say_src = 0
+        self.msg.set_text(text or "")
+        self.msg.set_visible(bool(text))
+        if text and not error:
+
+            def hide():
+                self.say_src = 0
+                self.msg.hide()
+                return False
+            self.say_src = GLib.timeout_add_seconds(8, hide)

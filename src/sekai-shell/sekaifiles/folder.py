@@ -397,11 +397,6 @@ class FolderModel:
             self._remove_row(e)
         self.on_event("changed", None)
 
-    def refresh_row(self, uri):
-        it = self.iter_of(uri)
-        e = self.entries.get(uri)
-        if it is not None and e is not None:
-            self.store.set(it, ALL_COLS, self._row(e))
 
     # ── 정렬 · 숨긴 항목 · 아이콘 ──
     def set_sort(self, field, desc):

@@ -1,6 +1,6 @@
 """전원 — 배터리 · 전원 모드(power-profiles-daemon) · 배터리 감시(절약 모드 저절로, 부족 알림) · 덮개와 전원 단추.
 
-배터리는 /sys/class/power_supply 를 직접 읽는다 (quicksettings.read_battery). 시험(MafuyuMom)은 배터리가 없는 VM 에서
+배터리는 /sys/class/power_supply 를 직접 읽는다 (read_battery — 빠른 설정·설정 › 정보도 이것을 쓴다). 시험(MafuyuMom)은 배터리가 없는 VM 에서
 $XDG_RUNTIME_DIR/sekai-test/power_supply 에 가짜 배터리를 만든다 — 그 사용자만 쓸 수 있는 곳이라 남이 속일 수 없다.
 전원 모드는 powerprofilesctl (polkit 이 로그인한 사람에게 허용 — 인증을 묻지 않는다).
 """
@@ -13,7 +13,7 @@ import time
 
 from gi.repository import Gio, GLib
 
-from . import dbg
+from . import dbg, sysfs
 
 PROFILES = [("power-saver", "최고 전원 효율"), ("balanced", "균형"), ("performance", "최고 성능")]
 STATE = os.path.expanduser("~/.local/state/sekai/battery-saver.json")
@@ -25,8 +25,91 @@ def supply_dir():
 
 
 def battery():
-    from .quicksettings import read_battery
     return read_battery(supply_dir())
+
+
+def read_battery(base="/sys/class/power_supply"):
+    """노트북 배터리 → {"pct", "state", "secs"} 또는 None.
+    state: charging · discharging · full · plugged(연결됐지만 충전 안 함). secs: 남은/완충까지 시간(모르면 0).
+    마우스·키보드처럼 기기에 딸린 배터리(scope=Device)는 뺀다"""
+    try:
+        names = sorted(os.listdir(base))
+    except OSError:
+        return None
+    now = full = rate = 0.0
+    caps, states, ac, found = [], [], False, False
+    for n in names:
+        d = os.path.join(base, n)
+        typ = sysfs.read(d, "type")
+        if typ == "Mains":
+            ac = ac or sysfs.read(d, "online") == "1"
+            continue
+        if typ != "Battery" or sysfs.read(d, "scope") == "Device" or sysfs.read(d, "present") == "0":
+            continue
+        found = True
+        states.append(sysfs.read(d, "status"))
+        c = sysfs.read(d, "capacity")
+        if c.isdigit():
+            caps.append(int(c))
+        # 에너지(µWh·µW)가 있으면 그것을, 없으면 전하(µAh·µA) — 짝을 맞춰야 시간이 맞다
+        if sysfs.read(d, "energy_full"):
+            now, full, rate = now + sysfs.num(d, "energy_now"), full + sysfs.num(d, "energy_full"), rate + abs(sysfs.num(d, "power_now"))
+        elif sysfs.read(d, "charge_full"):
+            now, full, rate = now + sysfs.num(d, "charge_now"), full + sysfs.num(d, "charge_full"), rate + abs(sysfs.num(d, "current_now"))
+    if not found:
+        return None
+    if full > 0:
+        pct = round(100 * now / full)
+    elif caps:
+        pct = round(sum(caps) / len(caps))
+    else:
+        pct = 0
+    pct = max(0, min(100, pct))
+    if "Charging" in states:
+        state = "charging"
+    elif states and all(s == "Full" for s in states):
+        state = "full"
+    elif "Discharging" in states:
+        state = "discharging"
+    else:
+        state = "plugged" if ac else "discharging"       # Not charging · Unknown
+    secs = 0
+    if rate > 0 and full > 0:
+        if state == "charging":
+            secs = int((full - now) / rate * 3600)
+        elif state == "discharging":
+            secs = int(now / rate * 3600)
+    if secs > 48 * 3600:
+        secs = 0                                          # 방금 뽑았을 때 등 — 믿을 수 없는 값
+    return {"pct": pct, "state": state, "secs": max(0, secs)}
+
+
+def _duration(secs):
+    h, m = secs // 3600, (secs % 3600) // 60
+    if h:
+        return f"약 {h}시간 {m}분" if m else f"약 {h}시간"
+    return f"약 {max(1, m)}분"
+
+
+def battery_text(b):
+    """(아이콘 후보들, 한 줄 설명)"""
+    pct, st = b["pct"], b["state"]
+    lvl = min(100, int(round(pct / 10.0)) * 10)
+    if st == "full" or (st == "plugged" and pct >= 95):
+        icons = ["battery-level-100-charged-symbolic", "battery-full-charged-symbolic", "battery-full-symbolic"]
+        text = "완전히 충전됨" if st == "full" else "전원 연결됨"
+    elif st in ("charging", "plugged"):
+        icons = [f"battery-level-{lvl}-charging-symbolic", "battery-good-charging-symbolic", "battery-symbolic"]
+        text = "충전 중" if st == "charging" else "전원 연결됨"
+        if st == "charging" and b["secs"]:
+            text += f" · {_duration(b['secs'])} 후 완충"
+    else:
+        rough = ("battery-empty-symbolic" if pct < 5 else "battery-caution-symbolic" if pct < 20
+                 else "battery-low-symbolic" if pct < 40 else "battery-good-symbolic" if pct < 80
+                 else "battery-full-symbolic")
+        icons = [f"battery-level-{lvl}-symbolic", rough, "battery-symbolic"]
+        text = f"{_duration(b['secs'])} 남음" if b["secs"] else "배터리 사용 중"
+    return icons, text
 
 
 def _ctl(*args, timeout=5):

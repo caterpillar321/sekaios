@@ -60,7 +60,7 @@ class _FoldRow(Gtk.Container):
             w.unparent()
             self.queue_resize()
 
-    def do_forall(self, include_internals, callback, *data):
+    def do_forall(self, _include_internals, callback, *data):
         for w in list(getattr(self, "_kids", ())):
             callback(w, *data)
 

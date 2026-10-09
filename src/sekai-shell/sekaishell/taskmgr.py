@@ -20,7 +20,8 @@ from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 
 from . import dbg, theme  # noqa: E402
 from . import taskmgr_data as D  # noqa: E402
-from .taskmgr_common import AppResolver, appearance, icon_image  # noqa: E402
+from .appkit import AppTheme, JsonState, ToastMixin, appearance, shot_when_asked  # noqa: E402
+from .taskmgr_common import AppResolver, icon_image  # noqa: E402
 from .sidecollapse import SideCollapse  # noqa: E402
 from .taskmgr_perf import PerfPage  # noqa: E402
 from .taskmgr_procs import DetailsPage, ProcessesPage  # noqa: E402
@@ -123,51 +124,15 @@ button.perf-toggle:checked { background: alpha(@accent, 0.25); border-color: alp
 """
 
 
-def _load_css(a):
-    prelude = "".join(f"@define-color {k} {a[k]};\n" for k in ("accent", "bg", "surface", "fg"))
-    body = ""
-    for p in CSS_PATHS:
-        if os.path.exists(p):
-            with open(p, encoding="utf-8") as f:
-                body = f.read()
-            break
-    prov = Gtk.CssProvider()
-    try:
-        prov.load_from_data((prelude + body + TM_CSS).encode())
-    except GLib.Error as e:
-        dbg("작업 관리자 CSS 오류:", e)
-        return None
-    Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_USER)
-    from sekaishell import theme as _sekai_theme
-    _sekai_theme.apply_contrast_css()   # 대비 테마면 테두리·초점을 앱 CSS 위에
-    return prov
+_THEME = AppTheme("sekai-taskmgr", TM_CSS)
+_STATE = JsonState(STATE, "작업 관리자 상태")
 
 
-def _load_state():
-    try:
-        with open(STATE, encoding="utf-8") as f:
-            d = json.load(f)
-        return d if isinstance(d, dict) else {}
-    except (OSError, ValueError):
-        return {}
-
-
-def _save_state(d):
-    try:
-        os.makedirs(os.path.dirname(STATE), exist_ok=True)
-        tmp = f"{STATE}.{os.getpid()}.tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(d, f, ensure_ascii=False, indent=1)
-        os.replace(tmp, STATE)
-    except OSError as e:
-        dbg("작업 관리자 상태 저장 실패", e)
-
-
-class TaskManagerWindow(Gtk.Window):
+class TaskManagerWindow(ToastMixin, Gtk.Window):
     def __init__(self, start_page=None):
         super().__init__(title="작업 관리자")
         self.set_icon_name("utilities-system-monitor")
-        self.state = _load_state()
+        self.state = _STATE.load()
         w, h = self.state.get("size") or (1060, 700)
         self.set_default_size(max(720, int(w)), max(480, int(h)))
         # 최대화 여부는 "max" 로 — 옛 "maximized" 는 버린다: Hyprland sekai11 전에는 모든 창에 "최대화됨"이
@@ -180,7 +145,7 @@ class TaskManagerWindow(Gtk.Window):
         for c in ("settings-window", "tm-window"):
             self.get_style_context().add_class(c)
 
-        self._css = _load_css(appearance())
+        _THEME.load()
         self.snap = None
         self._nv_seen = False
         self.resolver = AppResolver()
@@ -249,7 +214,7 @@ class TaskManagerWindow(Gtk.Window):
         self.connect("key-press-event", self._on_key)
         self.connect("delete-event", self._on_close)
         self.connect("window-state-event", self._on_wstate)
-        self._watch_settings()
+        _THEME.follow(self._theme_changed)
 
         speed = self.state.get("speed", "normal")
         self.speed.set_active_id(speed if speed in {s[0] for s in SPEEDS} else "normal")
@@ -418,17 +383,6 @@ class TaskManagerWindow(Gtk.Window):
             D.hypr_request(f"/dispatch focuswindow address:{addr}")
         threading.Thread(target=work, daemon=True, name="taskmgr-focus").start()
 
-    def toast(self, text, secs=5):
-        self.toast_label.set_text(text)
-        self.toast_label.show()
-        if self._toast_src:
-            GLib.source_remove(self._toast_src)
-
-        def hide():
-            self._toast_src = 0
-            self.toast_label.hide()
-            return False
-        self._toast_src = GLib.timeout_add_seconds(secs, hide)
 
     # ── 새 작업 실행 ──
     def new_task(self):
@@ -481,35 +435,10 @@ class TaskManagerWindow(Gtk.Window):
         d.show_all()
 
     # ── 설정(색) 따라가기 ──
-    def _watch_settings(self):
-        """설정 앱이 settings.json 을 바꿔치기(원자적 저장)하므로 폴더를 본다"""
-        cfg_dir = os.path.expanduser("~/.config/sekai")
-        self._cfg_src = 0
-        try:
-            os.makedirs(cfg_dir, exist_ok=True)
-            self._cfg_mon = Gio.File.new_for_path(cfg_dir).monitor_directory(Gio.FileMonitorFlags.WATCH_MOVES, None)
-        except (GLib.Error, OSError) as e:
-            dbg("설정 폴더를 볼 수 없습니다:", e)
-            return
-
-        def changed(_m, f, other, _ev):
-            names = {x.get_basename() for x in (f, other) if x is not None}
-            if "settings.json" not in names:
-                return
-            if self._cfg_src:
-                GLib.source_remove(self._cfg_src)
-            self._cfg_src = GLib.timeout_add(200, self._reload_theme)
-        self._cfg_mon.connect("changed", changed)
-
-    def _reload_theme(self):
-        self._cfg_src = 0
-        a = appearance()
-        if self._css is not None:
-            Gtk.StyleContext.remove_provider_for_screen(Gdk.Screen.get_default(), self._css)
-        self._css = _load_css(a)
-        theme.apply_gtk_settings(Gtk.Settings.get_default(), a["mode"])
+    def _theme_changed(self, a):
+        """설정 앱에서 색·모드가 바뀌어 CSS 를 다시 얹은 뒤 — 이 앱이 더 할 일"""
         self.queue_draw()
-        return False
+
 
     # ── 키·닫기 ──
     def _on_key(self, _w, ev):
@@ -540,7 +469,7 @@ class TaskManagerWindow(Gtk.Window):
         if not self.state.get("max"):
             w, h = self.get_size()
             self.state["size"] = [w, h]
-        _save_state(self.state)
+        _STATE.save(self.state)
         if self.collector is not None:
             self.collector.stop()
             self.collector = None
@@ -603,20 +532,8 @@ class TaskManagerApp(Gtk.Application):
         self.add_window(win)
         win.show_all()
 
-        # 개발용: SEKAI_SHOT=/경로.png 이면 창을 찍고 종료한다 (설정 앱과 같은 방법)
-        shot = os.environ.get("SEKAI_SHOT")
-        if shot:
-            def grab():
-                gw = win.get_window()
-                if gw is not None:
-                    pb = Gdk.pixbuf_get_from_window(gw, 0, 0, gw.get_width(), gw.get_height())
-                    if pb:
-                        pb.savev(shot, "png", [], [])
-                        print("shot:", shot, gw.get_width(), "x", gw.get_height())
-                win._on_close()
-                self.quit()
-                return False
-            GLib.timeout_add(int(os.environ.get("SEKAI_SHOT_DELAY", "2500")), grab)
+        # 개발용: SEKAI_SHOT=/경로.png 이면 창을 찍고 종료한다 (sekaishell.appkit.shot_when_asked)
+        shot_when_asked(win, lambda: (win._on_close(), self.quit()))
         return 0
 
 

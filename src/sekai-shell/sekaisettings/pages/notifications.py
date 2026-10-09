@@ -6,7 +6,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk  # noqa: E402
 
-from ..widgets import Page, button, info, row, slider, spin, switch
+from ..widgets import Page, button, row, slider, spin, switch
 
 # 방해 금지는 '설정'이 아니라 '지금 상태'라서 패널과 같은 상태 파일을 쓴다.
 try:

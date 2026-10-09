@@ -39,10 +39,22 @@ import re
 import secrets
 import subprocess
 import sys
-import threading
 
 ENV = dict(os.environ, DEBIAN_FRONTEND="noninteractive", LANG="C.UTF-8", LC_ALL="C.UTF-8",
            PATH="/usr/sbin:/usr/bin:/sbin:/bin")
+
+# apt 진행 읽기는 같은 폴더의 sekai_apt (sekai-update·sekai-gpu 공용)
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import sekai_apt  # noqa: E402
+from sekai_apt import out  # noqa: E402,F401
+
+
+def run_status(cmd, lo, hi):
+    def dkms(line):
+        # DKMS 빌드는 수 분 걸리고 apt 진행률이 멈춰 보인다 → 알려 준다
+        if "Building module" in line or "Building for" in line:
+            out("PROGRESS", hi - 1, "커널 모듈을 만드는 중 (몇 분 걸립니다)")
+    return sekai_apt.run_status(cmd, lo, hi, ENV, on_line=dkms)
 APT_OPTS = ["-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold",
             "-o", "Dpkg::Use-Pty=0"]
 
@@ -80,17 +92,6 @@ NVIDIA_PKGS = ["nvidia-kernel-open-dkms", "nvidia-driver", "firmware-nvidia-gsp"
                "nvidia-settings"]
 MOK_KEY = "/var/lib/dkms/mok.key"
 MOK_PUB = "/var/lib/dkms/mok.pub"
-
-
-def out(*a):
-    # 설정 창을 닫으면 읽는 쪽이 사라진다 — 그래도 설치는 끝까지 가야 한다 (dpkg 가 반쯤 멈추면 안 됨)
-    try:
-        print(*a, flush=True)
-    except (BrokenPipeError, OSError):
-        try:
-            sys.stdout = open(os.devnull, "w")
-        except OSError:
-            pass
 
 
 def sh(cmd, **kw):
@@ -246,36 +247,6 @@ def report():
 
 
 # ── 설치 ──────────────────────────────────────────────────
-def run_status(cmd, lo, hi):
-    """apt 의 기계용 진행 정보(Status-Fd)를 읽어 PROGRESS 로 바꾼다 (sekai-update 와 같은 방식)"""
-    r, w = os.pipe()
-    p = subprocess.Popen(cmd + ["-o", f"APT::Status-Fd={w}"], env=ENV, pass_fds=(w,),
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    os.close(w)
-    log = []
-
-    def drain():
-        for line in p.stdout:
-            log.append(line.rstrip())
-            # DKMS 빌드는 수 분 걸리고 apt 진행률이 멈춰 보인다 → 알려 준다
-            if "Building module" in line or "Building for" in line:
-                out("PROGRESS", hi - 1, "커널 모듈을 만드는 중 (몇 분 걸립니다)")
-    t = threading.Thread(target=drain, daemon=True)
-    t.start()
-    with os.fdopen(r, "r", errors="replace") as f:
-        for line in f:
-            parts = line.rstrip("\n").split(":", 3)
-            if len(parts) == 4 and parts[0] in ("dlstatus", "pmstatus"):
-                try:
-                    pct = float(parts[2])
-                except ValueError:
-                    continue
-                what = "내려받는 중" if parts[0] == "dlstatus" else "설치하는 중"
-                name = parts[1] if parts[0] == "pmstatus" else ""
-                out("PROGRESS", int(lo + (hi - lo) * pct / 100), f"{what} {name}".strip())
-    p.wait()
-    t.join(2)
-    return p.returncode, log
 
 
 PROTECTED = re.compile(r"^(Remv|Purg) (sekai-|hyprland|greetd|linux-image-|shim-signed|grub-)")

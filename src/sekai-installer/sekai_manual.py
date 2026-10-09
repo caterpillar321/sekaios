@@ -395,7 +395,6 @@ class ManualPage(Gtk.Box):
     # ── 표 ──
     def _row(self, path, kind, o):
         m = self.model
-        d = m.disks[path]["d"]
         h = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         h.set_margin_start(18)
 

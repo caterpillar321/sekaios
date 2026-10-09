@@ -17,6 +17,7 @@ from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 from sekaishell import keybinds as kb
 from ..util import hyprctl
 from ..widgets import Page, button, row
+from ..widgets import parent_window as _parent, notice as _notice  # 공용 (카나데)
 
 CAPTURE_SUBMAP = "sekai-capture"
 _MOD_KEYS = {
@@ -39,11 +40,6 @@ def _mods(state):
     if state & (Gdk.ModifierType.SUPER_MASK | Gdk.ModifierType.MOD4_MASK):
         m.add("SUPER")
     return m
-
-
-def _parent(w):
-    top = w.get_toplevel()
-    return top if isinstance(top, Gtk.Window) and top.is_toplevel() else None
 
 
 def _confirm(parent, text, sub, ok_label):
@@ -531,13 +527,6 @@ class ShortcutsPage:
         else:
             sec["custom"][i] = entry
         self._apply(sec)
-
-
-def _notice(text):
-    l = Gtk.Label(label=text, xalign=0)
-    l.get_style_context().add_class("notice")
-    l.set_line_wrap(True)
-    return l
 
 
 def build(store):

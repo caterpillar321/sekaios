@@ -11,12 +11,13 @@
 썸네일(thumbs) · 압축(archive) · 속성(properties) 도 부품 — 없으면 그 명령만 꺼진다.
 """
 import os
-import subprocess
 
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
+
+from sekaishell.appkit import ToastMixin  # noqa: E402
 
 from . import opener  # noqa: E402
 from .addressbar import AddressBar  # noqa: E402
@@ -181,7 +182,8 @@ def _tab_attr(name):
     return property(lambda self: getattr(self.tab, name), lambda self, v: setattr(self.tab, name, v))
 
 
-class ExplorerWindow(Gtk.ApplicationWindow):
+class ExplorerWindow(ToastMixin, Gtk.ApplicationWindow):
+    TOAST_SECS = 4
     uri = _tab_attr("uri")
     history = _tab_attr("history")
     hpos = _tab_attr("hpos")
@@ -2262,7 +2264,6 @@ class ExplorerWindow(Gtk.ApplicationWindow):
         for a in apps[:12]:
             it = Gtk.MenuItem()
             box = Gtk.Box(spacing=10)
-            from .common import icons
             gi_ = a.get_icon() or Gio.ThemedIcon.new("application-x-executable")
             box.pack_start(Gtk.Image.new_from_pixbuf(icons().get(gi_, 16)), False, False, 0)
             box.pack_start(Gtk.Label(label=a.get_display_name() or a.get_name(), xalign=0), True, True, 0)
@@ -2651,17 +2652,6 @@ class ExplorerWindow(Gtk.ApplicationWindow):
     # ════════════════════════════════════════════════════════
     #  알림 · 닫기
     # ════════════════════════════════════════════════════════
-    def toast(self, text, secs=4):
-        self.toast_label.set_text(text)
-        self.toast_label.show()
-        if self._toast_src:
-            GLib.source_remove(self._toast_src)
-
-        def hide():
-            self._toast_src = 0
-            self.toast_label.hide()
-            return False
-        self._toast_src = GLib.timeout_add_seconds(secs, hide)
 
     def _on_wstate(self, _w, ev):
         # 최대화 단추 — 최대화된 창이면 "이전 크기로 복원" (윈도우처럼)

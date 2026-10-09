@@ -26,6 +26,7 @@ from gi.repository import Gio, GLib, Gtk, Pango  # noqa: E402
 
 from ..util import dbg, run_async
 from ..widgets import Page, button, icon_image, info, row
+from ..widgets import reveal as _reveal, clear as _clear  # 공용 (카나데)
 
 NORM = 65536                # PA_VOLUME_NORM — 100%
 SEND_GAP = 0.05             # 슬라이더 값은 초당 20번까지만 보낸다
@@ -566,22 +567,6 @@ class _Sender:
 
 
 # ── 화면 조각 ────────────────────────────────────────────────
-def _reveal(w, on):
-    """no_show_all 인 위젯 보이기/숨기기 — show_all 이 안쪽으로 내려가지 않으니 안쪽은 따로
-    (안쪽에서 따로 no_show_all 을 켠 위젯은 그대로 숨어 있다)"""
-    if on and not w.get_visible():
-        w.show()
-        if isinstance(w, Gtk.Container):
-            for c in w.get_children():
-                c.show_all()
-    elif not on and w.get_visible():
-        w.hide()
-
-
-def _clear(lb):
-    for c in lb.get_children():
-        lb.remove(c)
-        c.destroy()
 
 
 def _combo(tip=None, chars=26):

@@ -14,7 +14,6 @@ D-Bus: 세션 버스에서 org.freedesktop.FileManager1 을 가진다 — ShowFo
     설정 앱에서 모드·강조색을 바꾸면 곧바로 따라간다.
 창 상태(크기 · 탐색 창 폭 · 보기 · 정렬 · 숨긴 항목 · 열 폭)는 ~/.local/state/sekai/files.json (모든 창이 함께).
 """
-import json
 import os
 import sys
 
@@ -24,7 +23,7 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 
 from sekaishell import theme  # noqa: E402
-from sekaishell.taskmgr_common import appearance  # noqa: E402
+from sekaishell.appkit import AppTheme, JsonState, appearance  # noqa: E402
 
 from .common import SPECIAL_WORDS, archive, dbg, norm_uri, properties  # noqa: E402
 
@@ -277,64 +276,28 @@ label.fx-app-group { font-size: 9pt; font-weight: 600; color: @text2; padding: 1
 """
 
 
-def _load_css(a):
-    prelude = "".join(f"@define-color {k} {a[k]};\n" for k in ("accent", "bg", "surface", "fg"))
-    # 제목 표시줄(탭 줄)은 툴바보다 어둡게 — 고른 탭이 툴바와 이어져 보이게. 다크는 더, 라이트는 조금
-    k = 0.07 if a.get("mode") == "light" else 0.22
-    prelude += f"@define-color fx_strip mix(mix(@surface, @fg, 0.035), #000000, {k});\n"
-    body = ""
-    for p in CSS_PATHS:
-        if os.path.exists(p):
-            with open(p, encoding="utf-8") as f:
-                body = f.read()
-            break
-    prov = Gtk.CssProvider()
-    try:
-        prov.load_from_data((prelude + body + FILES_CSS).encode())
-    except GLib.Error as e:
-        print("[sekai-files] CSS 오류:", e.message, file=sys.stderr, flush=True)
-        return None
-    Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_USER)
-    from sekaishell import theme as _sekai_theme
-    _sekai_theme.apply_contrast_css()   # 대비 테마면 테두리·초점을 앱 CSS 위에
-    return prov
-
-
-def _load_state():
-    try:
-        with open(STATE, encoding="utf-8") as f:
-            d = json.load(f)
-        return d if isinstance(d, dict) else {}
-    except (OSError, ValueError):
-        return {}
-
-
-def _save_state(d):
-    try:
-        os.makedirs(os.path.dirname(STATE), exist_ok=True)
-        tmp = f"{STATE}.{os.getpid()}.tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(d, f, ensure_ascii=False, indent=1)
-        os.replace(tmp, STATE)
-    except (OSError, TypeError, ValueError) as e:
-        dbg("파일 탐색기 상태 저장 실패", e)
-
-
 USAGE = """사용법: sekai-files [경로|URI …]
        sekai-files --select 파일 …
        sekai-files --extract 압축파일 …
   경로 대신 '내 PC', '휴지통', '홈', computer:///, trash:/// 도 된다."""
 
 
+def _prelude(a):
+    # 제목 표시줄(탭 줄)은 툴바보다 어둡게 — 고른 탭이 툴바와 이어져 보이게. 다크는 더, 라이트는 조금
+    k = 0.07 if a.get("mode") == "light" else 0.22
+    return f"@define-color fx_strip mix(mix(@surface, @fg, 0.035), #000000, {k});\n"
+
+
+_THEME = AppTheme("sekai-files", FILES_CSS, prelude=_prelude)
+_STATE = JsonState(STATE, "파일 탐색기 상태")
+
+
 class FilesApp(Gtk.Application):
     def __init__(self):
         super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
-        self.state = _load_state()
+        self.state = _STATE.load()
         self.vm = None
         self.drag_uris = None
-        self._css = None
-        self._cfg_mon = None
-        self._cfg_src = 0
         self._fm_reg = 0
         self._fm_own = 0
         self._ops = 0
@@ -346,10 +309,10 @@ class FilesApp(Gtk.Application):
         Gtk.Application.do_startup(self)
         a = appearance()
         theme.apply_gtk_settings(Gtk.Settings.get_default(), a["mode"])
-        self._css = _load_css(a)
+        _THEME.load(a)
         Gtk.Window.set_default_icon_name("system-file-manager")
         self.vm = Gio.VolumeMonitor.get()
-        self._watch_settings()
+        _THEME.follow(self._theme_changed)
         self._icons_src = 0
         Gtk.IconTheme.get_default().connect("changed", self._icons_changed)
         self._export_fm1()
@@ -362,11 +325,11 @@ class FilesApp(Gtk.Application):
         if conn is not None and self._fm_reg:
             conn.unregister_object(self._fm_reg)
             self._fm_reg = 0
-        _save_state(self.state)
+        _STATE.save(self.state)
         Gtk.Application.do_shutdown(self)
 
     def save_state(self):
-        _save_state(self.state)
+        _STATE.save(self.state)
 
     # ── 명령줄 ──
     def do_command_line(self, cl):
@@ -570,35 +533,11 @@ class FilesApp(Gtk.Application):
         invocation.return_value(None)
 
     # ── 설정(색) 따라가기 ──
-    def _watch_settings(self):
-        """설정 앱이 settings.json 을 바꿔치기(원자적 저장)하므로 폴더를 본다"""
-        cfg_dir = os.path.expanduser("~/.config/sekai")
-        try:
-            os.makedirs(cfg_dir, exist_ok=True)
-            self._cfg_mon = Gio.File.new_for_path(cfg_dir).monitor_directory(Gio.FileMonitorFlags.WATCH_MOVES, None)
-        except (GLib.Error, OSError) as e:
-            dbg("설정 폴더를 볼 수 없습니다:", e)
-            return
-
-        def changed(_m, f, other, _ev):
-            names = {x.get_basename() for x in (f, other) if x is not None}
-            if "settings.json" not in names:
-                return
-            if self._cfg_src:
-                GLib.source_remove(self._cfg_src)
-            self._cfg_src = GLib.timeout_add(200, self._reload_theme)
-        self._cfg_mon.connect("changed", changed)
-
-    def _reload_theme(self):
-        self._cfg_src = 0
-        a = appearance()
-        if self._css is not None:
-            Gtk.StyleContext.remove_provider_for_screen(Gdk.Screen.get_default(), self._css)
-        self._css = _load_css(a)
-        theme.apply_gtk_settings(Gtk.Settings.get_default(), a["mode"])
+    def _theme_changed(self, a):
+        """설정 앱에서 색·모드가 바뀌어 CSS 를 다시 얹은 뒤 — 이 앱이 더 할 일"""
         for w in self.get_windows():
             w.queue_draw()
-        return False
+
 
     def _icons_changed(self, *_):
         """아이콘 테마가 바뀜 (다크 ↔ 라이트) — 목록의 그림을 새 테마로"""

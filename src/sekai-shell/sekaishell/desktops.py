@@ -83,7 +83,7 @@ def save(names, regen=True):
 def _regen_fragment():
     """다음 로그인(과 Hyprland 가 설정을 다시 읽을 때)에도 같게 — 조각 파일을 새로 쓴다"""
     try:
-        from sekaisettings.store import Store
+        from .store import Store
         Store().write_hypr_fragment()
     except Exception as e:
         dbg("[desktops] 조각 다시 쓰기 실패", e)

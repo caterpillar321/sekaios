@@ -223,7 +223,7 @@ def remember_user(name):
 
 
 # ── 자판 배열 — 윈도우처럼 고른 사람의 입력 배열로 ──
-#   설정 앱이 해상도와 함께 /var/lib/sekai/displays/<사람>.conf 에 게시한다 (sekaisettings.store.publish_display).
+#   설정 앱이 해상도와 함께 /var/lib/sekai/displays/<사람>.conf 에 게시한다 (sekaishell.store.publish_display).
 #   아무나 쓰는 폴더라 주인이 그 사람인 작은 일반 파일만 읽고, 값은 형식을 엄격히 검사한다.
 #   안 하면 설정에서 de·fr 배열로 바꾼 사람은 잠금 화면에선 풀리는 비밀번호가 로그인 화면에선 틀렸다(us 고정).
 DISPLAYS = "/var/lib/sekai/displays"

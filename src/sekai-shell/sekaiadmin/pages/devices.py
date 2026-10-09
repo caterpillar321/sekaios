@@ -21,7 +21,7 @@ import threading
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango  # noqa: E402
+from gi.repository import Gio, GLib, GObject, Gtk, Pango  # noqa: E402
 
 try:
     gi.require_version("GUdev", "1.0")
@@ -30,8 +30,9 @@ except (ValueError, ImportError):
     GUdev = None
 
 from .. import devinfo  # noqa: E402
-from ..common import (DetailGrid, NoticeBar, copy_text, gicon, key_is_menu, lookup_color,  # noqa: E402
+from ..common import (DetailGrid, NoticeBar, copy_text, gicon, lookup_color,  # noqa: E402
                       menu_item, mk_view, popup, scrolled)
+from sekaishell.taskmgr_common import RowMenuMixin  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 POLL_SECS = 3                 # GUdev 가 없을 때 /sys 를 견주는 간격
@@ -71,7 +72,7 @@ def _hex(rgba):
     return f"#{int(r * 255):02x}{int(g * 255):02x}{int(b * 255):02x}"
 
 
-class DevicesPage:
+class DevicesPage(RowMenuMixin):
     searchable = True
     search_hint = "장치 이름, ID, 드라이버로 검색"
 
@@ -812,21 +813,7 @@ class DevicesPage:
             tw("세부 정보를 클립보드에 복사했습니다", 3)
 
     # ── 메뉴·키 ──
-    def _on_press(self, v, ev):
-        if ev.type != Gdk.EventType.BUTTON_PRESS or ev.button != 3:
-            return False
-        hit = v.get_path_at_pos(int(ev.x), int(ev.y))
-        if hit is None:
-            return True
-        v.get_selection().select_path(hit[0])
-        self._menu(ev)
-        return True
 
-    def _on_key(self, _v, ev):
-        if key_is_menu(ev):
-            self._menu(ev)
-            return True
-        return False
 
     def _menu(self, ev):
         key = self._selected_key()

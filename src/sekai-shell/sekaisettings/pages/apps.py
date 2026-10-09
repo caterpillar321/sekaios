@@ -14,7 +14,7 @@ from gi.repository import Gtk, GLib  # noqa: E402
 from sekaishell import appmgr  # noqa: E402
 
 from ..util import LOCK_NOW, run, spawn
-from ..widgets import Page, button, combo, entry, icon_image, info, row
+from ..widgets import Page, button, combo, info, row
 
 TERMINALS = [("sekai-terminal", "SekaiOS 터미널 (자동)"), ("nenerobo", "Nenerobo"), ("kitty", "Kitty"),
              ("foot", "Foot"), ("xterm", "XTerm")]

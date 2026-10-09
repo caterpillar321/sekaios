@@ -14,9 +14,10 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 from sekaishell import dbg  # noqa: E402,F401
-from sekaishell.taskmgr_common import (FALLBACK_ICON, SortHeaders, appearance, cmp_num,  # noqa: E402,F401
-                                       cmp_text, confirm, icon_image, key_is_menu, lookup_color,
-                                       menu_item, notice, open_location, popup, text_column)
+from sekaishell.appkit import appearance  # noqa: E402,F401
+from sekaishell.taskmgr_common import (FALLBACK_ICON, SortHeaders, cmp_num, cmp_text, confirm,  # noqa: E402,F401
+                                       icon_image, key_is_menu, lookup_color, menu_item, notice,
+                                       open_location, popup, text_column)
 
 ME_UID = os.getuid()
 try:
@@ -265,6 +266,3 @@ def dbus_error_text(err):
     return msg or "실패했습니다"
 
 
-def main_idle(fn, *args):
-    """작업 스레드 → 메인 스레드 (한 번만)"""
-    GLib.idle_add(lambda: (fn(*args), False)[1])

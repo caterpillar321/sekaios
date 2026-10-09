@@ -26,7 +26,6 @@ import stat
 import struct
 import subprocess
 import sys
-import tempfile
 
 SCRUB_STATE = "/var/lib/sekai/scrub.json"
 MIN_SIZE = 64 * 1024 * 1024

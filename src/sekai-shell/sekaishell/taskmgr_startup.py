@@ -10,16 +10,16 @@ SekaiOS 세션이 직접 띄우는 것, NoDisplay=true(시스템 구성 요소),
 """
 import os
 import subprocess
-import tempfile
 import threading
 
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, Gio, GLib, GObject, Gtk  # noqa: E402
+from gi.repository import Gio, GLib, GObject, Gtk  # noqa: E402
 
+from .sysutil import atomic_write
 from . import autostart  # noqa: E402
-from .taskmgr_common import (FALLBACK_ICON, SortHeaders, key_is_menu, menu_item,  # noqa: E402
+from .taskmgr_common import (FALLBACK_ICON, RowMenuMixin, SortHeaders, menu_item,  # noqa: E402
                              notice, open_location, popup, text_column)
 
 OVERRIDE_KEY = "X-Sekai-Override"
@@ -81,22 +81,6 @@ def edit_keys(text, updates):
     return "\n".join(out) + "\n"
 
 
-def _write(path, text):
-    d = os.path.dirname(path)
-    os.makedirs(d, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=d, prefix="." + os.path.basename(path) + ".", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        raise
-
-
 def _read_text(path):
     with open(path, encoding="utf-8", errors="replace") as f:
         return f.read()
@@ -114,16 +98,16 @@ def set_enabled(item, on):
             upd = {"Hidden": "false"}
             if "X-GNOME-Autostart-enabled" in item["data"]:
                 upd["X-GNOME-Autostart-enabled"] = "true"
-            _write(upath, edit_keys(_read_text(upath), upd))
+            atomic_write(upath, edit_keys(_read_text(upath), upd))
             return
         # 시스템 항목 자체가 꺼져 있다 — 켠 덮어쓰기를 만든다
-        _write(upath, edit_keys(_read_text(item["sys"]), {"Hidden": "false", "X-GNOME-Autostart-enabled": "true",
+        atomic_write(upath, edit_keys(_read_text(item["sys"]), {"Hidden": "false", "X-GNOME-Autostart-enabled": "true",
                                                            OVERRIDE_KEY: "true"}))
     else:
         if item["user"]:
-            _write(upath, edit_keys(_read_text(upath), {"Hidden": "true"}))
+            atomic_write(upath, edit_keys(_read_text(upath), {"Hidden": "true"}))
         else:
-            _write(upath, edit_keys(_read_text(item["sys"]), {"Hidden": "true", OVERRIDE_KEY: "true"}))
+            atomic_write(upath, edit_keys(_read_text(item["sys"]), {"Hidden": "true", OVERRIDE_KEY: "true"}))
 
 
 def package_owners(paths):
@@ -160,7 +144,7 @@ def _gicon(name):
         return FALLBACK_ICON
 
 
-class StartupPage:
+class StartupPage(RowMenuMixin):
     id = "startup"
     title = "시작 앱"
     searchable = True
@@ -288,21 +272,6 @@ class StartupPage:
             notice(self.win, "바꾸지 못했습니다", str(e))
         self.reload()
 
-    def _on_key(self, _v, ev):
-        if key_is_menu(ev):
-            self._menu(ev)
-            return True
-        return False
-
-    def _on_press(self, v, ev):
-        if ev.type != Gdk.EventType.BUTTON_PRESS or ev.button != 3:
-            return False
-        hit = v.get_path_at_pos(int(ev.x), int(ev.y))
-        if hit is None:
-            return True
-        v.get_selection().select_path(hit[0])
-        self._menu(ev)
-        return True
 
     def _menu(self, ev):
         it = self.items.get(self._selected() or "")

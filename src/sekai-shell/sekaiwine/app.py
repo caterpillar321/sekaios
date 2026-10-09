@@ -12,10 +12,10 @@ import threading
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
+from gi.repository import Gio, GLib, Gtk  # noqa: E402
 
-from sekaishell import theme  # noqa: E402
-from sekaishell.taskmgr_common import appearance  # noqa: E402
+from sekaishell.ui import text_label  # noqa: E402
+from sekaishell.appkit import AppTheme  # noqa: E402
 from . import core  # noqa: E402
 
 APP_ID = "org.sekaios.WineOpen"
@@ -46,33 +46,7 @@ label.wo-progress-text { color: @text2; font-size: 9.75pt; }
 """
 
 
-def _load_css(a):
-    prelude = "".join(f"@define-color {k} {a[k]};\n" for k in ("accent", "bg", "surface", "fg"))
-    body = ""
-    for p in CSS_PATHS:
-        if os.path.exists(p):
-            with open(p, encoding="utf-8") as f:
-                body = f.read()
-            break
-    prov = Gtk.CssProvider()
-    try:
-        prov.load_from_data((prelude + body + CSS).encode())
-    except GLib.Error as e:
-        print("[sekai-wine] CSS 오류:", e.message, file=sys.stderr, flush=True)
-        return
-    Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_USER)
-    theme.apply_contrast_css()
-
-
-def _label(text="", cls=None, wrap=True):
-    lb = Gtk.Label(label=text, xalign=0)
-    if wrap:
-        lb.set_line_wrap(True)
-        lb.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
-        lb.set_max_width_chars(60)
-    if cls:
-        lb.get_style_context().add_class(cls)
-    return lb
+_label = text_label
 
 
 def _icon(icon, px):
@@ -93,6 +67,9 @@ def _human(n):
         if n < 1024 or u == "GB":
             return f"{n:.0f} {u}" if u == "B" else f"{n:.1f} {u}"
         n /= 1024
+
+
+_THEME = AppTheme("sekai-wine", CSS)
 
 
 class OpenWindow(Gtk.ApplicationWindow):
@@ -343,7 +320,8 @@ class WineOpen(Gtk.Application):
     def do_startup(self):
         Gtk.Application.do_startup(self)
         GLib.set_application_name(APP_NAME)
-        _load_css(appearance())
+        _THEME.reload()                                  # 설정 앱의 색·모드 — 바꾸면 곧바로 따라간다
+        _THEME.follow(lambda _a: [w.queue_draw() for w in self.get_windows()])
 
     def do_open(self, files, _n, _hint):
         for f in files:

@@ -34,6 +34,7 @@ for cand in (HERE, "/usr/lib/sekai-installer"):
         sys.path.insert(0, cand)
         break
 import sekai_manual  # noqa: E402
+from sekai_disk import disk_name  # noqa: E402  (sekai_manual 과 같은 폴더)
 
 BACKEND = "/usr/lib/sekai-installer/sekai-install-backend"
 PARTITION = "/usr/lib/sekai-installer/sekai-partition"
@@ -97,29 +98,6 @@ def disks():
             "parts": len(parts), "windows": windows, "linux": linux, "sekai": sekai,
         })
     return res
-
-
-def disk_name(d):
-    vendor = (d.get("vendor") or "").strip().rstrip(",").strip()
-    model = (d.get("model") or "").strip().replace("_", " ")
-    if vendor and model.lower().startswith(vendor.lower()):
-        vendor = ""                                  # "VMware, VMware Virtual S" → 한 번만
-    if vendor.upper() == "ATA":                      # SATA 디스크는 제조사 자리에 ATA 가 온다
-        vendor = ""
-    if re.fullmatch(r"0x[0-9a-fA-F]+", vendor):       # 가상 디스크(virtio)는 제조사 자리에 장치 번호(0x1af4)가 온다
-        vendor = ""
-    name = " ".join(x for x in (vendor, model) if x)
-    if name:
-        return name
-    # 모델 이름이 없다 — 연결 방식으로 (컴퓨터 관리 › 디스크 관리와 같은 이름)
-    tran = (d.get("tran") or "").lower()
-    if tran == "virtio" or d.get("name", "").startswith("vd"):
-        return "가상 디스크"
-    if tran == "nvme":
-        return "NVMe SSD"
-    if tran == "usb":
-        return "USB 드라이브" if d.get("rm") in (True, 1, "1") else "외장 디스크"
-    return "SSD" if d.get("rota") in (False, 0, "0") else "하드 디스크"
 
 
 def probe_layout():

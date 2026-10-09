@@ -13,20 +13,13 @@ import gi
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk  # noqa: E402
 
-SETTINGS = os.path.expanduser("~/.config/sekai/settings.json")
-
 
 def primary_name():
     """사용자가 고른 주 디스플레이 이름. 로그인 화면(_greetd)은 설정을 못 읽으므로
     sekai-greeter-session 이 넘겨주는 SEKAI_PRIMARY 를 쓴다."""
-    try:
-        with open(SETTINGS, encoding="utf-8") as f:
-            v = str((json.load(f).get("layout") or {}).get("primary") or "")
-            if v:
-                return v
-    except (OSError, ValueError, AttributeError):
-        pass
-    return os.environ.get("SEKAI_PRIMARY", "")
+    from . import config
+    v = str(config.settings("layout", "primary", "") or "")
+    return v or os.environ.get("SEKAI_PRIMARY", "")
 
 
 def _largest(hmons):
@@ -146,14 +139,14 @@ def publish_modes(hmons=None):
 
 
 def migrate_display_keys():
-    """예전 화면 설정(단자 이름)을 지금 꽂힌 모니터의 설정으로 옮긴다 (sekaisettings.store.migrate_display).
+    """예전 화면 설정(단자 이름)을 지금 꽂힌 모니터의 설정으로 옮긴다 (sekaishell.store.migrate_display).
     화면 설정을 윈도우처럼 모니터마다 기억하게 바꾼 뒤 처음 로그인할 때 한 번 일어난다 — 그 뒤엔 옮길 것이 없다"""
     if not os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
         return
     try:
         out = subprocess.run(["hyprctl", "-j", "monitors", "all"], capture_output=True, text=True, timeout=3).stdout
         mons = json.loads(out)
-        from sekaisettings.store import Store
+        from .store import Store
         s = Store()
         if isinstance(mons, list) and s.migrate_display(mons):
             s.save()

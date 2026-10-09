@@ -14,7 +14,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib, Pango  # noqa: E402
 
-from ..widgets import Page, button, combo, row, switch
+from ..widgets import Page, button, combo, row, switch, subsection
 
 HELPER = "/usr/libexec/sekai/sekai-restore"
 CACHE = "/var/lib/sekai/restore.json"
@@ -99,15 +99,7 @@ class RecoveryPage:
         self.body.show_all()
 
     def _sect(self, title=None):
-        if title:
-            l = Gtk.Label(label=title, xalign=0)
-            l.get_style_context().add_class("section-title")
-            self.body.pack_start(l, False, False, 0)
-        lb = Gtk.ListBox()
-        lb.set_selection_mode(Gtk.SelectionMode.NONE)
-        lb.get_style_context().add_class("section")
-        self.body.pack_start(lb, False, False, 0)
-        return lb
+        return subsection(self.body, title)
 
     def _notice(self, text):
         l = Gtk.Label(label=text, xalign=0)

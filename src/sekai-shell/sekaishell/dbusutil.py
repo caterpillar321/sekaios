@@ -81,22 +81,8 @@ def get_all(conn, service, path, iface, on_reply, timeout=3000):
          GLib.Variant("(s)", (iface,)), done, timeout)
 
 
-def get_prop(conn, service, path, iface, prop, on_reply, timeout=3000):
-    def done(out):
-        if out is None:
-            on_reply(None)
-            return
-        try:
-            on_reply(out.unpack()[0])
-        except Exception:
-            on_reply(None)
-
-    call(conn, service, path, "org.freedesktop.DBus.Properties", "Get",
-         GLib.Variant("(ss)", (iface, prop)), done, timeout)
-
-
 def subscribe(conn, sender, iface, signal, path, handler):
     """시그널 구독. handler(sender, path, signal, params_tuple)"""
     return conn.signal_subscribe(
         sender, iface, signal, path, None, Gio.DBusSignalFlags.NONE,
-        lambda c, snd, pth, ifc, sig, params: handler(snd, pth, sig, params.unpack()))
+        lambda _c, snd, pth, _ifc, sig, params: handler(snd, pth, sig, params.unpack()))

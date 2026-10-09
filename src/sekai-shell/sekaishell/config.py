@@ -1,6 +1,6 @@
 """설정/상태 파일 읽기.
 
-  ~/.config/sekai/settings.json      사용자가 설정 앱에서 바꾸는 값 (여기서는 읽기만)
+  ~/.config/sekai/settings.json      사용자가 설정 앱에서 바꾸는 값 (여기서는 읽기만 — 기본값은 sekaishell.store 의 것)
   ~/.local/state/sekai/notify.json   런타임 상태 (방해 금지 등). 여기서 읽고 쓴다.
 
 설정 앱과 같은 파일을 양쪽에서 쓰면 서로 덮어쓰므로,
@@ -9,20 +9,19 @@
 import json
 import os
 
-CFG = os.path.expanduser("~/.config/sekai/settings.json")
 STATE_DIR = os.path.expanduser("~/.local/state/sekai")
 STATE = os.path.join(STATE_DIR, "notify.json")
 
 
 def settings(section=None, key=None, default=None):
-    try:
-        with open(CFG, encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        data = {}
+    """설정 값 — 설정 저장소의 기본값까지 합친 것 (sekaishell.store.read). 파일에도 기본값에도 없으면 default"""
+    from .store import read                           # 저장소가 theme 을, theme 이 이 모듈을 부른다 — 쓸 때 부른다
+    data = read()
     if section is None:
         return data
-    sec = data.get(section) or {}
+    sec = data.get(section)
+    if not isinstance(sec, dict):
+        return default if key is not None else (sec if sec is not None else {})
     if key is None:
         return sec
     return sec.get(key, default)

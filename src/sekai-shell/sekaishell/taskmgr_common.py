@@ -1,45 +1,15 @@
 """작업 관리자 — 여러 탭이 함께 쓰는 GTK 도움 (색·아이콘·앱 이름·목록 열·대화상자)."""
 import os
-import re
 
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
-from . import config, theme  # noqa: E402
 from .appicon import app_gicon  # noqa: E402
+from .ui import icon_image  # noqa: E402,F401  (작업 관리자 탭들과 컴퓨터 관리가 여기서 가져간다)
 
-DEFAULT_ACCENT = "#39c5bb"
-_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 FALLBACK_ICON = Gio.ThemedIcon.new_with_default_fallbacks("application-x-executable")
-
-
-def appearance():
-    """settings.json 의 색 — 설정 앱 저장소와 같은 규칙(모드의 기본 묶음 위에, 올바른 #rrggbb 만)"""
-    a = config.settings("appearance")
-    a = a if isinstance(a, dict) else {}
-    mode = theme.mode_of(a)
-    out = {"mode": mode, "accent": DEFAULT_ACCENT}
-    out.update(theme.PALETTES[mode])
-    for k in ("accent", "bg", "surface", "fg"):
-        v = a.get(k)
-        if isinstance(v, str) and _HEX.match(v):
-            out[k] = v
-    return out
-
-
-def icon_image(names, size=16):
-    """후보 이름 중 테마에 있는 첫 아이콘"""
-    th = Gtk.IconTheme.get_default()
-    for n in [names] if isinstance(names, str) else names:
-        if n and th.has_icon(n):
-            img = Gtk.Image.new_from_icon_name(n, Gtk.IconSize.BUTTON)
-            img.set_pixel_size(size)
-            return img
-    img = Gtk.Image.new_from_icon_name("application-x-executable", Gtk.IconSize.BUTTON)
-    img.set_pixel_size(size)
-    return img
 
 
 def lookup_color(widget, name, fallback=(0.5, 0.5, 0.5, 1.0)):
@@ -333,3 +303,24 @@ def key_is_delete(ev):
 
 def key_is_menu(ev):
     return ev.keyval == Gdk.KEY_Menu or (ev.keyval == Gdk.KEY_F10 and ev.state & Gdk.ModifierType.SHIFT_MASK)
+
+
+class RowMenuMixin:
+    """목록(TreeView)에서 오른쪽 클릭·메뉴 키 → 그 줄을 고르고 self._menu(ev) — 작업 관리자·컴퓨터 관리의 목록들"""
+
+    def _on_press(self, v, ev):
+        if ev.type != Gdk.EventType.BUTTON_PRESS or ev.button != 3:
+            return False
+        hit = v.get_path_at_pos(int(ev.x), int(ev.y))
+        if hit is None:
+            return True
+        v.get_selection().select_path(hit[0])
+        v.set_cursor(hit[0], None, False)            # 키보드 초점도 그 줄로 (메뉴를 닫고 ↑↓ 하면 거기서부터)
+        self._menu(ev)
+        return True
+
+    def _on_key(self, _v, ev):
+        if key_is_menu(ev):
+            self._menu(ev)
+            return True
+        return False

@@ -442,8 +442,6 @@ class Catalog:
                 out.append(a)
         return out
 
-    def in_category(self, names):
-        return [a for a in self.apps if a.in_cats(names)]
 
     def apps_only(self):
         return [a for a in self.apps if not a.is_game]

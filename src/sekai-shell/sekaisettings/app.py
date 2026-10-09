@@ -9,7 +9,8 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk, Gio, GLib  # noqa: E402
 
-from .store import Store
+from sekaishell.appkit import shot_when_asked
+from sekaishell.store import Store
 from .util import dbg
 from .widgets import icon_image
 from sekaishell.sidecollapse import SideCollapse
@@ -483,20 +484,7 @@ class SettingsApp(Gtk.Application):
 
         # 개발용: SEKAI_SHOT=/경로.png 이면 창을 찍고 종료한다.
         #   (원격에서 화면을 직접 볼 수 없을 때 쓰려고 넣어 둔 것)
-        shot = os.environ.get("SEKAI_SHOT")
-        if shot:
-            delay = int(os.environ.get("SEKAI_SHOT_DELAY", "1500"))
-
-            def grab():
-                gw = win.get_window()
-                if gw is not None:
-                    pb = Gdk.pixbuf_get_from_window(gw, 0, 0, gw.get_width(), gw.get_height())
-                    if pb:
-                        pb.savev(shot, "png", [], [])
-                        print("shot:", shot, gw.get_width(), "x", gw.get_height())
-                self.quit()
-                return False
-            GLib.timeout_add(delay, grab)
+        shot_when_asked(win, self.quit, delay_ms=1500)
         return 0
 
 

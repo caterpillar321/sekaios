@@ -27,7 +27,8 @@ from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango, PangoCairo  # noqa: 
 
 from . import theme  # noqa: E402
 from .layer import WAYLAND, GtkLayerShell  # noqa: E402
-from .taskmgr_common import appearance  # noqa: E402
+from .appkit import appearance  # noqa: E402
+from .ui import icon_image  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CSS_PATHS = [os.path.join(HERE, "..", "settings.css"), "/usr/share/sekai-shell/settings.css"]
@@ -134,6 +135,9 @@ list.auth-accounts.single row, list.auth-accounts.single row:hover, list.auth-ac
 _prov = None
 
 
+def icon(names, size):
+    return icon_image(names, size)
+
 def load_style(extra=""):
     """모드·강조색을 새로 읽어 모양을 바꿔 끼운다 (창을 열 때마다). 읽은 appearance 를 돌려준다"""
     global _prov
@@ -196,27 +200,6 @@ def label(text="", cls=None, wrap=True, xalign=0.0, selectable=False):
     for c in ([cls] if isinstance(cls, str) else (cls or [])):
         lb.get_style_context().add_class(c)
     return lb
-
-
-def icon(names, size):
-    """후보 중 테마에 있는 첫 아이콘 (이름이나 파일 경로)"""
-    th = Gtk.IconTheme.get_default()
-    for n in [names] if isinstance(names, str) else names:
-        if not n:
-            continue
-        if os.path.isabs(n) and os.path.isfile(n):
-            try:
-                pb = GdkPixbuf.Pixbuf.new_from_file_at_size(n, size, size)
-                return Gtk.Image.new_from_pixbuf(pb)
-            except GLib.Error:
-                continue
-        if th.has_icon(n):
-            img = Gtk.Image.new_from_icon_name(n, Gtk.IconSize.DIALOG)
-            img.set_pixel_size(size)
-            return img
-    img = Gtk.Image.new_from_icon_name("application-x-executable", Gtk.IconSize.DIALOG)
-    img.set_pixel_size(size)
-    return img
 
 
 def color(widget, name, fallback=(0.22, 0.77, 0.73, 1.0)):
@@ -672,3 +655,18 @@ HANGUL = re.compile(r"[가-힣]")
 
 def is_korean(text):
     return bool(text and HANGUL.search(text))
+
+
+def run_agent(make_agent, log):
+    """인증 에이전트(polkit-agent · nm-agent)의 시작 — 화면·시스템 버스에 못 붙으면 이유를 남기고 1로 끝낸다.
+    make_agent() 가 만든 것의 exit_code 로 끝난다 (교체·충돌 등)"""
+    if not Gtk.init_check(sys.argv)[0]:
+        log("화면에 연결할 수 없습니다")
+        sys.exit(1)
+    try:
+        agent = make_agent()
+    except GLib.Error as e:
+        log("시스템 버스에 연결할 수 없습니다:", e.message)
+        sys.exit(1)
+    Gtk.main()
+    sys.exit(agent.exit_code)

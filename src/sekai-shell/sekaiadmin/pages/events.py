@@ -33,6 +33,7 @@ from gi.repository import Gdk, GLib, GObject, Gtk, Pango  # noqa: E402
 from ..common import (ME, ME_UID, DetailGrid, NoticeBar, SortHeaders, copy_text, first_line,  # noqa: E402
                       fmt_short_date, fmt_time, gicon, in_groups_now, is_admin, key_is_menu,
                       listed_in_group, menu_item, mk_view, popup, scrolled, text_column, user_name)
+from sekaishell.taskmgr_common import RowMenuMixin  # noqa: E402
 
 BATCH = 2000                 # 한 번에 읽는 기록 수
 FOLLOW_CAP = 20000           # 따라오다 이만큼 쌓이면 멈춘다 (기록을 쏟아 내는 프로그램이 있어도 창이 느려지지 않게)
@@ -214,7 +215,7 @@ C_TYPES = (int, GObject.Object, str, int, str, GObject.TYPE_INT64, str, str)
 V_ID, V_ICON, V_LABEL, V_TIP = range(4)
 
 
-class EventsPage:
+class EventsPage(RowMenuMixin):
     searchable = True
     search_hint = "메시지 또는 원본으로 검색 (불러온 기록 안에서)"
 
@@ -1090,15 +1091,6 @@ class EventsPage:
             return True
         return False
 
-    def _on_press(self, v, ev):
-        if ev.type != Gdk.EventType.BUTTON_PRESS or ev.button != 3:
-            return False
-        hit = v.get_path_at_pos(int(ev.x), int(ev.y))
-        if hit is None:
-            return True
-        v.get_selection().select_path(hit[0])
-        self._menu(ev)
-        return True
 
     def _menu(self, ev):
         e = self._selected()

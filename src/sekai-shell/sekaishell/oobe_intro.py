@@ -49,7 +49,6 @@ def _seg(t, a, b):
 def _star(cr, x, y, r, color, alpha):
     """네 갈래 별 (로고) + 번짐"""
     glow = r * 3.2
-    import cairo
     g = cairo.RadialGradient(x, y, 0, x, y, glow)
     g.add_color_stop_rgba(0, *color, 0.45 * alpha)
     g.add_color_stop_rgba(1, *color, 0)
@@ -186,7 +185,6 @@ class Intro(Gtk.DrawingArea):
         cx, cy = W / 2, H * 0.46
         fade_skip = 1.0 if self.skip_at is None else max(0.0, 1 - (t - self.skip_at) / 0.45)
         reveal = _ease(_seg(t, 4.7, 5.6))     # 빛이 걷히며 배경이 드러나는 정도
-        import cairo
 
         # 바탕 — 깊은 남색 어둠 (드러나는 동안 배경 그림 위로 옅어진다)
         if not self._prepared and self.bg_prepare is not None:

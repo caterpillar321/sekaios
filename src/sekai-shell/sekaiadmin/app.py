@@ -47,7 +47,6 @@ win 이 주는 것 (모두 메인 스레드에서 부른다 — 메인 스레드
     win.busy_changed()           .busy 를 바꾼 뒤
 공용 도움(목록 열·정렬·세부 칸·안내 막대·시각 표기·권한·D-Bus 오류 글)은 sekaiadmin/common.py.
 """
-import json
 import os
 import sys
 import threading
@@ -59,6 +58,8 @@ from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 
 from sekaishell import dbg, theme  # noqa: E402
 from sekaishell.sidecollapse import SideCollapse  # noqa: E402
+
+from sekaishell.appkit import AppTheme, JsonState, ToastMixin, shot_when_asked  # noqa: E402
 
 from .common import appearance, confirm, icon_image, notice  # noqa: E402
 from .pages import GROUPS, all_pages  # noqa: E402
@@ -170,46 +171,8 @@ treeview.adm-side:selected { background-color: alpha(@accent, 0.22); color: @fg;
 """
 
 
-def _load_css(a, extra=""):
-    prelude = "".join(f"@define-color {k} {a[k]};\n" for k in ("accent", "bg", "surface", "fg"))
-    body = ""
-    for p in CSS_PATHS:
-        if os.path.exists(p):
-            with open(p, encoding="utf-8") as f:
-                body = f.read()
-            break
-    prov = Gtk.CssProvider()
-    try:
-        prov.load_from_data((prelude + body + ADMIN_CSS + extra).encode())
-    except GLib.Error as e:
-        print("[sekai-admin] CSS 오류:", e.message, file=sys.stderr, flush=True)
-        if not extra:
-            return None
-        return _load_css(a)                       # 페이지가 더한 모양이 틀렸다 — 그것만 빼고
-    Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_USER)
-    from sekaishell import theme as _sekai_theme
-    _sekai_theme.apply_contrast_css()   # 대비 테마면 테두리·초점을 앱 CSS 위에
-    return prov
-
-
-def _load_state():
-    try:
-        with open(STATE, encoding="utf-8") as f:
-            d = json.load(f)
-        return d if isinstance(d, dict) else {}
-    except (OSError, ValueError):
-        return {}
-
-
-def _save_state(d):
-    try:
-        os.makedirs(os.path.dirname(STATE), exist_ok=True)
-        tmp = f"{STATE}.{os.getpid()}.tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(d, f, ensure_ascii=False, indent=1)
-        os.replace(tmp, STATE)
-    except (OSError, TypeError, ValueError) as e:
-        dbg("컴퓨터 관리 상태 저장 실패", e)
+_THEME = AppTheme("sekai-admin", ADMIN_CSS)   # 페이지들이 더하는 모양은 _THEME.extra
+_STATE = JsonState(STATE, "컴퓨터 관리 상태")
 
 
 class _ErrorPage:
@@ -230,11 +193,11 @@ class _ErrorPage:
         self.widget = box
 
 
-class AdminWindow(Gtk.Window):
+class AdminWindow(ToastMixin, Gtk.Window):
     def __init__(self, start=None, start_kw=None):
         super().__init__(title=TITLE)
         self.set_icon_name(APP_ICONS[0])
-        self.state = _load_state()
+        self.state = _STATE.load()
         w, h = self.state.get("size") or (1120, 740)
         self.set_default_size(max(760, int(w)), max(500, int(h)))
         # 최대화 여부는 "max" 로 — 옛 "maximized" 는 버린다: Hyprland sekai11 전에는 모든 창에 "최대화됨"이
@@ -248,8 +211,8 @@ class AdminWindow(Gtk.Window):
             self.get_style_context().add_class(c)
 
         self.specs = {p["id"]: p for p in all_pages()}
-        self._extra_css = "".join(p.get("css") or "" for p in self.specs.values())
-        self._css = _load_css(appearance(), self._extra_css)
+        _THEME.extra = "".join(p.get("css") or "" for p in self.specs.values())
+        _THEME.load()
         self.pages = {}                             # 만든 페이지 객체 (처음 열 때)
         self.current = None
         self._queries = {}                          # 페이지마다 검색어
@@ -315,7 +278,7 @@ class AdminWindow(Gtk.Window):
         self.connect("key-press-event", self._on_key)
         self.connect("delete-event", self._on_close)
         self.connect("window-state-event", self._on_wstate)
-        self._watch_settings()
+        _THEME.follow(lambda _a: self.queue_draw())
 
         first = start if start in self.specs else self.state.get("page")
         if first not in self.specs:
@@ -518,17 +481,6 @@ class AdminWindow(Gtk.Window):
             GLib.idle_add(lambda: (done(res, exc), False)[1])
         threading.Thread(target=go, daemon=True, name="sekai-admin-work").start()
 
-    def toast(self, text, secs=5):
-        self.toast_label.set_text(text)
-        self.toast_label.show()
-        if self._toast_src:
-            GLib.source_remove(self._toast_src)
-
-        def hide():
-            self._toast_src = 0
-            self.toast_label.hide()
-            return False
-        self._toast_src = GLib.timeout_add_seconds(secs, hide)
 
     def confirm(self, title, text, ok_label, on_ok):
         confirm(self, title, text, ok_label, on_ok)
@@ -560,35 +512,7 @@ class AdminWindow(Gtk.Window):
         return save
 
     # ── 설정(색) 따라가기 ──
-    def _watch_settings(self):
-        """설정 앱이 settings.json 을 바꿔치기(원자적 저장)하므로 폴더를 본다"""
-        cfg_dir = os.path.expanduser("~/.config/sekai")
-        self._cfg_src = 0
-        try:
-            os.makedirs(cfg_dir, exist_ok=True)
-            self._cfg_mon = Gio.File.new_for_path(cfg_dir).monitor_directory(Gio.FileMonitorFlags.WATCH_MOVES, None)
-        except (GLib.Error, OSError) as e:
-            dbg("설정 폴더를 볼 수 없습니다:", e)
-            return
 
-        def changed(_m, f, other, _ev):
-            names = {x.get_basename() for x in (f, other) if x is not None}
-            if "settings.json" not in names:
-                return
-            if self._cfg_src:
-                GLib.source_remove(self._cfg_src)
-            self._cfg_src = GLib.timeout_add(200, self._reload_theme)
-        self._cfg_mon.connect("changed", changed)
-
-    def _reload_theme(self):
-        self._cfg_src = 0
-        a = appearance()
-        if self._css is not None:
-            Gtk.StyleContext.remove_provider_for_screen(Gdk.Screen.get_default(), self._css)
-        self._css = _load_css(a, self._extra_css)
-        theme.apply_gtk_settings(Gtk.Settings.get_default(), a["mode"])
-        self.queue_draw()
-        return False
 
     # ── 키·닫기 ──
     def _on_key(self, _w, ev):
@@ -622,7 +546,7 @@ class AdminWindow(Gtk.Window):
         if not self.state.get("max"):
             w, h = self.get_size()
             self.state["size"] = [w, h]
-        _save_state(self.state)
+        _STATE.save(self.state)
         return False
 
 
@@ -658,20 +582,8 @@ class AdminApp(Gtk.Application):
         self.add_window(win)
         win.show_all()
 
-        # 개발용: SEKAI_SHOT=/경로.png 이면 창을 찍고 종료한다 (설정 앱·작업 관리자와 같은 방법)
-        shot = os.environ.get("SEKAI_SHOT")
-        if shot:
-            def grab():
-                gw = win.get_window()
-                if gw is not None:
-                    pb = Gdk.pixbuf_get_from_window(gw, 0, 0, gw.get_width(), gw.get_height())
-                    if pb:
-                        pb.savev(shot, "png", [], [])
-                        print("shot:", shot, gw.get_width(), "x", gw.get_height())
-                win._on_close()
-                self.quit()
-                return False
-            GLib.timeout_add(int(os.environ.get("SEKAI_SHOT_DELAY", "2500")), grab)
+        # 개발용: SEKAI_SHOT=/경로.png 이면 창을 찍고 종료한다 (sekaishell.appkit.shot_when_asked)
+        shot_when_asked(win, lambda: (win._on_close(), self.quit()))
         return 0
 
 

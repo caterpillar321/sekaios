@@ -105,11 +105,6 @@ class Pool:
             self._cv.notify()
         return job
 
-    def cancel_where(self, pred):
-        with self._cv:
-            for _p, _s, j in self._heap:
-                if pred(j):
-                    j.cancelled = True
 
     def _loop(self):
         while True:

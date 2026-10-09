@@ -4,11 +4,10 @@ import os
 
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GdkPixbuf, GLib  # noqa: E402
+from gi.repository import Gtk, GdkPixbuf  # noqa: E402
 
-from ..util import spawn
-from ..widgets import (Page, button, color_button, combo, entry, info, row,
-                       slider, spin, switch)
+from ..widgets import Page, button, color_button, combo, entry, row, slider, spin, switch
+from ..widgets import notice as _notice  # 공용 (카나데)
 
 WALL_DIRS = ["/usr/share/backgrounds/sekai", "/usr/share/backgrounds",
              os.path.expanduser("~/Pictures"), os.path.expanduser("~/그림")]
@@ -115,13 +114,6 @@ def build_wallpaper(store):
 def _label(text):
     l = Gtk.Label(label=text, xalign=0)
     l.get_style_context().add_class("section-title")
-    return l
-
-
-def _notice(text):
-    l = Gtk.Label(label=text, xalign=0)
-    l.get_style_context().add_class("notice")
-    l.set_line_wrap(True)
     return l
 
 

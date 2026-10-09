@@ -8,7 +8,7 @@
   🔋 85%  충전 중                ⚙
 
 › 를 누르면 같은 팝업 안에서 세부 보기 (Wi-Fi 네트워크 · 블루투스 장치 · 출력 장치).
-  회사·학교(802.1X) 네트워크와 숨겨진 네트워크는 설정 앱의 Wi-Fi 연결 창(sekaisettings.pages.network.WifiDialog)을
+  회사·학교(802.1X) 네트워크와 숨겨진 네트워크는 설정 앱과 같은 Wi-Fi 연결 창(sekaishell.wifidialog.WifiDialog)을
   이 패널 안에서 띄운다 — 다른 데스크톱의 nm-applet 에 맡기지 않는다.
 작업 표시줄 아이콘에 필요한 네트워크 상태는 NetworkManager 의 속성 바뀜 신호로 받는다 (묻기를 되풀이하지 않는다).
 나머지 조회(nmcli·wpctl·brightnessctl)는 팝업이 열려 있는 동안만, 기다리지 않고 —
@@ -28,7 +28,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk, Gio, GLib, Pango  # noqa: E402
 
-from . import config, dbg
+from . import config, dbg, nm, power, sysfs
 from . import layer as _layer
 from . import theme
 from .layer import GtkLayerShell
@@ -64,80 +64,6 @@ def spawn(argv):
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as e:
         dbg("실행 실패", argv, e)
-
-
-def _read(d, name):
-    try:
-        with open(os.path.join(d, name), encoding="utf-8", errors="replace") as f:
-            return f.read().strip()
-    except OSError:
-        return ""
-
-
-def _num(d, name):
-    try:
-        return float(_read(d, name))
-    except ValueError:
-        return 0.0
-
-
-def nm_fields(line):
-    """nmcli -t 한 줄 → 칸들. 값 안의 : 와 \\ 는 \\: \\\\ 로 이스케이프되어 온다 (SSID 에 : 가 들어갈 수 있다)"""
-    out, cur, esc = [], [], False
-    for ch in line:
-        if esc:
-            cur.append(ch)
-            esc = False
-        elif ch == "\\":
-            esc = True
-        elif ch == ":":
-            out.append("".join(cur))
-            cur = []
-        else:
-            cur.append(ch)
-    out.append("".join(cur))
-    return out
-
-
-def parse_devices(text):
-    """nmcli -t -f DEVICE,TYPE,STATE,CONNECTION device → [{dev, type, state, conn}]"""
-    out = []
-    for line in (text or "").splitlines():
-        f = nm_fields(line)
-        if len(f) >= 4 and f[1] != "loopback":
-            out.append({"dev": f[0], "type": f[1], "state": f[2], "conn": f[3]})
-    return out
-
-
-def parse_wifi(text):
-    """nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY device wifi list → SSID 마다 하나 (가장 센 것),
-    연결된 것 먼저, 그다음 신호 센 순서. 숨은 SSID(빈 이름)는 뺀다"""
-    nets = {}
-    for line in (text or "").splitlines():
-        f = nm_fields(line)
-        if len(f) < 4 or not f[1]:
-            continue
-        try:
-            sig = int(f[2])
-        except ValueError:
-            sig = 0
-        sec = f[3].strip()
-        sec = "" if sec in ("--", "") else sec
-        active = f[0].strip() == "*"
-        cur = nets.get(f[1])
-        if cur is None:
-            nets[f[1]] = {"ssid": f[1], "signal": sig, "sec": sec, "active": active}
-        else:
-            cur["active"] = cur["active"] or active
-            if sig > cur["signal"]:
-                cur["signal"], cur["sec"] = sig, sec
-    return sorted(nets.values(), key=lambda n: (not n["active"], -n["signal"], n["ssid"].lower()))
-
-
-def conn_label(name):
-    """NetworkManager 가 스스로 만든 프로필 이름("Wired connection 1")은 우리 말로 보인다 (설정 앱과 같게)"""
-    m = re.fullmatch(r"Wired connection (\d+)", name or "")
-    return f"유선 연결 {m.group(1)}" if m else (name or "")
 
 
 def signal_level(strength):
@@ -200,95 +126,6 @@ def sys_has_wifi():
         return any(os.path.isdir(f"/sys/class/net/{n}/wireless") for n in os.listdir("/sys/class/net"))
     except OSError:
         return False
-
-
-def _power_dir():
-    from .power import supply_dir                       # 시험(가짜 배터리)이면 그쪽
-    return supply_dir()
-
-
-def read_battery(base="/sys/class/power_supply"):
-    """노트북 배터리 → {"pct", "state", "secs"} 또는 None.
-    state: charging · discharging · full · plugged(연결됐지만 충전 안 함). secs: 남은/완충까지 시간(모르면 0).
-    마우스·키보드처럼 기기에 딸린 배터리(scope=Device)는 뺀다"""
-    try:
-        names = sorted(os.listdir(base))
-    except OSError:
-        return None
-    now = full = rate = 0.0
-    caps, states, ac, found = [], [], False, False
-    for n in names:
-        d = os.path.join(base, n)
-        typ = _read(d, "type")
-        if typ == "Mains":
-            ac = ac or _read(d, "online") == "1"
-            continue
-        if typ != "Battery" or _read(d, "scope") == "Device" or _read(d, "present") == "0":
-            continue
-        found = True
-        states.append(_read(d, "status"))
-        c = _read(d, "capacity")
-        if c.isdigit():
-            caps.append(int(c))
-        # 에너지(µWh·µW)가 있으면 그것을, 없으면 전하(µAh·µA) — 짝을 맞춰야 시간이 맞다
-        if _read(d, "energy_full"):
-            now, full, rate = now + _num(d, "energy_now"), full + _num(d, "energy_full"), rate + abs(_num(d, "power_now"))
-        elif _read(d, "charge_full"):
-            now, full, rate = now + _num(d, "charge_now"), full + _num(d, "charge_full"), rate + abs(_num(d, "current_now"))
-    if not found:
-        return None
-    if full > 0:
-        pct = round(100 * now / full)
-    elif caps:
-        pct = round(sum(caps) / len(caps))
-    else:
-        pct = 0
-    pct = max(0, min(100, pct))
-    if "Charging" in states:
-        state = "charging"
-    elif states and all(s == "Full" for s in states):
-        state = "full"
-    elif "Discharging" in states:
-        state = "discharging"
-    else:
-        state = "plugged" if ac else "discharging"       # Not charging · Unknown
-    secs = 0
-    if rate > 0 and full > 0:
-        if state == "charging":
-            secs = int((full - now) / rate * 3600)
-        elif state == "discharging":
-            secs = int(now / rate * 3600)
-    if secs > 48 * 3600:
-        secs = 0                                          # 방금 뽑았을 때 등 — 믿을 수 없는 값
-    return {"pct": pct, "state": state, "secs": max(0, secs)}
-
-
-def _duration(secs):
-    h, m = secs // 3600, (secs % 3600) // 60
-    if h:
-        return f"약 {h}시간 {m}분" if m else f"약 {h}시간"
-    return f"약 {max(1, m)}분"
-
-
-def battery_text(b):
-    """(아이콘 후보들, 한 줄 설명)"""
-    pct, st = b["pct"], b["state"]
-    lvl = min(100, int(round(pct / 10.0)) * 10)
-    if st == "full" or (st == "plugged" and pct >= 95):
-        icons = ["battery-level-100-charged-symbolic", "battery-full-charged-symbolic", "battery-full-symbolic"]
-        text = "완전히 충전됨" if st == "full" else "전원 연결됨"
-    elif st in ("charging", "plugged"):
-        icons = [f"battery-level-{lvl}-charging-symbolic", "battery-good-charging-symbolic", "battery-symbolic"]
-        text = "충전 중" if st == "charging" else "전원 연결됨"
-        if st == "charging" and b["secs"]:
-            text += f" · {_duration(b['secs'])} 후 완충"
-    else:
-        rough = ("battery-empty-symbolic" if pct < 5 else "battery-caution-symbolic" if pct < 20
-                 else "battery-low-symbolic" if pct < 40 else "battery-good-symbolic" if pct < 80
-                 else "battery-full-symbolic")
-        icons = [f"battery-level-{lvl}-symbolic", rough, "battery-symbolic"]
-        text = f"{_duration(b['secs'])} 남음" if b["secs"] else "배터리 사용 중"
-    return icons, text
 
 
 # ───────────────────────────────────────────────────────────────
@@ -371,7 +208,7 @@ class Rfkill:
                 idx = int(n.replace("rfkill", ""))
             except ValueError:
                 continue
-            devs[idx] = (RF_TYPES.get(_read(d, "type"), 0), _read(d, "soft") == "1", _read(d, "hard") == "1")
+            devs[idx] = (RF_TYPES.get(sysfs.read(d, "type"), 0), sysfs.read(d, "soft") == "1", sysfs.read(d, "hard") == "1")
         changed = devs != self.devs
         self.devs = devs
         return changed
@@ -552,7 +389,7 @@ def net_icon(ns, airplane, has_wifi):
             icons = ["network-vpn-symbolic", "network-wired-symbolic"]
         else:
             icons = (["network-wired-no-route-symbolic"] if limited else []) + ["network-wired-symbolic"]
-        name = conn_label(ns.name) or ("Wi-Fi" if ns.kind == "wifi" else "이더넷")
+        name = nm.conn_label(ns.name) or ("Wi-Fi" if ns.kind == "wifi" else "이더넷")
         return icons, f"{name}\n" + ("인터넷에 연결되지 않음" if limited else "인터넷 액세스")
     if has_wifi and not ns.wifi_enabled:
         return (["network-wireless-disabled-symbolic", "network-wireless-offline-symbolic", "network-offline-symbolic"],
@@ -569,89 +406,23 @@ def net_icon(ns, airplane, has_wifi):
 NEED_PW = "need-password"
 
 
-def _nmcli(argv, timeout):
-    """(작업 스레드) nmcli 실행 → None(성공) 또는 오류 한 줄.
-    오류 문구로 "암호가 필요함"을 알아보므로 영어(C.UTF-8)로 — 한국어 번역이 깔려 있으면 문구가 바뀐다"""
-    try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
-                           env=dict(os.environ, LC_ALL="C.UTF-8", LANG="C.UTF-8"))
-    except subprocess.TimeoutExpired:
-        return "시간이 초과되었습니다"
-    except OSError as e:
-        return str(e)
-    if r.returncode == 0:
-        return None
-    lines = (r.stderr or r.stdout).strip().splitlines()
-    return lines[-1] if lines else "알 수 없는 오류"
-
-
-def _secrets_error(err):
-    return "Secrets were required" in err or "802-11-wireless-security" in err or "802.1X" in err
-
-
-def is_enterprise(sec):
-    """회사·학교 네트워크 (WPA2/WPA3-Enterprise, 802.1X) — 암호 하나가 아니라 계정으로 로그인한다"""
-    return "802.1X" in (sec or "").upper()
-
-
 def needs_key(sec):
     """암호를 물어야 하는 보안 — 개방과 OWE(보안 개방)는 암호가 없다"""
     return bool(sec) and sec.strip().upper() != "OWE"
 
 
-def _friendly(err):
-    if err is None or err == NEED_PW:
-        return err
-    if _secrets_error(err):
-        return "암호가 맞지 않습니다"
-    if "No network with SSID" in err:
-        return "네트워크를 찾을 수 없습니다"
-    return re.sub(r"^Error:\s*", "", err)
-
-
-def saved_wifi_uuid(ssid):
-    """(작업 스레드) 이 SSID 의 저장된 프로필 — 있으면 UUID. 프로필 이름이 SSID 와 다를 수 있어 SSID 를 직접 본다"""
-    try:
-        out = subprocess.run(["nmcli", "-t", "-f", "UUID,TYPE", "connection", "show"],
-                             capture_output=True, text=True, timeout=8).stdout
-    except (OSError, subprocess.SubprocessError):
-        return None
-    for line in out.splitlines():
-        f = nm_fields(line)
-        if len(f) < 2 or f[1] != "802-11-wireless":
-            continue
-        try:
-            got = subprocess.run(["nmcli", "-g", "802-11-wireless.ssid", "connection", "show", "uuid", f[0]],
-                                 capture_output=True, text=True, timeout=8).stdout.rstrip("\n")
-        except (OSError, subprocess.SubprocessError):
-            continue
-        if re.sub(r"\\(.)", r"\1", got) == ssid:     # -g 도 : 와 \ 를 이스케이프한다
-            return f[0]
-    return None
-
-
 def wifi_connect(ssid, sec, pw, dev):
     """(작업 스레드) Wi-Fi 연결 → None(성공) · NEED_PW(암호를 물어야 한다) · 오류 한 줄.
-    암호는 명령줄에 넣지 않는다 — 설정 앱의 wifi_connect_secret (메모리 파일 passwd-file) 을 그대로 쓴다.
+    nmcli 처리는 설정 › 네트워크와 같은 sekaishell.nm — 암호는 명령줄 대신 메모리 파일(passwd-file)로 넘긴다.
     저장된 프로필이 있으면 그것으로 (암호를 다시 묻지 않는다). 새 보안 네트워크에 암호 없이 nmcli 로
     연결하면 비밀 에이전트(nm-agent)가 따로 창을 띄우므로 먼저 프로필을 찾아 본다."""
     if pw is not None:
-        try:
-            from sekaisettings.pages.network import wifi_connect_secret
-        except Exception as e:                            # 설정 앱이 없는 설치본
-            dbg("wifi_connect_secret 를 가져오지 못함", e)
-            return "설정 앱의 네트워크 페이지에서 연결해 주세요"
-        return _friendly(wifi_connect_secret(ssid, sec, pw, dev))
+        return nm.wifi_connect_secret(ssid, sec, pw, dev)
     if needs_key(sec):
-        uuid = saved_wifi_uuid(ssid)
-        if uuid is None:
-            return NEED_PW
-        err = _nmcli(["nmcli", "-w", "30", "connection", "up", "uuid", uuid], 45)
-        return NEED_PW if err and _secrets_error(err) else _friendly(err)
-    argv = ["nmcli", "-w", "30", "device", "wifi", "connect", ssid]
-    if dev:
-        argv += ["ifname", dev]
-    return _friendly(_nmcli(argv, 45))
+        state, err = nm.wifi_up_saved(ssid)
+        return NEED_PW if state in ("none", "secrets") else (None if state == "ok" else err)
+    ok, _out, err = nm._nmrun(["-w", "30", "device", "wifi", "connect", ssid] + (["ifname", dev] if dev else []), 60)
+    return None if ok else nm.nm_error(err, "연결하지 못했습니다")
 
 
 # ───────────────────────────────────────────────────────────────
@@ -1044,7 +815,7 @@ class StatusButton(Gtk.Button):
         if b is None:
             self.bat.hide()
             return
-        icons, text = battery_text(b)
+        icons, text = power.battery_text(b)
         set_icon(self.bat, icons)
         self.bat.set_tooltip_text(f"배터리 {b['pct']}%\n{text}")
         self.bat.show()
@@ -1083,7 +854,7 @@ class QuickSettings(PanelPopup):
         self._wifi_scan_busy = False
         self._dark_busy = False
         self._air = bool(config.state("airplane", False))
-        self._battery = read_battery(_power_dir())
+        self._battery = power.battery()
         self._backlight = has_backlight()
         self._has_wpctl = shutil.which("wpctl") is not None
         self._can_dark = self._settings_available()
@@ -1267,7 +1038,7 @@ class QuickSettings(PanelPopup):
             self.t_dnd.set_on(self.noti.dnd)
 
     def _battery_tick(self):
-        self._battery = read_battery(_power_dir())
+        self._battery = power.battery()
         for b in self._buttons:
             b.show_battery(self._battery)
         return True
@@ -1441,7 +1212,7 @@ class QuickSettings(PanelPopup):
         self.t_wired.set_icon(["network-wired-symbolic"] if wired_up else
                               ["network-wired-disconnected-symbolic", "network-wired-symbolic"])
         self.t_wired.set_label("이더넷" if wired_up else "연결 안 됨",
-                               (f"이더넷 — {conn_label(wconn['conn'])}" if wconn else "이더넷") + "\n누르면 네트워크 설정"
+                               (f"이더넷 — {nm.conn_label(wconn['conn'])}" if wconn else "이더넷") + "\n누르면 네트워크 설정"
                                if wired_up else "케이블이 연결되지 않았습니다\n누르면 네트워크 설정")
 
         st = self._bt_state()
@@ -1481,7 +1252,7 @@ class QuickSettings(PanelPopup):
         b = self._battery
         self.bat_box.set_visible(b is not None)
         if b is not None:
-            icons, text = battery_text(b)
+            icons, text = power.battery_text(b)
             set_icon(self.bat_img, icons)
             self.bat_pct.set_text(f"{b['pct']}%")
             self.bat_state.set_text(text)
@@ -1630,7 +1401,7 @@ class QuickSettings(PanelPopup):
                 return
             if self._open_row is not None or self._wifi_busy:
                 return                            # 펼친 줄(암호 입력 중)을 지우지 않는다
-            self._fill_wifi(parse_wifi(out))
+            self._fill_wifi(nm.parse_wifi(out))
         self.run(["nmcli", "-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list",
                   "--rescan", "yes" if rescan else "no"], done, secs=20 if rescan else 6, capture=True)
 
@@ -1675,7 +1446,7 @@ class QuickSettings(PanelPopup):
             self._wifi_connect(net, ui["ui"], pw)
         # 회사·학교 네트워크는 암호 칸 대신 로그인 창 (저장된 프로필이 있으면 그것으로 먼저 연결해 본다)
         ui["ui"] = _RowUI(act, "연결 끊기" if net["active"] else "연결", not net["active"], go,
-                          password=needs_key(net["sec"]) and not is_enterprise(net["sec"]) and not net["active"])
+                          password=needs_key(net["sec"]) and not nm.is_enterprise(net["sec"]) and not net["active"])
 
     def _wifi_connect(self, net, ui, pw=None):
         self._wifi_busy = True
@@ -1693,23 +1464,18 @@ class QuickSettings(PanelPopup):
         threading.Thread(target=work, daemon=True).start()
 
     def _wifi_dialog(self, net):
-        """회사·학교 네트워크 로그인(net) · 숨겨진 네트워크 연결(None) — 설정 앱의 Wi-Fi 연결 창을 이 패널에서
+        """회사·학교 네트워크 로그인(net) · 숨겨진 네트워크 연결(None) — 설정 앱과 같은 Wi-Fi 연결 창을 이 패널에서
         띄운다. 팝업은 닫는다 (창이 키보드를 받아야 하고, 팝업 밖을 누르면 어차피 닫힌다)"""
+        from .wifidialog import WifiDialog                # 쓸 때만 불러온다 (작업 표시줄 시작을 가볍게)
         wd = self._wifi_dev()
         dev = wd["dev"] if wd else None
         self.close()
-        try:
-            from sekaisettings.pages.network import WifiDialog
-        except Exception as e:                            # 설정 앱이 없는 설치본
-            dbg("WifiDialog 를 가져오지 못함", e)
-            self.open_settings("network")
-            return
         WifiDialog(None, net["ssid"] if net else None, dev, security="eap" if net else None)
 
     def _wifi_done(self, ui, err, had_pw, net=None):
         self._wifi_busy = False
         ui.busy(False)
-        if err == NEED_PW and net is not None and is_enterprise(net["sec"]):
+        if err == NEED_PW and net is not None and nm.is_enterprise(net["sec"]):
             self._wifi_dialog(net)
         elif err == NEED_PW:
             ui.set_status("네트워크 보안 키를 입력하세요")
@@ -1750,7 +1516,7 @@ class QuickSettings(PanelPopup):
         def done(out):
             self._dev_busy = False
             if out is not None:
-                self._devs = parse_devices(out)
+                self._devs = nm.parse_devices(out)
             if self.get_visible():
                 self._refresh()
         self.run(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device"], done, secs=5, capture=True)
@@ -1883,7 +1649,7 @@ class QuickSettings(PanelPopup):
 
         def work():
             try:
-                from sekaisettings.store import Store
+                from .store import Store
                 Store().set_mode(mode)
             except Exception as e:
                 dbg("다크 모드 바꾸기 실패", e)

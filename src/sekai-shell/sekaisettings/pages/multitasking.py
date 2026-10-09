@@ -12,6 +12,7 @@ from gi.repository import GLib, Gtk  # noqa: E402
 from sekaishell import desktops
 from sekaishell import keybinds as kb
 from ..widgets import Page, button, combo, row
+from ..widgets import notice as _notice  # 공용 (카나데)
 
 WHICH = [("current", "지금 사용 중인 데스크톱만"), ("all", "모든 데스크톱")]
 # 이 페이지에 알려 줄 단축키 (hyprland.conf 의 기본 조합 = 항목 이름)
@@ -156,13 +157,6 @@ class MultitaskingPage:
 def _value(text):
     l = Gtk.Label(label=text)
     l.get_style_context().add_class("row-value")
-    return l
-
-
-def _notice(text):
-    l = Gtk.Label(label=text, xalign=0)
-    l.get_style_context().add_class("notice")
-    l.set_line_wrap(True)
     return l
 
 

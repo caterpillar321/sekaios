@@ -11,7 +11,6 @@
 파일을 바꾸는 일(회전 저장·이름 바꾸기·삭제·다른 이름으로 저장·배경 설정)은 모두 한 줄로 선 작업 스레드(io)에서
 차례로 한다 — 회전을 저장하는 중에 이름을 바꾸거나 지우더라도 순서가 꼬이지 않게.
 """
-import json
 import os
 import time
 
@@ -21,6 +20,9 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
+from sekaishell.ui import icon_image  # noqa: E402
+
+from sekaishell.appkit import JsonState, ToastMixin  # noqa: E402
 from sekaishell import dbg  # noqa: E402
 from sekaishell.taskmgr_common import open_location as show_in_file_manager  # noqa: E402
 
@@ -30,7 +32,7 @@ from .imageio import ROTATE_SAVE, Cancelled, error_text, ext_of  # noqa: E402
 
 TITLE = "사진"
 APP_ICONS = ["multimedia-photo-viewer", "image-viewer", "org.gnome.eog", "eog", "image-x-generic"]
-STATE = os.path.expanduser("~/.local/state/sekai/photos.json")
+STATE = JsonState(os.path.expanduser("~/.local/state/sekai/photos.json"), "사진 앱 상태")
 CACHE_BYTES = 768 << 20         # 미리 읽어 둔 그림이 이보다 크면 먼 것부터 버린다
 SLIDE_SECS = 3
 HIDE_MS = 2200                  # 마우스를 멈추고 이만큼 뒤에 ‹ › 와 (전체 화면의) 도구 모음을 숨긴다
@@ -48,6 +50,9 @@ ZOOM_CHOICES = [0.25, 0.5, 0.75, 1.5, 2.0, 4.0, 8.0]
 
 
 # ── 작은 도움 ────────────────────────────────────────────────
+def icon(names, size=16):
+    return icon_image(names, size, fallback="image-missing")
+
 def fmt_time(ts):
     """윈도우 한국어 표기 — 2026-09-25 오후 3:21"""
     t = time.localtime(ts)
@@ -64,18 +69,6 @@ def fmt_bytes(n):
         if n < 1024 or unit == "TB":
             return f"{n:.1f} {unit}" if n < 100 else f"{n:.0f} {unit}"
     return ""
-
-
-def icon(names, size=16):
-    th = Gtk.IconTheme.get_default()
-    for n in [names] if isinstance(names, str) else names:
-        if n and th.has_icon(n):
-            img = Gtk.Image.new_from_icon_name(n, Gtk.IconSize.BUTTON)
-            img.set_pixel_size(size)
-            return img
-    img = Gtk.Image.new_from_icon_name("image-missing", Gtk.IconSize.BUTTON)
-    img.set_pixel_size(size)
-    return img
 
 
 def app_icon_name():
@@ -99,26 +92,6 @@ def rename_error(exc):
         if exc.code == Gio.IOErrorEnum.FILENAME_TOO_LONG:
             return "파일 이름이 너무 깁니다."
     return error_text(exc)
-
-
-def load_state():
-    try:
-        with open(STATE, encoding="utf-8") as f:
-            d = json.load(f)
-        return d if isinstance(d, dict) else {}
-    except (OSError, ValueError):
-        return {}
-
-
-def save_state(d):
-    try:
-        os.makedirs(os.path.dirname(STATE), exist_ok=True)
-        tmp = f"{STATE}.{os.getpid()}.tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(d, f, ensure_ascii=False, indent=1)
-        os.replace(tmp, STATE)
-    except (OSError, TypeError, ValueError) as e:
-        dbg("사진 앱 상태 저장 실패", e)
 
 
 def _menu_item(menu, label, cb, accel=None):
@@ -160,12 +133,13 @@ def _screen_room():
         return 1100, 760
 
 
-class PhotosWindow(Gtk.ApplicationWindow):
+class PhotosWindow(ToastMixin, Gtk.ApplicationWindow):
+    TOAST_SECS = 4
     def __init__(self, app, pools):
         super().__init__(application=app, title=TITLE)
         self.loader, self.render, self.io = pools
         self.set_icon_name(app_icon_name())
-        self.state = load_state()
+        self.state = STATE.load()
         w, h = self.state.get("size") or (1100, 760)
         try:
             w, h = int(w), int(h)
@@ -873,17 +847,6 @@ class PhotosWindow(Gtk.ApplicationWindow):
         self.spinner.stop()
         self.spinner.hide()
 
-    def toast(self, text, secs=4):
-        self.toast_label.set_text(text)
-        self.toast_label.show()
-        if self._toast_src:
-            GLib.source_remove(self._toast_src)
-
-        def hide():
-            self._toast_src = 0
-            self.toast_label.hide()
-            return False
-        self._toast_src = GLib.timeout_add_seconds(secs, hide)
 
     # ── ‹ › 와 전체 화면 도구 모음 숨기기 ───────────────────
     def _activity(self):
@@ -1412,7 +1375,7 @@ class PhotosWindow(Gtk.ApplicationWindow):
 
         def work(job):
             # 설정 앱과 같은 길 — settings.json 에 쓰고 sekai-wallpaper --apply (바탕화면이 다시 읽는다)
-            from sekaisettings.store import Store
+            from sekaishell.store import Store
             Store().set("wallpaper", "path", path)
             return True
 
@@ -1604,7 +1567,7 @@ class PhotosWindow(Gtk.ApplicationWindow):
         if not self.state.get("max") and not self._fullscreen:
             w, h = self.get_size()
             self.state["size"] = [w, h]
-        save_state(self.state)
+        STATE.save(self.state)
         self._unwatch()
         self._cancel_all_loads()
         if self._io_pending > 0:

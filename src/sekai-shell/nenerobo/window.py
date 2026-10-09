@@ -9,7 +9,6 @@
   Ctrl+Shift+1~9 N번째 프로필로 새 탭 · Ctrl+, 설정
 닫을 때 탭이 둘 이상이거나 셸 말고 도는 프로그램이 있으면 묻는다.
 """
-import os
 
 import gi
 gi.require_version("Gtk", "4.0")
@@ -17,7 +16,6 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Graphene", "1.0")
 from gi.repository import Gdk, Gio, GLib, Graphene, Gtk, Pango  # noqa: E402
 
-from . import style  # noqa: E402
 from .term import TermTab, open_uri  # noqa: E402
 
 C = Gdk.ModifierType.CONTROL_MASK

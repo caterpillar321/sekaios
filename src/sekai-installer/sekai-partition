@@ -25,6 +25,9 @@ import sys
 import tempfile
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from sekai_disk import disk_name  # noqa: E402  설치 화면과 같은 이름 규칙 (같은 폴더)
+
 GUID_ESP = "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"
 GUID_MSR = "E3C9E316-0B5C-4DB8-817D-F92DF00215AE"
 GUID_WINRE = "DE94BBA4-06D1-4D40-A16A-BFD50179D6AC"
@@ -56,27 +59,6 @@ def live_disks():
                 out.add(os.path.realpath(p[0]))
         out.add(os.path.realpath(src))
     return out
-
-
-def disk_name(d):
-    """설치 화면(sekai-installer 의 disk_name)과 같은 규칙 — 제조사 자리의 ATA·장치 번호(0x1af4)는 뺀다"""
-    vendor = (d.get("vendor") or "").strip().rstrip(",").strip()
-    model = (d.get("model") or "").strip().replace("_", " ")
-    if vendor and model.lower().startswith(vendor.lower()):
-        vendor = ""
-    if vendor.upper() == "ATA" or re.fullmatch(r"0x[0-9a-fA-F]+", vendor):
-        vendor = ""
-    name = " ".join(x for x in (vendor, model) if x)
-    if name:
-        return name
-    tran = (d.get("tran") or "").lower()
-    if tran == "virtio" or d.get("name", "").startswith("vd"):
-        return "가상 디스크"
-    if tran == "nvme":
-        return "NVMe SSD"
-    if tran == "usb":
-        return "USB 드라이브" if d.get("rm") in (True, 1, "1") else "외장 디스크"
-    return "SSD" if d.get("rota") in (False, 0, "0") else "하드 디스크"
 
 
 def esp_info(dev, mounts):

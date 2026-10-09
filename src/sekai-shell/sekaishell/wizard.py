@@ -16,6 +16,8 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk, GLib, Pango  # noqa: E402
 
+from .ui import icon_image  # noqa: E402
+
 from . import logo as sekai_logo
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -113,6 +115,9 @@ progressbar.wiz-progress progress {
 """
 
 
+def icon(names, size):
+    return icon_image(names, size, fallback="image-missing")
+
 def load_css(extra="", colors=None):
     c = dict(DEFAULT_COLORS, **(colors or {}))
     body = ""
@@ -149,20 +154,6 @@ def label(text, cls=None, xalign=0.0, wrap=False, markup=False):
         lb.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
         lb.set_max_width_chars(70)
     return lb
-
-
-def icon(names, size):
-    theme = Gtk.IconTheme.get_default()
-    if isinstance(names, str):
-        names = [names]
-    for n in names:
-        if theme.has_icon(n):
-            img = Gtk.Image.new_from_icon_name(n, Gtk.IconSize.DIALOG)
-            img.set_pixel_size(size)
-            return img
-    img = Gtk.Image.new_from_icon_name("image-missing", Gtk.IconSize.DIALOG)
-    img.set_pixel_size(size)
-    return img
 
 
 def logo_widget(size):

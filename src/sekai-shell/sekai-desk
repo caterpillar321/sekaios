@@ -16,12 +16,10 @@
 #  신호:   SIGHUP = 설정 다시 읽기 (배경화면·강조색)
 # ═══════════════════════════════════════════════════════════════
 import errno
-import hashlib
 import json
 import math
 import os
 import signal
-import stat
 import subprocess
 import sys
 import time
@@ -41,6 +39,7 @@ if os.path.isdir(os.path.join(HERE, "sekaishell")):
 from sekaishell.layer import GtkLayerShell  # noqa: E402  (X11 기본 화면 모드에선 흉내)
 from sekaishell.popup import PanelPopup, make_translucent  # noqa: E402,F401
 from sekaishell.monitors import hypr_monitors, primary_gdk  # noqa: E402
+from sekaishell.launchers import desktop_dir, launcher_command, launcher_trusted, mark_trusted  # noqa: E402
 
 CFG = os.path.expanduser("~/.config/sekai/settings.json")
 ICONS_CFG = os.path.expanduser("~/.config/sekai/desktop-icons.json")
@@ -85,19 +84,6 @@ def hex_rgb(h, fb=(0.224, 0.773, 0.733)):
         return fb
 
 
-def desktop_dir(create=True):
-    try:
-        p = subprocess.run(["xdg-user-dir", "DESKTOP"], capture_output=True,
-                           text=True, timeout=2).stdout.strip()
-    except Exception:
-        p = ""
-    if not p or p == os.path.expanduser("~"):
-        p = os.path.expanduser("~/Desktop")
-    if create:
-        os.makedirs(p, exist_ok=True)
-    return p
-
-
 def run(cmd, cwd=None):
     try:
         subprocess.Popen(cmd if isinstance(cmd, list) else ["sh", "-c", cmd],
@@ -118,61 +104,6 @@ def file_manager():
 
 
 # ── 실행기(.desktop) 신뢰 ─────────────────────────────────────
-def launcher_trusted(path):
-    """실행기를 믿어도 되나 — Thunar·GNOME 과 같은 기준.
-    실행 권한이 있고 내 파일이며, 신뢰 표시가 있어야 한다: metadata::trusted = true
-    (작업 표시줄의 바로 가기 만들기가 붙인다) 또는 Thunar 의 metadata::xfce-exe-checksum 이 지금 내용과 맞음.
-    브라우저로 받은 '청구서.pdf.desktop' 은 어느 것도 없다."""
-    try:
-        st = os.stat(path)
-    except OSError:
-        return False
-    if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or not os.access(path, os.X_OK):
-        return False
-    try:
-        info = Gio.File.new_for_path(path).query_info(
-            "metadata::trusted,metadata::xfce-exe-checksum", Gio.FileQueryInfoFlags.NONE, None)
-    except GLib.Error:
-        return False
-    if info.get_attribute_as_string("metadata::trusted") == "true":
-        return True
-    want = info.get_attribute_as_string("metadata::xfce-exe-checksum")
-    if not want or st.st_size > 1 << 20:
-        return False
-    try:
-        # Thunar 는 내용의 SHA-256 을 적어 둔다 — 내용이 바뀌면 신뢰도 풀린다
-        with open(path, "rb") as f:
-            return hashlib.sha256(f.read()).hexdigest() == want
-    except OSError:
-        return False
-
-
-def mark_trusted(path):
-    """'신뢰하고 실행' — 실행 권한과 신뢰 표시를 붙인다
-    (작업 표시줄의 바로 가기 만들기 sekai-panel make_desktop_shortcut 과 같은 chmod + metadata::trusted)"""
-    try:
-        mode = os.stat(path).st_mode
-        # 읽을 수 있는 쪽에만 실행 권한 — 755 로 못 박으면 600 이던 파일을 남에게 열어 버린다
-        os.chmod(path, stat.S_IMODE(mode) | stat.S_IXUSR | ((mode & 0o044) >> 2))
-    except OSError as e:
-        dbg("실행 권한을 못 붙임", path, e)
-    try:
-        Gio.File.new_for_path(path).set_attribute_string(
-            "metadata::trusted", "true", Gio.FileQueryInfoFlags.NONE, None)
-    except GLib.Error as e:
-        dbg("신뢰 표시를 못 붙임", path, e)
-
-
-def launcher_command(path):
-    """확인 창에 보일 명령 (Exec=) — 읽기만 한다"""
-    try:
-        if os.path.getsize(path) > 1 << 20:
-            return ""
-        kf = GLib.KeyFile()
-        kf.load_from_file(path, GLib.KeyFileFlags.NONE)
-        return kf.get_string("Desktop Entry", "Exec")
-    except (OSError, GLib.Error):
-        return ""
 
 
 # ── 아이콘 배치 (칸 계산) ─────────────────────────────────────

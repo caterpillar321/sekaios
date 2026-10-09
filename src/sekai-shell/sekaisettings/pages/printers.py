@@ -35,8 +35,12 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gtk, Pango  # noqa: E402
 
+from sekaishell.ui import text_entry  # noqa: E402
+
 from ..util import dbg, failure_reason, run, run_async
 from ..widgets import Page, button, combo, icon_image, info, row
+from ..widgets import (notice as _notice, reveal as _reveal, clear as _clear, subsection as _sect,
+                       busy_box as _busy_box, parent_window as _parent, confirm as _confirm, StatusLine)  # 공용 (카나데)
 
 HELPER = "/usr/libexec/sekai/sekai-printers"
 TESTPAGE = "/usr/share/cups/data/testprint"          # CUPS 의 테스트 페이지
@@ -63,6 +67,10 @@ PRINTER_ATTRS = ("printer-name", "printer-info", "printer-location", "printer-ma
 JOB_ATTRS = ("job-id", "job-name", "job-originating-user-name", "job-state", "job-printer-uri",
              "job-k-octets", "time-at-creation", "job-printer-state-message")
 CUPS_PRINTER_CLASS = 0x0001
+
+
+def _entry(text="", width=30, placeholder=None, max_len=100):
+    return text_entry(text, width, placeholder, max_len)
 
 
 class CupsDown(Exception):
@@ -1026,70 +1034,6 @@ def _forget_user_default(name):
 
 
 # ── 위젯 도우미 ──────────────────────────────────────────────
-def _notice(text=""):
-    l = Gtk.Label(label=text, xalign=0)
-    l.get_style_context().add_class("notice")
-    l.set_line_wrap(True)
-    return l
-
-
-def _reveal(w, on):
-    """no_show_all 인 위젯 보이기/숨기기 (안쪽에서 따로 no_show_all 인 것은 그대로 숨어 있다)"""
-    if on and not w.get_visible():
-        w.show()
-        if isinstance(w, Gtk.Container):
-            for c in w.get_children():
-                c.show_all()
-    elif not on and w.get_visible():
-        w.hide()
-
-
-def _clear(c):
-    for w in c.get_children():
-        c.remove(w)
-        w.destroy()
-
-
-def _sect(parent, title=None, hidden=False):
-    if title:
-        lbl = Gtk.Label(label=title, xalign=0)
-        lbl.get_style_context().add_class("section-title")
-        parent.pack_start(lbl, False, False, 0)
-    lb = Gtk.ListBox()
-    lb.set_selection_mode(Gtk.SelectionMode.NONE)
-    lb.get_style_context().add_class("section")
-    lb.set_no_show_all(hidden)
-    parent.pack_start(lb, False, False, 0)
-    return lb
-
-
-def _busy_box(text):
-    b = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-    sp = Gtk.Spinner()
-    sp.start()
-    b.pack_start(sp, False, False, 0)
-    b.pack_start(info(text), False, False, 0)
-    return b
-
-
-def _parent(w):
-    top = w.get_toplevel()
-    return top if isinstance(top, Gtk.Window) and top.is_toplevel() else None
-
-
-def _confirm(parent, text, sub, ok_label, on_ok):
-    d = Gtk.MessageDialog(transient_for=parent, modal=True, message_type=Gtk.MessageType.WARNING,
-                          buttons=Gtk.ButtonsType.NONE, text=text)
-    d.format_secondary_text(sub)
-    d.add_buttons("취소", Gtk.ResponseType.CANCEL, ok_label, Gtk.ResponseType.OK)
-    d.set_default_response(Gtk.ResponseType.CANCEL)
-
-    def responded(dlg, resp):
-        dlg.destroy()
-        if resp == Gtk.ResponseType.OK:
-            on_ok()
-    d.connect("response", responded)
-    d.show_all()
 
 
 # ── 인쇄 대기열 창 ───────────────────────────────────────────
@@ -1306,16 +1250,6 @@ class _Foot:
         (ctx.add_class if error else ctx.remove_class)("prn-problem")
         self.spin.set_visible(busy)
         (self.spin.start if busy else self.spin.stop)()
-
-
-def _entry(text="", width=30, placeholder=None, max_len=100):
-    e = Gtk.Entry()
-    e.set_text(text or "")
-    e.set_width_chars(width)
-    e.set_max_length(max_len)
-    if placeholder:
-        e.set_placeholder_text(placeholder)
-    return e
 
 
 def _josa(word, with_final, without):
@@ -2267,7 +2201,7 @@ class _Prefs:
 
 
 # ── 페이지 ───────────────────────────────────────────────────
-class PrintersPage:
+class PrintersPage(StatusLine):
     def __init__(self, store):
         self.me = _me()
         self.p = Page("프린터", "프린터를 추가하고 기본 프린터와 인쇄 대기열을 관리합니다.")
@@ -2437,22 +2371,6 @@ class PrintersPage:
         return [j for j in (self.snap or {}).get("jobs", ()) if j["printer"].lower() == name.lower()]
 
     # ── 알림 한 줄 ──
-    def say(self, text, error=False):
-        if self.dead:
-            return
-        if self.say_src:
-            GLib.source_remove(self.say_src)
-            self.say_src = 0
-        self.msg.set_text(text or "")
-        self.msg.set_visible(bool(text))
-        if text and not error:                  # 잘 된 소식은 잠깐만
-
-            def hide():
-                self.say_src = 0
-                self.msg.hide()
-                return False
-            self.say_src = GLib.timeout_add_seconds(8, hide)
-
     def _set_busy(self):
         # 일이 도는 동안은 설정 창이 이 페이지를 다시 그리지 않는다 (진행 상태·결과를 잃지 않게)
         self.p.busy = bool(self.ops or self.cancelling)

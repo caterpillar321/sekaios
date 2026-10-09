@@ -1,4 +1,4 @@
-"""접근성 — 작업 표시줄(sekai-panel)이 맡는 몫 (설정은 설정 › 접근성, 저장은 sekaisettings.store 의 a11y 섹션).
+"""접근성 — 작업 표시줄(sekai-panel)이 맡는 몫 (설정은 설정 › 접근성, 저장은 sekaishell.store 의 a11y 섹션).
 
   돋보기        Win + = / Win + - / Win + Esc — 합성기의 커서 주변 확대(cursor:zoom_factor), OSD 로 배율
   색 필터       Win + Ctrl + C — 켜고 끈다 (화면 셰이더, 종류는 설정에서)
@@ -33,7 +33,7 @@ MODS = ((1 << 0, "Shift"), (1 << 2, "Ctrl"), (1 << 3, "Alt"), (1 << 6, "Win"))
 
 
 def _store():
-    from sekaisettings.store import Store         # 설정 앱과 같은 저장 — 조각 파일·즉시 반영까지
+    from .store import Store         # 설정 앱과 같은 저장 — 조각 파일·즉시 반영까지
     return Store()
 
 

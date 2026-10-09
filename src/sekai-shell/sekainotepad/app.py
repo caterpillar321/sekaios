@@ -16,13 +16,13 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 gi.require_version("GtkSource", "4")
-from gi.repository import Gdk, Gio, GLib, Gtk, GtkSource  # noqa: E402
+from gi.repository import Gio, GLib, Gtk, GtkSource  # noqa: E402
 
 from sekaishell import dbg, theme  # noqa: E402
 
 from . import textcodec  # noqa: E402
 from .common import (APP_ICONS, APP_ID, APP_NAME, RECENT_MAX, appearance, interface_settings,  # noqa: E402
-                     load_css, load_state, menu_label, save_state, system_mono_font)
+                     STATE_FILE, THEME, menu_label, system_mono_font)
 from .window import NotepadWindow  # noqa: E402
 
 # 동작 → 단축키 (메뉴에 보이는 것도 여기서)
@@ -74,9 +74,7 @@ class NotepadApp(Gtk.Application):
     def __init__(self):
         super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
         self.prefs = {}
-        self._css = None
         self._accent = None
-        self._cfg_src = 0
         self.menu_model = None
         self.recent_menu = None
 
@@ -85,15 +83,15 @@ class NotepadApp(Gtk.Application):
         Gtk.Application.do_startup(self)
         GLib.set_application_name(APP_NAME)
         Gtk.Window.set_default_icon_name(APP_ICONS[0])
-        self.prefs = load_state()
+        self.prefs = STATE_FILE.load()
         a = appearance()
         theme.apply_gtk_settings(Gtk.Settings.get_default(), a["mode"])
-        self._css = load_css(a)
+        THEME.load(a)
         self._accent = a["accent"]
         self._build_menu()
         for act, keys in ACCELS.items():
             self.set_accels_for_action(act, keys)
-        self._watch_settings()
+        THEME.follow(self._theme_changed)
         iface = interface_settings()
         if iface is not None:
             iface.connect("changed::monospace-font-name", lambda *_: self._font_changed())
@@ -224,7 +222,7 @@ class NotepadApp(Gtk.Application):
         if self.prefs.get(key) == value and key in self.prefs:
             return
         self.prefs[key] = value
-        save_state(self.prefs)
+        STATE_FILE.save(self.prefs)
         for w in self.windows():
             w.apply_prefs()
 
@@ -240,7 +238,7 @@ class NotepadApp(Gtk.Application):
         if not win._maximized:
             w, h = win.get_size()
             self.prefs["size"] = [w, h]
-        save_state(self.prefs)
+        STATE_FILE.save(self.prefs)
 
     def last_dir(self):
         d = self.prefs.get("last_dir")
@@ -251,13 +249,13 @@ class NotepadApp(Gtk.Application):
     def set_last_dir(self, d):
         if d and d != self.prefs.get("last_dir"):
             self.prefs["last_dir"] = d
-            save_state(self.prefs)
+            STATE_FILE.save(self.prefs)
 
     # ── 최근 파일 ──
     def add_recent(self, path):
         lst = [p for p in (self.prefs.get("recent") or []) if isinstance(p, str) and p != path]
         self.prefs["recent"] = [path] + lst[:RECENT_MAX - 1]
-        save_state(self.prefs)
+        STATE_FILE.save(self.prefs)
         self._rebuild_recent()
         try:                                          # 파일 탐색기의 "최근 항목"에도
             Gtk.RecentManager.get_default().add_item(Gio.File.new_for_path(path).get_uri())
@@ -266,7 +264,7 @@ class NotepadApp(Gtk.Application):
 
     def clear_recent(self):
         self.prefs["recent"] = []
-        save_state(self.prefs)
+        STATE_FILE.save(self.prefs)
         self._rebuild_recent()
 
     def _rebuild_recent(self):
@@ -298,32 +296,9 @@ class NotepadApp(Gtk.Application):
             r, g, b = 57, 197, 187
         return GtkSource.Style(background=f"rgba({r},{g},{b},0.30)", background_set=True)
 
-    def _watch_settings(self):
-        """설정 앱이 settings.json 을 바꿔치기(원자적 저장)하므로 폴더를 본다 — 컴퓨터 관리와 같은 방법"""
-        cfg_dir = os.path.expanduser("~/.config/sekai")
-        try:
-            os.makedirs(cfg_dir, exist_ok=True)
-            self._cfg_mon = Gio.File.new_for_path(cfg_dir).monitor_directory(Gio.FileMonitorFlags.WATCH_MOVES, None)
-        except (GLib.Error, OSError) as e:
-            dbg("설정 폴더를 볼 수 없습니다:", e)
-            return
 
-        def changed(_m, f, other, _ev):
-            names = {x.get_basename() for x in (f, other) if x is not None}
-            if "settings.json" not in names:
-                return
-            if self._cfg_src:
-                GLib.source_remove(self._cfg_src)
-            self._cfg_src = GLib.timeout_add(200, self._reload_theme)
-        self._cfg_mon.connect("changed", changed)
-
-    def _reload_theme(self):
-        self._cfg_src = 0
-        a = appearance()
-        if self._css is not None:
-            Gtk.StyleContext.remove_provider_for_screen(Gdk.Screen.get_default(), self._css)
-        self._css = load_css(a)
-        theme.apply_gtk_settings(Gtk.Settings.get_default(), a["mode"])
+    def _theme_changed(self, a):
+        """설정 앱에서 색·모드가 바뀌어 CSS 를 다시 얹은 뒤 — 찾기 막대의 일치 강조색과 창 다시 그리기"""
         if a["accent"] != self._accent:
             self._accent = a["accent"]
             style = self.match_style()
@@ -331,7 +306,6 @@ class NotepadApp(Gtk.Application):
                 w.findbar.restyle(style)
         for w in self.windows():
             w.queue_draw()
-        return False
 
     # ── 개발용: SEKAI_SHOT=/경로.png 이면 창을 찍고 끝낸다 (설정 앱·작업 관리자와 같은 방법) ──
     def _maybe_shot(self, win):

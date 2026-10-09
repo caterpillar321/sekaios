@@ -29,6 +29,7 @@ from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango  # noqa: E402
 from ..common import (ME_UID, DetailGrid, NoticeBar, SortHeaders, copy_text, dbus_error_name,  # noqa: E402
                       dbus_error_text, fmt_bytes, fmt_duration, fmt_time, gicon, key_is_menu, menu_item,
                       mk_view, open_location, popup, scrolled, text_column)
+from sekaishell.taskmgr_common import RowMenuMixin  # noqa: E402
 
 SD = "org.freedesktop.systemd1"
 SD_PATH = "/org/freedesktop/systemd1"
@@ -331,7 +332,7 @@ class Manager:
 S_TYPES = (str, str, str, GObject.Object, int, str, str, int, str)
 
 
-class ServicesPage:
+class ServicesPage(RowMenuMixin):
     searchable = True
     search_hint = "서비스 이름·설명으로 검색"
 
@@ -1052,15 +1053,6 @@ class ServicesPage:
             return True
         return False
 
-    def _on_press(self, v, ev):
-        if ev.type != Gdk.EventType.BUTTON_PRESS or ev.button != 3:
-            return False
-        hit = v.get_path_at_pos(int(ev.x), int(ev.y))
-        if hit is None:
-            return True
-        v.get_selection().select_path(hit[0])
-        self._menu(ev)
-        return True
 
     def _menu(self, ev):
         u = self.selected()

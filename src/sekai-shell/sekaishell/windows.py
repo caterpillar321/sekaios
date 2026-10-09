@@ -573,7 +573,7 @@ class WindowManager:
             g = self.saved.pop(addr, None)
             self.snapped.pop(addr, None)
             if c and g:
-                (x, y), (w, _h) = c.get("at", [0, 0]), c.get("size", [1, 1])
+                (x, y), (w, _) = c.get("at", [0, 0]), c.get("size", [1, 1])
                 cur = self.hypr.query("cursorpos") or {}
                 cx = cur.get("x", x + w / 2) if isinstance(cur, dict) else x + w / 2
                 nx = cx - (cx - x) * (g[2] / max(1, w))

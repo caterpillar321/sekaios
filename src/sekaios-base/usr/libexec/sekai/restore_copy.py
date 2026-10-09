@@ -18,9 +18,7 @@ import datetime
 import fcntl
 import json
 import os
-import re
 import shutil
-import subprocess
 import time
 
 STORE = "/.sekai-restore"
