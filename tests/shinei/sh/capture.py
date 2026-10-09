@@ -25,7 +25,7 @@ def monitor():
 # ── 환경 ──
 def apply(cfg):
     """VM 의 화면 환경을 cfg 로 — 테마·대비(설정 저장소로, 설정 앱과 같은 길) · 텍스트 크기 · 해상도·배율"""
-    code = ("from sekaisettings.store import Store; s = Store(); "
+    code = ("from sekaishell.store import Store; s = Store(); "
             f"s.set_contrast({cfg['contrast']}); "
             + ("" if cfg["contrast"] else f"s.set_mode({cfg['mode']!r}); ")
             + f"s.set('a11y', 'text_scale', {cfg['text']})")

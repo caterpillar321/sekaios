@@ -19,11 +19,15 @@ def check_vulture():
     for u in units:
         v.scan(u.text, filename=u.path)
     fs = []
+    text = _code_text()
     for item in v.get_unused_code(min_confidence=60):
         if item.typ in ("import", "variable", "attribute", "property", "unreachable_code") and item.confidence < 100:
             continue
-        if IGNORE.match(item.name or ""):
-            continue
+        name = item.name or ""
+        if IGNORE.match(name) or name.startswith("_") and item.typ == "variable":
+            continue                         # 함수 모양이 정한 인자(_signum 따위)는 일부러 안 쓴다
+        if item.typ in ("function", "method") and re.search(r"[\"']" + re.escape(name) + r"[\"']", text):
+            continue                         # 이름(문자열)으로 부른다 — getattr·D-Bus 처리기 (블루투스 ask_code 등)
         rel = os.path.relpath(str(item.filename), code.REPO)
         kind = {"function": "안 쓰는 함수", "method": "안 쓰는 메서드", "class": "안 쓰는 클래스",
                 "unreachable_code": "닿지 않는 코드", "import": "안 쓰는 import", "variable": "안 쓰는 변수",

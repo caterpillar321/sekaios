@@ -11,6 +11,14 @@ from .finding import Finding
 MIN_STMTS = 4            # 이보다 짧은 함수는 같아도 우연일 수 있다 (게터 따위)
 NEAR = 0.80              # 거의 같다 — 정규화한 토큰 7-그램 자카드 유사도
 SHINGLE = 7
+# 알고 남겨 두는 중복 — (짝, 이유). 경고 대신 참고로만 보인다. 이유가 사라지면 지울 것
+ALLOWED = {
+    frozenset({"sekai-apps.run_status", "sekai_apt.run_status"}):
+        "sekai-apps 는 sekai-de, sekai_apt 는 sekaios-base — 두 패키지는 서로 의존하지 않아 공용 모듈을 둘 곳이 없다",
+    frozenset({"sekai-apps.guard", "sekai-update.guard"}):
+        "sekai-apps 는 sekai-de, sekai-update 는 sekaios-base — 두 패키지는 서로 의존하지 않아 공용 모듈을 둘 곳이 없다",
+}
+BOILER = {"__init__", "main", "do_startup", "do_activate", "do_command_line"}
 
 
 class _Norm(ast.NodeTransformer):
@@ -125,6 +133,8 @@ def check_functions():
         uj, nj, nmj, sj = sig[j]
         if ui.rel == uj.rel:
             continue
+        if nmi in BOILER and nmj in BOILER:
+            continue                     # 생성자·main 은 원래 비슷하게 생겼다 — 똑같을 때만(위) 본다
         jac = len(si & sj) / len(si | sj)
         if jac < NEAR:
             continue
@@ -133,9 +143,11 @@ def check_functions():
             continue
         seen.add(key)
         size = max(_count(_body(ni)), _count(_body(nj)))
-        fs.append(Finding("dupes", "warn" if size >= 8 else "info", "거의 같은 함수",
+        why = ALLOWED.get(frozenset({f"{_short(ui).removesuffix('.py')}.{nmi}", f"{_short(uj).removesuffix('.py')}.{nmj}"}))
+        fs.append(Finding("dupes", "warn" if size >= 8 and not why else "info", "거의 같은 함수",
                           f"{_short(ui)}.{nmi} ≈ {_short(uj)}.{nmj} ({jac:.0%} 같음, {size}문장) — "
-                          f"{uj.rel}:{nj.lineno}", ui.rel, ni.lineno, key="dupes|near|" + "|".join(key)))
+                          f"{uj.rel}:{nj.lineno}" + (f" · 알고 남김: {why}" if why else ""),
+                          ui.rel, ni.lineno, key="dupes|near|" + "|".join(key)))
     return fs
 
 

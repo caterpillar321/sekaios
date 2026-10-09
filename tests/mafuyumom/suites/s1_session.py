@@ -54,7 +54,7 @@ def search_open(t):
 
 
 def search_mode(t, mode):
-    t.sh(f"python3 -c \"from sekaisettings.store import Store; Store().set('panel', 'search', '{mode}')\"")
+    t.sh(f"python3 -c \"from sekaishell.store import Store; Store().set('panel', 'search', '{mode}')\"")
 
 
 @test("작업 표시줄 검색(Win+S) — 홈 → 검색·미리보기 → Enter 로 열기", suite="session", quick=True)

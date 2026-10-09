@@ -10,6 +10,10 @@ from .finding import Finding
 #   0 공용(sekaishell) · 1 설정 저장소(sekaisettings — 설정 앱이지만 store 를 다른 앱이 읽는다) · 2 앱들 · 3 실행 스크립트
 LAYER = {"sekaishell": 0, "sekaisettings": 1}
 APP_LAYER = 2
+# 앱 패키지 안의 GTK 없는 라이브러리 — 다른 앱(설정 페이지 등)이 써도 되는 것. 이유와 함께 적는다
+LIBRARIES = {
+    "sekaiwine.core": "Wine 엔진·앱 환경 — GTK 없음, 설정 › Windows 앱도 쓴다",
+}
 SCRIPT_LAYER = 3
 
 
@@ -53,10 +57,9 @@ def edges():
                     mod = ".".join(base + ([n.module] if n.module else []))
                 else:
                     mod = n.module or ""
-                targets = [mod]
-                for a in n.names:                            # from sekaishell import search → sekaishell.search
-                    if f"{mod}.{a.name}" in mods:
-                        targets.append(f"{mod}.{a.name}")
+                subs = [f"{mod}.{a.name}" for a in n.names if f"{mod}.{a.name}" in mods]
+                # from sekaishell import search → sekaishell.search (패키지 자체가 아니라 그 모듈을 부른다)
+                targets = subs + ([mod] if len(subs) < len(n.names) else [])
             for t in targets:
                 if t.split(".")[0] in ours:
                     out.append((u, t, n.lineno, _is_lazy(n, parents)))
@@ -154,6 +157,8 @@ def check():
             continue
         ls, ld = layer(src), layer(dst)
         bad = ls < ld or (ls == ld == APP_LAYER)
+        if t in LIBRARIES and ls >= 1:
+            bad = False
         if not bad or (src, dst, u.rel) in seen:
             continue
         seen.add((src, dst, u.rel))

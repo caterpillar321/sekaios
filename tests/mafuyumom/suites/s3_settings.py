@@ -18,7 +18,7 @@ def open_page(t, page):
 def store_set(t, section, key, value):
     import json
     import shlex
-    code = f"from sekaisettings.store import Store; Store().set({json.dumps(section)}, {json.dumps(key)}, {json.dumps(value)})"
+    code = f"from sekaishell.store import Store; Store().set({json.dumps(section)}, {json.dumps(key)}, {json.dumps(value)})"
     return t.sh(f"python3 -c {shlex.quote(code)}")
 
 
@@ -45,12 +45,12 @@ def theme_mode(t):
     def scheme():
         return t.sh("gsettings get org.gnome.desktop.interface color-scheme").out.strip()
     try:
-        t.sh("python3 -c 'from sekaisettings.store import Store; Store().set_mode(\"light\")'")
+        t.sh("python3 -c 'from sekaishell.store import Store; Store().set_mode(\"light\")'")
         t.expect(t.wait(lambda: "light" in scheme() or "default" in scheme(), 5), f"라이트 → color-scheme {scheme()}")
         t.expect("Sekai-Light" in t.sh("gsettings get org.gnome.desktop.interface gtk-theme").out, "GTK 테마 Sekai-Light")
         t.shot("라이트")
     finally:
-        t.sh("python3 -c 'from sekaisettings.store import Store; Store().set_mode(\"dark\")'")
+        t.sh("python3 -c 'from sekaishell.store import Store; Store().set_mode(\"dark\")'")
     t.expect(t.wait(lambda: "dark" in scheme(), 5), f"다크로 되돌림 → {scheme()}")
 
 

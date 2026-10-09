@@ -1,5 +1,6 @@
 """방화벽 — 기본 정책, 밖에서 실제로 막히나(호스트 → VM 8765), 설정 › 방화벽에서 포트 열고 닫기 · 네트워크 프로필,
 root 도우미가 이상한 인자를 거절하나 (보안 회귀)."""
+import re
 import time
 import urllib.request
 
@@ -142,9 +143,13 @@ def firewall_profile_ui(t):
     t.gone(SETTINGS, 5)
     t.after(lambda: t.kill("sekai-settings"))
     t.expect(t.launch("sekai-settings --page=firewall", SETTINGS, timeout=20), "설정 › 방화벽")
+    # 화면은 NetworkManager 가 스스로 지은 이름을 우리 말로 보인다 ("Wired connection 1" → "유선 연결 1", sekaishell.nm.conn_label)
+    m = re.fullmatch(r"Wired connection (\d+)", name)
+    shown = f"유선 연결 {m.group(1)}" if m else name
+
     def prof_combo(timeout):
-        """그 네트워크 줄(제목 = 네트워크 이름)과 같은 높이의 콤보"""
-        lab = t.ui.wait(app=SETTINGS, role="label", name=name, timeout=timeout)
+        """그 네트워크 줄(제목 = 보이는 네트워크 이름)과 같은 높이의 콤보"""
+        lab = t.ui.wait(app=SETTINGS, role="label", name=shown, timeout=timeout)
         if not lab:
             return None
         return next((c for c in (t.ui.find(app=SETTINGS, role="combo box", all=True) or [])
