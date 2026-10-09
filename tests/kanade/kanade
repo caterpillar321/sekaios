@@ -5,6 +5,9 @@
         -c imports   우리 코드끼리 import — 순환, 층 위반(공용→앱, 앱→앱), 싣지 않는 모듈
         -c deps      바깥 의존성 — 부르는 명령·typelib·파이썬 모듈이 sekai-desktop 의존성으로 깔리는가
         -c dupes     중복 구현 — 똑같은·거의 같은 함수, 모듈마다 다시 만든 도우미, 겹치는 CSS 클래스
+        -c dead      죽은 코드 — 아무도 안 부르는 함수·클래스(vulture), 코드가 안 쓰는 CSS 클래스
+        -c lint      기본 린트 — pyflakes, shellcheck
+        -c contracts 계약 — 설정 키·기본값 ↔ 저장소 DEFAULTS, D-Bus 정의 ↔ 구현 ↔ sekai-ctl, sekai-ctl 하위 명령
         --all        참고(info)까지 화면에 다 보인다
   kanade list                      점검 목록
 
@@ -23,13 +26,15 @@ if sys.version_info < (3, 12) and not os.environ.get("KANADE_NO_UV"):
     uv = shutil.which("uv") or os.path.expanduser("~/.local/bin/uv")
     if os.path.exists(uv):
         os.environ["KANADE_NO_UV"] = "1"
-        os.execv(uv, [uv, "run", "-q", "--no-project", "--python", "3.13", "python3", __file__] + sys.argv[1:])
+        os.execv(uv, [uv, "run", "-q", "--no-project", "--python", "3.13", "--with", "pyflakes", "--with", "vulture",
+                       "--with", "shellcheck-py", "python3", __file__] + sys.argv[1:])
 
 sys.path.insert(0, HERE)
-from kd import deps, dupes, imports  # noqa: E402
+from kd import contracts, dead, deps, dupes, imports, lint  # noqa: E402
 from kd.finding import LEVEL_KO, LEVELS  # noqa: E402
 
-CHECKS = {"imports": imports.check, "deps": deps.check, "dupes": dupes.check}
+CHECKS = {"imports": imports.check, "deps": deps.check, "dupes": dupes.check, "contracts": contracts.check,
+          "dead": dead.check, "lint": lint.check}
 REPORTS = os.path.join(os.environ.get("KANADE_ROOT", os.path.expanduser("~/.cache/kanade")), "reports")
 ICON = {"error": "✗", "warn": "!", "info": "·"}
 
