@@ -79,6 +79,7 @@ DEFAULTS = {
         "height": 48,
         "clock_format": "%H:%M",
         "show_date": False,
+        "search": "box",         # 작업 표시줄 검색 — box(검색 상자) · icon(아이콘만) · hide (윈도우 11 과 같게 상자가 기본)
     },
     "apps": {
         "terminal": "sekai-terminal",

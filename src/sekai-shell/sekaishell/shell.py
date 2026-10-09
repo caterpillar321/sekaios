@@ -25,6 +25,7 @@ XML = """
     <method name="Airplane"/>
     <method name="Clipboard"/>
     <method name="StartMenu"/>
+    <method name="Search"/>
     <method name="NotificationCenter"/>
     <method name="QuickSettings"/>
     <method name="Osd">

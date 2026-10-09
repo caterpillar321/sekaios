@@ -14,6 +14,8 @@ super + Return
 	sekai-terminal
 super + {r,d}
 	sekai-ctl menu
+super + s
+	sekai-ctl search
 super + i
 	sekai-settings
 super + n

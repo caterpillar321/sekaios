@@ -13,6 +13,7 @@
 #    sekai-ctl airplane                     비행기 모드 켜고 끄기
 #    sekai-ctl clipboard                    클립보드 기록 (Win+V)
 #    sekai-ctl menu | notifications         시작 메뉴 / 알림 센터
+#    sekai-ctl search                       작업 표시줄 검색 (Win+S)
 #    sekai-ctl quicksettings                빠른 설정 (Win+A)
 #    sekai-ctl osd <아이콘> <글>             화면에 잠깐 알림
 #    sekai-ctl desktop new|close|next|prev   가상 데스크톱 (이름을 화면 가운데에)
@@ -60,6 +61,7 @@ case "$1" in
     airplane)      call Airplane ;;
     clipboard)     call Clipboard ;;
     menu)          call StartMenu ;;
+    search)        call Search ;;
     notifications) call NotificationCenter ;;
     quicksettings|qs) call QuickSettings ;;
     osd)           call Osd "${2:-dialog-information-symbolic}" "${3:-}" ;;
@@ -76,6 +78,6 @@ case "$1" in
             new)  hyprctl dispatch workspace emptym ;;
         esac >/dev/null 2>&1 ;;
     *)
-        sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'
         exit 2 ;;
 esac

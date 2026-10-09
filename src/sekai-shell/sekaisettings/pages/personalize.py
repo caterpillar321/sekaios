@@ -308,6 +308,10 @@ def build_appearance(store):
         icon=["preferences-system-windows", "view-list"],
         control=spin(pn["height"], 28, 72, 2,
                      lambda v: store.set("panel", "height", v)))
+    row(s, "검색", "시작 단추 옆 — 누르거나 Win+S 로 검색 창을 엽니다. 작업 표시줄을 우클릭해도 바꿀 수 있습니다",
+        icon=["system-search-symbolic", "edit-find"],
+        control=combo([("box", "검색 상자"), ("icon", "검색 아이콘만"), ("hide", "숨기기")],
+                      pn.get("search", "box"), lambda v: store.set("panel", "search", v)))
     row(s, "시계 형식", "strftime 형식 (예: %H:%M, %p %I:%M)",
         control=entry(pn["clock_format"],
                       lambda v: store.set("panel", "clock_format", v),

@@ -73,6 +73,38 @@ window.toast-stack {
 .start-btn:hover  { background: @hover; }
 .start-btn:active { background: @pressed; }
 
+/* 검색 상자 · 아이콘 (시작 단추 옆 — 설정 › 개인 설정 › 작업 표시줄 › 검색) */
+.search-box, .search-icon {
+    background-image: none;
+    box-shadow: none;
+    min-height: 0;
+    transition: background 120ms ease;
+}
+.search-box {
+    background: alpha(@fg, 0.06);
+    border: 1px solid @line;
+    border-radius: 18px;
+    padding: 6px 14px;
+    margin: 0 6px 0 2px;
+    min-width: 200px;
+}
+.search-box:hover  { background: @hover; }
+.search-box:active { background: @pressed; }
+.search-box image  { color: @text2; }
+.search-box-label  { color: @text3; }
+.search-icon {
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 0;
+    margin: 0 4px 0 0;
+    min-width: 42px;
+    min-height: 36px;
+}
+.search-icon:hover  { background: @hover; }
+.search-icon:active { background: @pressed; }
+.search-icon image  { color: @fg; }
+
 .tasks { padding: 0 2px; }
 
 /* 작업 버튼: 아이콘 + 제목. 활성 창은 아래 가운데 짧은 강조 막대 (윈도우 11 식) */
@@ -355,9 +387,13 @@ window.toast-stack {
     border-radius: 8px;
     margin: 1px 8px 1px 0;
     padding: 0;
+    /* 테마(Sekai-Dark)의 row:selected 는 청록 3×16 조각 그림을 1.2초 전환으로 깐다 — 우리 바탕만 쓰게 끈다.
+       안 끄면 ↓ 로 고르거나 갈래를 바꿀 때 고른 줄이 한동안 진한 청록으로 칠해졌다 */
+    background-image: none;
+    transition: background 120ms ease;
 }
 .app-list row:hover    { background: @hover; }
-.app-list row:selected { background: @raised; }
+.app-list row:selected { background: @raised; background-image: none; }
 .app-row { padding: 7px 10px; }
 .app-row label { font-size: 9.75pt; color: @fg; }
 
@@ -381,6 +417,53 @@ window.toast-stack {
     color: @text3;
     padding: 32px 16px;
 }
+
+/* 검색 창 (작업 표시줄 검색) — 시작 메뉴의 검색 칸·결과 목록을 그대로 쓰고 갈래 단추와 미리보기만 더한다 */
+.search-root { padding: 16px 16px 12px 16px; }
+.search-root .menu-search { margin: 0 0 10px 0; font-size: 11pt; }
+.search-tabs { margin: 0 0 10px 0; }
+.search-tab {
+    background: transparent;
+    background-image: none;
+    border: 1px solid transparent;
+    border-radius: 14px;
+    box-shadow: none;
+    color: @text2;
+    padding: 3px 14px;
+    min-height: 0;
+    font-size: 9.25pt;
+}
+.search-tab:hover   { background: @hover; color: @fg; }
+.search-tab:checked { background: @raised; border-color: @line; color: @fg; font-weight: 600; }
+.search-root .app-list row { margin-right: 4px; }
+.search-preview {
+    background: alpha(@fg, 0.03);
+    border: 1px solid @line;
+    border-radius: 10px;
+    padding: 18px 16px;
+    margin: 0 0 0 8px;
+}
+.preview-thumb { border-radius: 6px; }
+.preview-title { font-size: 13pt; font-weight: 600; margin-top: 12px; }
+.preview-sub   { font-size: 9pt; color: @text3; margin-top: 2px; }
+.preview-sep   { background: @line; min-height: 1px; margin: 14px 0 10px 0; }
+.preview-action {
+    background: transparent;
+    background-image: none;
+    border: none;
+    border-radius: 6px;
+    box-shadow: none;
+    color: @fg;
+    padding: 7px 10px;
+    min-height: 0;
+}
+.preview-action:hover    { background: @hover; }
+.preview-action:active   { background: @pressed; }
+.preview-action image    { color: @accent; }
+.preview-action:disabled label, .preview-action:disabled image { color: @text3; }
+.preview-note  { font-size: 9pt; color: @text2; }
+.preview-key   { font-size: 8.75pt; color: @text3; }
+.preview-val   { font-size: 8.75pt; color: @text2; }
 
 /* 고정 타일 */
 .tiles flowboxchild { padding: 0; }
