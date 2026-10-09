@@ -17,7 +17,7 @@
 cd tests/mafuyumom
 ./mafuyumom golden --from ~/.cache/sekai-svm-btrfs   # 골든 만들기 (원본 VM 을 꺼 두고)
 ./mafuyumom list                                     # 시험 목록 (Q = quick, S = 느린 시험)
-./mafuyumom quick                                    # 중간 점검 (~1분 반) — 켜진 VM 그대로, 영역마다 대표 15개
+./mafuyumom quick                                    # 중간 점검 (~1분 반) — 켜진 VM 그대로, 영역마다 대표 26개
 ./mafuyumom full                                     # 마지막 검사 (~20분) — 새 VM + 최신 패키지 + 느린 시험까지 전부
 ./mafuyumom run                                      # 느린 것 빼고 전부
 ./mafuyumom run --slow                               # 느린 시험(재부팅이 드는 복원 왕복, 무작위 60번)까지
