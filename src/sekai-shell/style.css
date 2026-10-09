@@ -418,10 +418,12 @@ window.toast-stack {
     padding: 32px 16px;
 }
 
-/* 검색 창 (작업 표시줄 검색) — 시작 메뉴의 검색 칸·결과 목록을 그대로 쓰고 갈래 단추와 미리보기만 더한다 */
+/* 검색 창 (작업 표시줄 검색) — 시작 메뉴의 검색 칸·결과 목록을 그대로 쓰고 갈래 단추와 미리보기만 더한다.
+   클래스는 sp-* — 작업 표시줄 창 미리보기의 .preview-title(9pt) 따위와 이름이 겹쳐 제목이 작게 나왔다 */
 .search-root { padding: 16px 16px 12px 16px; }
-.search-root .menu-search { margin: 0 0 10px 0; font-size: 11pt; }
-.search-tabs { margin: 0 0 10px 0; }
+.search-root .menu-search { margin: 0; font-size: 11pt; }
+.sp-hint { font-size: 11pt; color: @text3; }
+.search-tabs { margin: 0 0 12px 0; }
 .search-tab {
     background: transparent;
     background-image: none;
@@ -436,18 +438,31 @@ window.toast-stack {
 .search-tab:hover   { background: @hover; color: @fg; }
 .search-tab:checked { background: @raised; border-color: @line; color: @fg; font-weight: 600; }
 .search-root .app-list row { margin-right: 4px; }
-.search-preview {
-    background: alpha(@fg, 0.03);
-    border: 1px solid @line;
-    border-radius: 10px;
-    padding: 18px 16px;
-    margin: 0 0 0 8px;
+
+/* 홈: 자주 쓰는 앱 · 최근 | 빠른 검색 — 제목·목록·타일의 왼쪽 끝을 맞춘다 */
+.sp-section {
+    font-size: 9.5pt;
+    font-weight: 600;
+    color: @fg;
+    margin: 4px 0 6px 10px;
 }
-.preview-thumb { border-radius: 6px; }
-.preview-title { font-size: 13pt; font-weight: 600; margin-top: 12px; }
-.preview-sub   { font-size: 9pt; color: @text3; margin-top: 2px; }
-.preview-sep   { background: @line; min-height: 1px; margin: 14px 0 10px 0; }
-.preview-action {
+.sp-home .tiles { margin: 0 0 14px 0; }
+.sp-home .tile { margin: 0 4px 0 0; padding: 12px 4px 10px 4px; }
+.sp-empty { font-size: 9.25pt; color: @text3; padding: 6px 10px; }
+
+/* 미리보기 — 테두리 없는 옅은 판 (상자 안 상자로 보이지 않게) */
+.search-preview {
+    background: alpha(@fg, 0.035);
+    border-radius: 10px;
+    padding: 22px 16px 16px 16px;
+    margin: 0 0 0 10px;
+}
+.sp-thumb { border-radius: 6px; }
+.sp-title { font-size: 13pt; font-weight: 600; color: @fg; margin-top: 12px; }
+.sp-sub   { font-size: 9pt; color: @text3; margin-top: 2px; }
+.sp-note  { font-size: 9pt; color: @text2; margin-top: 8px; }
+.sp-sep   { background: @line; min-height: 1px; margin: 16px 0 8px 0; }
+.sp-action {
     background: transparent;
     background-image: none;
     border: none;
@@ -457,13 +472,14 @@ window.toast-stack {
     padding: 7px 10px;
     min-height: 0;
 }
-.preview-action:hover    { background: @hover; }
-.preview-action:active   { background: @pressed; }
-.preview-action image    { color: @accent; }
-.preview-action:disabled label, .preview-action:disabled image { color: @text3; }
-.preview-note  { font-size: 9pt; color: @text2; }
-.preview-key   { font-size: 8.75pt; color: @text3; }
-.preview-val   { font-size: 8.75pt; color: @text2; }
+.sp-action:hover    { background: @hover; }
+.sp-action:active   { background: @pressed; }
+.sp-action image    { color: @text2; }
+.sp-action:hover image { color: @fg; }
+.sp-action:disabled label, .sp-action:disabled image { color: @text3; }
+.sp-facts { margin: 4px 10px 0 10px; }
+.sp-key   { font-size: 8.75pt; color: @text3; }
+.sp-val   { font-size: 8.75pt; color: @text2; }
 
 /* 고정 타일 */
 .tiles flowboxchild { padding: 0; }

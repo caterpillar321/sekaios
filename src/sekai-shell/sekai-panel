@@ -1216,7 +1216,22 @@ class SearchFlyout(Gtk.Window, SearchMixin):
         root.get_style_context().add_class("menu-root")
         root.get_style_context().add_class("search-root")
         self.add(root)
-        root.pack_start(self._make_entry("검색할 내용을 입력하세요"), False, False, 0)
+        # GTK3 의 SearchEntry 는 초점이 있으면 안내 글자를 숨긴다 — 열자마자 초점이 가니 빈 칸만 보였다.
+        #   윈도우처럼 다 지울 때까지 보이게 위에 겹쳐 둔다
+        ov = Gtk.Overlay()
+        ov.add(self._make_entry(None))
+        self.hint = Gtk.Label(label="검색할 내용을 입력하세요", xalign=0)
+        self.hint.get_style_context().add_class("sp-hint")
+        self.hint.set_halign(Gtk.Align.START)
+        self.hint.set_valign(Gtk.Align.CENTER)
+        self.hint.set_margin_start(38)
+        self.hint.set_no_show_all(True)
+        ov.add_overlay(self.hint)
+        ov.set_overlay_pass_through(self.hint, True)
+        ov.set_margin_bottom(10)
+        self.search.connect("changed", lambda *_: self._sync_hint())
+        self.search.connect("preedit-changed", lambda *_: GLib.idle_add(self._sync_hint))
+        root.pack_start(ov, False, False, 0)
 
         tabs = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         tabs.get_style_context().add_class("search-tabs")
@@ -1236,26 +1251,32 @@ class SearchFlyout(Gtk.Window, SearchMixin):
         self.stack.set_transition_type(Gtk.StackTransitionType.NONE)
         self.stack.add_named(self._build_home(), "home")
         body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        left = self._make_list()
+        left = self.left = self._make_list()
         left.set_size_request(380, -1)
         self.listbox.set_header_func(self._group_header, None)
         self.listbox.connect("row-selected", lambda _lb, row: self._preview(row))
         body.pack_start(left, False, False, 0)
         self.preview = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.preview.get_style_context().add_class("search-preview")
+        self.preview.set_no_show_all(True)                   # 고른 것이 없으면(결과 없음) 빈 상자를 남기지 않는다
         body.pack_start(self.preview, True, True, 0)
         self.stack.add_named(body, "results")
         root.pack_start(self.stack, True, True, 0)
 
         self.connect("key-press-event", self.on_key)
 
-    # ── 검색어가 없을 때: 자주 쓰는 앱 · 최근 파일 ──
+    # ── 검색어가 없을 때: 자주 쓰는 앱 한 줄, 그 아래 최근 파일 | 빠른 검색 (윈도우 11 처럼) ──
+    QUICK = ("display", "sound", "network", "bluetooth", "wallpaper", "installed", "update", "power")
+
+    def _section(self, title):
+        lbl = Gtk.Label(label=title, xalign=0)
+        lbl.get_style_context().add_class("sp-section")
+        return lbl
+
     def _build_home(self):
         home = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        home.get_style_context().add_class("search-home")
-        lbl = Gtk.Label(label="자주 쓰는 앱", xalign=0)
-        lbl.get_style_context().add_class("section-title")
-        home.pack_start(lbl, False, False, 0)
+        home.get_style_context().add_class("sp-home")
+        home.pack_start(self._section("자주 쓰는 앱"), False, False, 0)
         self.top_flow = Gtk.FlowBox()
         self.top_flow.get_style_context().add_class("tiles")
         self.top_flow.set_selection_mode(Gtk.SelectionMode.NONE)
@@ -1263,10 +1284,11 @@ class SearchFlyout(Gtk.Window, SearchMixin):
         self.top_flow.set_max_children_per_line(6)
         self.top_flow.set_homogeneous(True)
         home.pack_start(self.top_flow, False, False, 0)
-        lbl = Gtk.Label(label="최근", xalign=0)
-        lbl.get_style_context().add_class("section-title")
-        lbl.set_margin_top(14)
-        home.pack_start(lbl, False, False, 0)
+
+        cols = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16, homogeneous=True)
+        cols.get_style_context().add_class("sp-cols")
+        recent = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        recent.pack_start(self._section("최근"), False, False, 0)
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroll.set_vexpand(True)
@@ -1274,11 +1296,22 @@ class SearchFlyout(Gtk.Window, SearchMixin):
         self.recent_list.get_style_context().add_class("app-list")
         self.recent_list.connect("row-activated", lambda _lb, row: self._open_file(row.item))
         self.recent_empty = Gtk.Label(label="최근에 연 파일이 없습니다", xalign=0)
-        self.recent_empty.get_style_context().add_class("search-empty")
+        self.recent_empty.set_valign(Gtk.Align.START)        # 빈 칸 한가운데에 떠 있지 않게 — 제목 바로 아래
+        self.recent_empty.get_style_context().add_class("sp-empty")
         self.recent_empty.show()
         self.recent_list.set_placeholder(self.recent_empty)
         scroll.add(self.recent_list)
-        home.pack_start(scroll, True, True, 0)
+        recent.pack_start(scroll, True, True, 0)
+        cols.pack_start(recent, True, True, 0)
+
+        quick = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        quick.pack_start(self._section("빠른 검색"), False, False, 0)
+        self.quick_list = Gtk.ListBox()
+        self.quick_list.get_style_context().add_class("app-list")
+        self.quick_list.connect("row-activated", lambda lb, row: self.on_row(lb, row))
+        quick.pack_start(self.quick_list, False, False, 0)
+        cols.pack_start(quick, True, True, 0)
+        home.pack_start(cols, True, True, 0)
         return home
 
     def _fill_home(self):
@@ -1311,10 +1344,16 @@ class SearchFlyout(Gtk.Window, SearchMixin):
         self.top_flow.show_all()
         for c in self.recent_list.get_children():
             c.destroy()
-        for path in search.recent_files(8):
+        for path in search.recent_files(7):
             item = {"name": os.path.basename(path.rstrip("/")) or path, "path": path, "dir": os.path.isdir(path)}
             self.recent_list.add(self._result_row("file", item, "recent"))
         self.recent_list.show_all()
+        if not self.quick_list.get_children():               # 설정 페이지 목록은 거의 안 바뀐다 — 처음 한 번
+            pages = {e["page"]: e for e in search.settings_entries() if not e["sub"]}
+            for pid in self.QUICK:
+                if pid in pages:
+                    self.quick_list.add(self._result_row("setting", pages[pid], "quick"))
+            self.quick_list.show_all()
 
     def _show_empty(self):
         self.stack.set_visible_child_name("home")
@@ -1322,6 +1361,10 @@ class SearchFlyout(Gtk.Window, SearchMixin):
 
     def _show_results(self):
         self.stack.set_visible_child_name("results")
+
+    def _sync_hint(self):
+        self.hint.set_visible(not self.search.get_text() and not self._preedit)
+        return False
 
     def _on_tab(self, btn, key):
         if not btn.get_active():
@@ -1339,9 +1382,11 @@ class SearchFlyout(Gtk.Window, SearchMixin):
         for c in self.preview.get_children():
             c.destroy()
         kind, item = getattr(row, "kind", None), getattr(row, "item", None)
+        pv = self.preview
+        pv.set_visible(kind is not None)
+        self.left.set_hexpand(kind is None)                  # 결과가 없으면 "결과 없음" 글귀가 가운데 오게
         if kind is None:
             return
-        pv = self.preview
         big, title, sub, facts, note = None, "", "", [], ""
         if kind == "app":
             big, title, sub, note = icon_image(item["icon"], 64), item["name"], "앱", item.get("comment") or ""
@@ -1376,7 +1421,6 @@ class SearchFlyout(Gtk.Window, SearchMixin):
             title, sub = f"= {item}", self._q.raw if self._q else ""
             acts = [("결과 복사", "edit-copy-symbolic", lambda: (self._copy_text(item), self.close()))]
         big.set_halign(Gtk.Align.CENTER)
-        big.set_margin_top(8)
         pv.pack_start(big, False, False, 0)
         t = Gtk.Label(label=title)
         t.set_line_wrap(True)
@@ -1384,18 +1428,25 @@ class SearchFlyout(Gtk.Window, SearchMixin):
         t.set_justify(Gtk.Justification.CENTER)
         t.set_max_width_chars(28)
         t.set_selectable(kind == "calc")
-        t.get_style_context().add_class("preview-title")
+        t.get_style_context().add_class("sp-title")
         pv.pack_start(t, False, False, 0)
         s = Gtk.Label(label=sub)
         s.set_ellipsize(Pango.EllipsizeMode.END)
-        s.get_style_context().add_class("preview-sub")
+        s.get_style_context().add_class("sp-sub")
         pv.pack_start(s, False, False, 0)
+        if note:                                             # 앱 설명 — 이름 바로 아래 (아래 끝에 떨어져 있으면 무엇의 설명인지 흐렸다)
+            n = Gtk.Label(label=note)
+            n.set_line_wrap(True)
+            n.set_justify(Gtk.Justification.CENTER)
+            n.set_max_width_chars(36)
+            n.get_style_context().add_class("sp-note")
+            pv.pack_start(n, False, False, 0)
         sep = Gtk.Box()
-        sep.get_style_context().add_class("preview-sep")
+        sep.get_style_context().add_class("sp-sep")
         pv.pack_start(sep, False, False, 0)
         for label, icon, fn in acts:
             b = Gtk.Button()
-            b.get_style_context().add_class("preview-action")
+            b.get_style_context().add_class("sp-action")
             hb = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
             hb.pack_start(icon_image([icon, "go-next-symbolic"], 16), False, False, 0)
             hb.pack_start(Gtk.Label(label=label, xalign=0), True, True, 0)
@@ -1405,30 +1456,25 @@ class SearchFlyout(Gtk.Window, SearchMixin):
             if fn is not None:
                 b.connect("clicked", lambda _b, f=fn: f())
             pv.pack_start(b, False, False, 0)
-        if facts or note:
-            sep = Gtk.Box()
-            sep.get_style_context().add_class("preview-sep")
-            pv.pack_start(sep, False, False, 0)
-        if note:
-            n = Gtk.Label(label=note, xalign=0)
-            n.set_line_wrap(True)
-            n.set_max_width_chars(34)
-            n.get_style_context().add_class("preview-note")
-            pv.pack_start(n, False, False, 0)
         if facts:
+            sep = Gtk.Box()
+            sep.get_style_context().add_class("sp-sep")
+            pv.pack_start(sep, False, False, 0)
             g = Gtk.Grid(column_spacing=14, row_spacing=4)
+            g.get_style_context().add_class("sp-facts")
             for r, (k, v) in enumerate(facts):
                 kl = Gtk.Label(label=k, xalign=0, yalign=0)
-                kl.get_style_context().add_class("preview-key")
+                kl.get_style_context().add_class("sp-key")
                 vl = Gtk.Label(label=v, xalign=0)
                 vl.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
                 vl.set_hexpand(True)
                 vl.set_tooltip_text(v)
-                vl.get_style_context().add_class("preview-val")
+                vl.get_style_context().add_class("sp-val")
                 g.attach(kl, 0, r, 1, 1)
                 g.attach(vl, 1, r, 1, 1)
             pv.pack_start(g, False, False, 0)
-        pv.show_all()
+        for c in pv.get_children():                          # no_show_all 이라 pv.show_all() 은 아무것도 안 한다
+            c.show_all()
 
     @staticmethod
     def _thumb(item):
@@ -1447,7 +1493,7 @@ class SearchFlyout(Gtk.Window, SearchMixin):
         except (OSError, GLib.Error):
             return None
         img = Gtk.Image.new_from_pixbuf(pb)
-        img.get_style_context().add_class("preview-thumb")
+        img.get_style_context().add_class("sp-thumb")
         return img
 
     def _open_location(self, path):
@@ -1505,6 +1551,7 @@ class SearchFlyout(Gtk.Window, SearchMixin):
         self.refill()
         self.catcher.show_all()
         self.show_all()
+        self._sync_hint()
         self.present()
         self.search.grab_focus()
 
