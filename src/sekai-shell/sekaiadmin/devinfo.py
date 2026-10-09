@@ -139,6 +139,16 @@ def num(s, default=None):
         return default
 
 
+def cppc_max_khz(cpu_dir):
+    """펌웨어(ACPI CPPC) 값으로 낸 최대 속도 kHz — 인텔만, 모르면 None.
+    커널 6.12 의 intel_pstate 는 Arrow Lake 의 성능 단위 비율을 옛 CPU 것으로 써 cpuinfo_max_freq 가 7.0GHz 로 나왔다
+    (265K 실제 5.5GHz). AMD 는 CPPC 의 highest_perf 가 선호 코어 순위라 못 쓴다 — taskmgr_data.cppc_khz 와 같은 식"""
+    if rd(cpu_dir + "/cpufreq/scaling_driver") not in ("intel_pstate", "intel_cpufreq"):
+        return None
+    hp, np_, nf = (num(rd(f"{cpu_dir}/acpi_cppc/{n}")) or 0 for n in ("highest_perf", "nominal_perf", "nominal_freq"))
+    return hp * nf * 1000 // np_ if hp > 0 and np_ > 0 and nf > 0 else None
+
+
 def shown(path):
     """화면에 보일 경로 — 시험용 가짜 루트는 뗀다"""
     return path[len(ROOT):] if ROOT and path.startswith(ROOT) else path
@@ -1532,7 +1542,7 @@ class _Scan:
             sp = f"{SYS}/devices/system/cpu/cpu{idx}"
             d = Dev(f"cpu:{idx}", "processor", model, None, "cpu", f"CPU{idx}")
             d.kind, d.order = "프로세서", (idx,)
-            maxf = num(rd(sp + "/cpufreq/cpuinfo_max_freq"))
+            maxf = cppc_max_khz(sp) or num(rd(sp + "/cpufreq/cpuinfo_max_freq"))
             d.general = [("종류", "프로세서"), ("제조사", vendors.get(c.get("vendor_id", ""), c.get("vendor_id", ""))),
                          ("모델", model), ("구성", f"물리 코어 {len(cores)}개 · 논리 프로세서 {len(cpus)}개"),
                          ("최대 속도", f"{maxf / 1e6:.2f} GHz" if maxf else ""),

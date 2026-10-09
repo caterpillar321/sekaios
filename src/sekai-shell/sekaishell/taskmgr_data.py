@@ -326,16 +326,34 @@ def cpu_static():
     for lv, _ty, _sh, kb in caches:
         if lv in ("1", "2", "3"):
             info["l" + lv] += kb
+    nominal = cppc_khz(f"{base}/cpu0")[1]
+    if nominal:
+        info["base"], info["base_label"] = nominal / 1e6, "기본 속도"
     for name, label in (("base_frequency", "기본 속도"), ("amd_pstate_nominal_freq", "기본 속도"),
                         ("cpuinfo_max_freq", "최대 속도")):
+        if info["base"] is not None:
+            break
         v = _read(f"{base}/cpu0/cpufreq/{name}")
         if v and _int(v) > 0:
             info["base"] = _int(v) / 1e6            # kHz → GHz
             info["base_label"] = label
-            break
     if info["base"] is None and info["mhz"]:
         info["base"] = info["mhz"] / 1000
     return info
+
+
+def cppc_khz(cpu_dir):
+    """(최대, 기본) kHz — 펌웨어(ACPI CPPC)가 알려 준 값으로. 모르면 (None, None).
+    커널 6.12 의 intel_pstate 는 Arrow Lake 에서 성능 단위를 MHz 로 바꾸는 비율을 옛 CPU 것(P 78.7·E 100MHz)으로 써
+    cpuinfo_max_freq 가 7.0GHz, base_frequency 가 5.0GHz 로 나왔다 (265K 실제 5.5·3.9 — CPPC 로는 P 62.9·E 71.7MHz).
+    AMD 는 CPPC 의 highest_perf 가 선호 코어 순위라 이 식에 못 넣는다 — 인텔만"""
+    if (_read(f"{cpu_dir}/cpufreq/scaling_driver") or "").strip() not in ("intel_pstate", "intel_cpufreq"):
+        return None, None
+    c = f"{cpu_dir}/acpi_cppc"
+    hp, np_, nf = (_int(_read(f"{c}/{n}")) for n in ("highest_perf", "nominal_perf", "nominal_freq"))
+    if hp <= 0 or np_ <= 0 or nf <= 0:
+        return None, None
+    return hp * nf * 1000 // np_, nf * 1000
 
 
 def cpu_freq_ghz():
