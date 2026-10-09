@@ -21,6 +21,13 @@ say(){ printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 
 [ -f "$P/repo/dists/hatsune/InRelease" ] || { echo "E: repo/ 가 없습니다 — scripts/build-repo.sh 먼저"; exit 1; }
 
+# 카나데 관문 — 오류나 기준선에 없던 새 경고(새 순환·선언 안 된 의존성·겹치는 CSS …)가 있으면 올리지 않는다
+#   급할 때만 KANADE_SKIP=1 (그다음 게시 전에는 꼭 고칠 것)
+if [ -z "${KANADE_SKIP:-}" ]; then
+    say "카나데 관문"
+    "$P/tests/kanade/kanade" gate || { echo "E: 카나데 관문을 통과하지 못했습니다 (tests/kanade/kanade run 으로 자세히)"; exit 1; }
+fi
+
 # 올라가면 안 되는 것이 섞였는지 마지막으로 확인
 if find "$P/repo" -type f \( -name '*.key' -o -name '*secring*' -o -name 'private-keys*' \) | grep -q .; then
     echo "E: repo/ 에 비밀 키로 보이는 파일이 있습니다"; exit 1

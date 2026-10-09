@@ -9,6 +9,8 @@
         -c lint      기본 린트 — pyflakes, shellcheck
         -c contracts 계약 — 설정 키·기본값 ↔ 저장소 DEFAULTS, D-Bus 정의 ↔ 구현 ↔ sekai-ctl, sekai-ctl 하위 명령
         --all        참고(info)까지 화면에 다 보인다
+  kanade gate                      게시 전 관문 — 오류가 있거나 기준선(baseline.json)에 없던 경고가 생기면 실패
+  kanade baseline                  지금의 경고를 기준선으로 (고쳐서 줄었을 때 — 늘리는 데 쓰지 말 것)
   kanade list                      점검 목록
 
 파이썬은 SekaiOS 와 같은 3.13 으로 돌린다 (uv 가 있으면 저절로) — 서버의 3.10 은 3.12+ 문법을 못 읽는다.
@@ -35,6 +37,7 @@ from kd.finding import LEVEL_KO, LEVELS  # noqa: E402
 
 CHECKS = {"imports": imports.check, "deps": deps.check, "dupes": dupes.check, "contracts": contracts.check,
           "dead": dead.check, "lint": lint.check}
+BASELINE = os.path.join(HERE, "baseline.json")
 REPORTS = os.path.join(os.environ.get("KANADE_ROOT", os.path.expanduser("~/.cache/kanade")), "reports")
 ICON = {"error": "✗", "warn": "!", "info": "·"}
 
@@ -64,6 +67,41 @@ def run(a):
     return 1 if cnt["error"] else 0
 
 
+def collect(names=None):
+    out = []
+    for n in names or CHECKS:
+        out.extend(CHECKS[n]())
+    return out
+
+
+def gate(_a):
+    """오류는 언제나 실패. 경고는 기준선에 없는 새 것만 실패 — 고치는 중에 새 문제가 섞이지 않게"""
+    fs = collect()
+    try:
+        with open(BASELINE) as fp:
+            base = set(json.load(fp))
+    except (OSError, ValueError):
+        base = set()
+    errs = [f for f in fs if f.level == "error"]
+    new = [f for f in fs if f.level == "warn" and f.key not in base]
+    gone = base - {f.key for f in fs if f.level == "warn"}
+    for f in errs + new:
+        print(f"  {ICON[f.level]} [{f.check}/{f.kind}] {f.msg}\n      {f.where()}")
+    print(f"■ 카나데 관문: 오류 {len(errs)} · 새 경고 {len(new)} · 고쳐서 사라진 경고 {len(gone)}"
+          + ("  (kanade baseline 으로 기준선을 줄여 두세요)" if gone else ""))
+    return 1 if errs or new else 0
+
+
+def baseline(_a):
+    fs = collect()
+    keys = sorted({f.key for f in fs if f.level == "warn"})
+    with open(BASELINE, "w") as fp:
+        json.dump(keys, fp, indent=0)
+        fp.write("\n")
+    print(f"■ 기준선: 경고 {len(keys)}개 → {BASELINE}")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(dest="cmd", required=True)
@@ -71,7 +109,11 @@ def main():
     r.add_argument("-c", "--check", action="append", choices=list(CHECKS))
     r.add_argument("--all", action="store_true")
     sp.add_parser("list")
+    sp.add_parser("gate")
+    sp.add_parser("baseline")
     a = ap.parse_args()
+    if a.cmd in ("gate", "baseline"):
+        return {"gate": gate, "baseline": baseline}[a.cmd](a)
     if a.cmd == "list":
         for n, fn in CHECKS.items():
             print(f"{n:10} {(sys.modules[fn.__module__].__doc__ or '').strip().splitlines()[0]}")
