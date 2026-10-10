@@ -252,9 +252,12 @@ def install(q, extra):
     ssh("sekai", "rm -rf /tmp/kdebs && mkdir -p /tmp/kdebs")
     ok(scp("sekai", glob.glob(os.path.join(debs, "*.deb")), "/tmp/kdebs/"), "최신 패키지를 라이브 세션으로")
     ok(scp("sekai", [os.path.join(P, "src", "sekai-installer", "sekai-install-backend"),
-                     os.path.join(P, "src", "sekai-installer", "sekai-partition")], "/tmp/"), "최신 설치 백엔드")
+                     os.path.join(P, "src", "sekai-installer", "sekai-partition"),
+                     os.path.join(P, "src", "sekai-installer", "sekai_disk.py")], "/tmp/"), "최신 설치 백엔드")
     # 백엔드는 도우미를 /usr/lib/sekai-installer 에서 찾는다 — 라이브 세션의 옛 것을 바꿔 둔다
-    ssh("sekai", "sudo -n install -m755 /tmp/sekai-partition /usr/lib/sekai-installer/sekai-partition")
+    # (sekai-partition 은 같은 폴더의 sekai_disk.py 를 import — 둘을 같이, 옛 ISO 엔 없다)
+    ssh("sekai", "sudo -n install -m755 /tmp/sekai-partition /usr/lib/sekai-installer/sekai-partition && "
+                 "sudo -n install -m644 /tmp/sekai_disk.py /usr/lib/sekai-installer/sekai_disk.py")
     # 라이브 세션 자체에도 cryptsetup 이 있어야 (luksFormat)
     ssh("sekai", "command -v cryptsetup >/dev/null || sudo -n dpkg -i /tmp/kdebs/libcryptsetup12_*.deb /tmp/kdebs/cryptsetup-bin_*.deb >/dev/null 2>&1; true")
     say("■ 설치 (", " ".join(extra), ")")

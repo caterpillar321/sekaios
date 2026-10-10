@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 
 from . import code
 from .finding import Finding
@@ -21,7 +22,7 @@ def check_pyflakes():
     try:
         from pyflakes import checker
     except ImportError:
-        return [Finding("lint", "info", "pyflakes 없음", "pyflakes 를 못 찾아 건너뛴다 (uv 로 돌리면 저절로 깔린다)")]
+        return [Finding("lint", "error", "pyflakes 없음", "pyflakes 를 못 찾아 검사를 못 했다 — 빠진 채 통과하지 않게 오류 (uv 로 돌리면 저절로 깔린다)")]
     fs = []
     for u in code.py_units():
         if u.package and not u.shipped:
@@ -43,7 +44,7 @@ def check_pyflakes():
 def check_shellcheck():
     sc = shutil.which("shellcheck")
     if not sc:
-        return [Finding("lint", "info", "shellcheck 없음", "shellcheck 를 못 찾아 건너뛴다 (uv 로 돌리면 저절로 깔린다)")]
+        return [Finding("lint", "error", "shellcheck 없음", "shellcheck 를 못 찾아 검사를 못 했다 — 빠진 채 통과하지 않게 오류 (uv 로 돌리면 저절로 깔린다)")]
     fs = []
     units = [u for u in code.units() if u.lang == "sh" and u.shipped]
     if not units:
@@ -62,5 +63,13 @@ def check_shellcheck():
     return fs
 
 
+def check_python():
+    """SekaiOS 는 3.13 — 3.12 밑에서는 새 문법을 문법 오류로 잘못 보거나 못 읽는다 (uv 가 없어 서버 3.10 으로 돈 경우)"""
+    if sys.version_info >= (3, 12):
+        return []
+    v = ".".join(map(str, sys.version_info[:3]))
+    return [Finding("lint", "error", "파이썬 버전", f"파이썬 {v} 로 돌았다 — 3.12 이상(uv)이 있어야 제대로 읽는다")]
+
+
 def check():
-    return check_pyflakes() + check_shellcheck()
+    return check_python() + check_pyflakes() + check_shellcheck()

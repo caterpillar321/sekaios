@@ -13,7 +13,7 @@ def check_vulture():
     try:
         import vulture
     except ImportError:
-        return [Finding("dead", "info", "vulture 없음", "vulture 를 못 찾아 건너뛴다 (uv 로 돌리면 저절로 깔린다)")]
+        return [Finding("dead", "error", "vulture 없음", "vulture 를 못 찾아 검사를 못 했다 — 빠진 채 통과하지 않게 오류 (uv 로 돌리면 저절로 깔린다)")]
     v = vulture.Vulture(verbose=False)
     units = [u for u in code.py_units() if not (u.package and not u.shipped)]
     for u in units:
