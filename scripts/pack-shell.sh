@@ -154,7 +154,7 @@ stage_tree() {
     ( cd "$src" && find . -type f ) | while read -r f; do
         f="${f#./}"
         mode=644
-        case "$f" in usr/bin/*|usr/sbin/*|usr/libexec/*|etc/kernel/postinst.d/*|etc/initramfs/post-update.d/*|etc/grub.d/*|etc/update-motd.d/*|usr/share/initramfs-tools/hooks/*|usr/share/initramfs-tools/scripts/*) mode=755 ;; esac
+        case "$f" in usr/bin/*|usr/sbin/*|usr/libexec/*|usr/lib/systemd/system-shutdown/*|etc/kernel/postinst.d/*|etc/initramfs/post-update.d/*|etc/grub.d/*|etc/update-motd.d/*|usr/share/initramfs-tools/hooks/*|usr/share/initramfs-tools/scripts/*) mode=755 ;; esac
         install -Dm$mode "$src/$f" "$stage/$f"
     done
     # 심볼릭 링크는 링크 그대로 (커서 테마의 이름 잇기 등)

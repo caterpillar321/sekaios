@@ -1,0 +1,70 @@
+#!/usr/bin/python3
+# SekaiOS — 꺼지거나 다시 시작하기 직전, DDR5 램 SPD 허브의 쪽 번호(MR11)를 0 으로 되돌린다.
+#
+# DDR5 SPD 는 1024 바이트를 128 바이트 8쪽으로 나눠 보이고, 몇 쪽을 볼지는 허브의 MR11 로 고른다.
+# 커널 spd5118 드라이버는 SPD 를 처음 읽을 때(OpenRGB·decode-dimms 등) 마지막 쪽(7)까지 넘기고
+# 0 으로 되돌리지 않는다. 다시 시작은 허브 전원을 끊지 않아 쪽 번호가 남고, 일부 바이오스(ASUS B650E-E 등)는
+# 그 상태에서 SPD 를 못 읽어 POST 를 못 한다(DRAM 불만 켜진 채 멈춤 → 파워를 끊어야 풀리고 재학습).
+# systemd 가 모든 프로세스를 끝낸 뒤 돌리는 훅이라, 이 뒤로 SPD 를 건드릴 것이 없다.
+# 쓰는 것은 커널이 DDR5 SPD 허브로 붙인 장치의 MR11 한 칸뿐 — SPD 내용은 건드리지 않는다.
+import ctypes, fcntl, os, subprocess
+
+DRIVER = "/sys/bus/i2c/drivers/spd5118"
+MR11 = 0x0B            # I2C Legacy Mode Device Configuration
+MODE_MASK = 0x0F       # [2:0] 쪽 번호 · [3] 2바이트 주소 방식 — 바이오스는 0쪽·1바이트 방식을 기대한다
+I2C_SLAVE_FORCE, I2C_SMBUS = 0x0706, 0x0720
+SMBUS_READ, SMBUS_WRITE, SMBUS_BYTE_DATA = 1, 0, 2
+
+
+class Data(ctypes.Union):
+    _fields_ = [("byte", ctypes.c_uint8), ("word", ctypes.c_uint16), ("block", ctypes.c_uint8 * 34)]
+
+
+class Args(ctypes.Structure):
+    _fields_ = [("read_write", ctypes.c_uint8), ("command", ctypes.c_uint8),
+                ("size", ctypes.c_uint32), ("data", ctypes.POINTER(Data))]
+
+
+def log(msg):
+    try:
+        with open("/dev/kmsg", "w") as k:
+            k.write(f"sekai-spd-page0: {msg}\n")
+    except OSError:
+        pass
+
+
+def smbus(fd, rw, value=0):
+    d = Data(byte=value)
+    fcntl.ioctl(fd, I2C_SMBUS, Args(rw, MR11, SMBUS_BYTE_DATA, ctypes.pointer(d)))
+    return d.byte
+
+
+def reset(bus, addr):
+    fd = os.open(f"/dev/i2c-{bus}", os.O_RDWR)
+    try:
+        # 커널 드라이버가 붙어 있는 주소라 FORCE 로 연다
+        fcntl.ioctl(fd, I2C_SLAVE_FORCE, addr)
+        v = smbus(fd, SMBUS_READ)
+        if v & MODE_MASK:
+            smbus(fd, SMBUS_WRITE, v & ~MODE_MASK)
+            log(f"{bus}-{addr:04x} MR11 0x{v:02x} -> 0x{smbus(fd, SMBUS_READ):02x}")
+    finally:
+        os.close(fd)
+
+
+def main():
+    try:
+        devs = [n for n in os.listdir(DRIVER) if "-" in n]
+    except OSError:
+        return                                  # DDR5 SPD 허브가 없다
+    for n in devs:
+        bus, addr = n.split("-")
+        if not os.path.exists(f"/dev/i2c-{bus}"):
+            subprocess.run(["modprobe", "-q", "i2c-dev"], check=False)
+        try:
+            reset(int(bus), int(addr, 16))
+        except OSError as e:
+            log(f"{n}: {e}")
+
+
+main()
