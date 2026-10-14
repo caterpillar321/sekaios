@@ -1,0 +1,2 @@
+# DDR5 SPD 허브에 커널 드라이버가 붙으면 SPD 를 미리 읽어 캐시하고 쪽 번호를 0 으로 (sekai-spd-page0 머리말)
+ACTION=="bind", SUBSYSTEM=="i2c", DRIVER=="spd5118", RUN+="/usr/libexec/sekai/sekai-spd-page0 prime %k"
