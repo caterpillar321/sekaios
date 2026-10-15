@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 시스템 환경 변수 도우미 — 관리자 권한으로 실행된다 (pkexec)
+#
+#    sekai-envvars set <이름> <값>      시스템 변수를 넣거나 바꾼다
+#    sekai-envvars unset <이름>         시스템 변수를 지운다
+#
+#  설정 앱의 "환경 변수" 페이지가 부른다. 모든 사용자의 새 로그인(그래픽 세션·로그인 셸·systemd 사용자 서비스)에
+#  적용되는 /etc/environment.d/60-sekai-system.conf 를 고친다 (형식·검사는 sekaishell.userenv 와 같다).
+#  관리자 권한으로 도는 프로그램이라 인자는 엄격히 검사한다.
+#  결과: 성공하면 종료 코드 0 과 "OK", 실패하면 표준 출력에 사람이 읽을 이유 한 줄.
+# ═══════════════════════════════════════════════════════════════
+import os
+os.umask(0o022)  # pkexec 은 부른 사람의 umask 를 그대로 넘긴다 — root 가 만드는 파일이 남에게 쓰기로 열리지 않게
+import sys
+
+from sekaishell import userenv
+from sekaishell.sysutil import atomic_write
+
+
+def fail(msg, code=1):
+    print(msg, flush=True)
+    sys.exit(code)
+
+
+def save(items):
+    path = userenv.SYSTEM_FILE
+    if not items:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        return
+    atomic_write(path, userenv.dump(items))
+    os.chmod(path, 0o644)        # 임시 파일은 600 으로 만들어진다 — 사용자 관리자(systemd --user)·로그인 셸이 읽어야 한다
+
+
+def main():
+    if os.geteuid() != 0:
+        fail("관리자 권한이 필요합니다")
+    a = sys.argv[1:]
+    if len(a) == 3 and a[0] == "set":
+        name, value = a[1], a[2]
+        why = userenv.check_name(name) or userenv.check_value(value)
+        if why:
+            fail(why)
+        items = dict(userenv.read(userenv.SYSTEM_FILE))
+        items[name] = value
+        save(list(items.items()))
+    elif len(a) == 2 and a[0] == "unset":
+        if userenv.check_name(a[1]):
+            fail(userenv.check_name(a[1]))
+        save([(n, v) for n, v in userenv.read(userenv.SYSTEM_FILE) if n != a[1]])
+    else:
+        fail("사용법: sekai-envvars set <이름> <값> | unset <이름>", 2)
+    print("OK", flush=True)
+
+
+if __name__ == "__main__":
+    main()

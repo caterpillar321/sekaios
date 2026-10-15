@@ -22,7 +22,7 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 
-from sekaishell import theme  # noqa: E402
+from sekaishell import theme, userenv  # noqa: E402
 from sekaishell.appkit import AppTheme, JsonState, appearance  # noqa: E402
 
 from .common import SPECIAL_WORDS, archive, dbg, norm_uri, properties  # noqa: E402
@@ -307,6 +307,7 @@ class FilesApp(Gtk.Application):
     # ── 시작 ──
     def do_startup(self):
         Gtk.Application.do_startup(self)
+        userenv.watch()          # 창이 여럿이어도 프로세스는 하나 — 바뀐 환경 변수를 여는 앱에 넘기게
         a = appearance()
         theme.apply_gtk_settings(Gtk.Settings.get_default(), a["mode"])
         _THEME.load(a)

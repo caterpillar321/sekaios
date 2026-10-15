@@ -40,6 +40,7 @@ from sekaishell.layer import GtkLayerShell  # noqa: E402  (X11 기본 화면 모
 from sekaishell.popup import PanelPopup, make_translucent  # noqa: E402,F401
 from sekaishell.monitors import hypr_monitors, primary_gdk  # noqa: E402
 from sekaishell.launchers import desktop_dir, launcher_command, launcher_trusted, mark_trusted  # noqa: E402
+from sekaishell import userenv  # noqa: E402
 
 CFG = os.path.expanduser("~/.config/sekai/settings.json")
 ICONS_CFG = os.path.expanduser("~/.config/sekai/desktop-icons.json")
@@ -1870,6 +1871,7 @@ def main():
         hup["src"] = GLib.timeout_add(200, apply_hup)
         return True
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGHUP, on_hup)
+    userenv.watch()          # 바탕 화면 아이콘으로 여는 앱도 바뀐 환경 변수를 받게
     Gtk.main()
 
 

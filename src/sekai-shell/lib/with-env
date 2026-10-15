@@ -1,0 +1,8 @@
+#!/bin/sh
+# 합성기 단축키로 여는 앱(터미널 · 실행 · 탐색기)에 지금의 환경 변수(설정 → 환경 변수)를 얹어 실행한다.
+#   합성기는 처음 시작할 때의 환경을 그대로 들고 있어, 세션 중에 바꾼 값을 모른다
+if [ -s /etc/environment.d/60-sekai-system.conf ] || [ -s "${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/70-sekai-user.conf" ] \
+   || [ -n "${SEKAI_ENV_BASE:-}" ]; then
+    eval "$(python3 -m sekaishell.userenv sh 2>/dev/null)"
+fi
+exec "$@"

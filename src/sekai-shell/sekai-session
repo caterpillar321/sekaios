@@ -63,6 +63,11 @@ export QT_IM_MODULES="wayland;ibus"
 # ── 하드웨어 보정 (VMware 등) ─────────────────────────────
 . /usr/lib/sekai/hw-env.sh
 
+# ── 환경 변수 (설정 → 환경 변수) ─────────────────────────
+#   시스템(/etc/environment.d/60-sekai-system.conf)·사용자(~/.config/environment.d/70-sekai-user.conf) 변수를 얹는다.
+#   위의 값들 다음이라 사용자가 고른 값이 이긴다 (세션이 쓰는 값은 sekaishell.userenv 가 막는다)
+eval "$(python3 -m sekaishell.userenv sh 2>/dev/null)"
+
 # 출력은 파일로 — 안 그러면 로그인 직후 Hyprland 시작 로그가 화면에 잠깐 찍힌다
 LOGDIR="${XDG_STATE_HOME:-$HOME/.local/state}/sekai"
 mkdir -p "$LOGDIR"

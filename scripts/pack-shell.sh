@@ -50,6 +50,7 @@ install -Dm755 "$SRC/lib/a11yd"        "$STAGE/usr/lib/sekai/a11yd"
 install -Dm755 "$SRC/lib/polkit-agent" "$STAGE/usr/lib/sekai/polkit-agent"
 install -Dm755 "$SRC/lib/nm-agent"     "$STAGE/usr/lib/sekai/nm-agent"
 install -Dm755 "$SRC/lib/keyring-prompter" "$STAGE/usr/lib/sekai/keyring-prompter"
+install -Dm755 "$SRC/lib/with-env"     "$STAGE/usr/lib/sekai/with-env"
 install -Dm755 "$SRC/sekai-terminal"  "$STAGE/usr/bin/sekai-terminal"
 install -Dm755 "$SRC/nenerobo-bin"    "$STAGE/usr/bin/nenerobo"
 # 기본 화면 모드 (X11) — 그래픽 드라이버가 없을 때

@@ -38,6 +38,7 @@ from sekaishell import monitors                           # noqa: E402
 from sekaishell.taskpreview import TaskPreview           # noqa: E402
 from sekaishell import search                             # noqa: E402
 from sekaishell import desktops                           # noqa: E402
+from sekaishell import userenv                            # noqa: E402
 
 # 시작 버튼 로고: layers / world / diamond / blockS / nested / slashes
 DEBUG = os.environ.get("SEKAI_DEBUG") == "1"
@@ -2789,6 +2790,8 @@ def main():
         GLib.idle_add(reload_)
         return True
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGHUP, on_hup)
+    # 환경 변수(설정 → 환경 변수)를 바꾸면 시작 메뉴·작업 표시줄에서 새로 여는 앱부터 받는다
+    userenv.watch()
 
     Gtk.main()
 
