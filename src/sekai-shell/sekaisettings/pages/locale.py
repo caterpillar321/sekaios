@@ -140,7 +140,7 @@ def _sync_text(td):
 
 
 def build(store):
-    p = Page("시간 및 언어", "표시 언어, 시간대, 한글 입력을 설정합니다.")
+    p = Page("시간 및 언어")
 
     # ── 언어 ──
     s = p.section("언어")

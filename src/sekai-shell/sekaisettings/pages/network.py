@@ -390,7 +390,7 @@ class _VpnLogin:
 # ───────────────────────────────────────────────────────────────
 class NetworkPage(StatusLine):
     def __init__(self, store):
-        self.p = Page("네트워크", "유선·무선 연결과 VPN 을 관리합니다.")
+        self.p = Page("네트워크")
         self.dead = False
         self.st = None                 # read_state() 결과
         self.nets = None               # Wi-Fi 목록 (parse_wifi)
@@ -1145,7 +1145,7 @@ class NetworkPage(StatusLine):
 
 def build(store):
     if not shutil.which("nmcli"):
-        p = Page("네트워크", "유선·무선 연결과 VPN 을 관리합니다.")
+        p = Page("네트워크")
         p.add_widget(_notice("네트워크 관리 도구(NetworkManager)가 설치되어 있지 않습니다."))
         return p
     return NetworkPage(store).widget

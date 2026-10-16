@@ -62,7 +62,7 @@ def _mode():
 class GraphicsPage:
     def __init__(self, store):
         self.st = None
-        self.p = Page("그래픽", "그래픽 카드와 드라이버를 확인하고, NVIDIA 드라이버를 설치합니다.")
+        self.p = Page("그래픽")
 
         s = self.p.section()
         t, sub = _mode()

@@ -57,7 +57,7 @@ def _available(items):
 
 
 def build_defaults(store):
-    p = Page("기본 앱", "파일과 링크를 열 때 쓸 프로그램을 정합니다.")
+    p = Page("기본 앱")
     a = store.get("apps")
 
     s = p.section("기본으로 사용할 앱")
@@ -372,7 +372,7 @@ def _remove_dialog(page, r, rows, recount):
 
 
 def build_account(store):
-    p = Page("계정", "로그인 계정 정보입니다.")
+    p = Page("계정")
     user = getpass.getuser()
     try:
         ent = pwd.getpwnam(user)

@@ -1091,7 +1091,7 @@ class _Cards:
 
 class SoundPage:
     def __init__(self, store):
-        self.p = Page("소리", "소리를 재생할 장치와 녹음할 장치를 고르고, 볼륨과 앱마다의 소리를 조정합니다.")
+        self.p = Page("소리")
         self.dead = False
         self.visible = False
         self.grabbed = set()                # 사람이 잡고 있는 슬라이더 · 펼쳐 둔 콤보

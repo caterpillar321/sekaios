@@ -40,7 +40,7 @@ def _wallpapers():
 
 
 def build_wallpaper(store):
-    p = Page("배경화면", "바탕화면 그림을 고릅니다.")
+    p = Page("배경화면")
 
     cur = Gtk.Label(label=store.get("wallpaper", "path"), xalign=0)
     cur.get_style_context().add_class("row-sub")
@@ -181,7 +181,7 @@ def _draw_mode_preview(area, cr, mode, store):
 
 
 def build_appearance(store):
-    p = Page("색 및 모양", "강조색과 창 테두리, 여백을 조정합니다.")
+    p = Page("색 및 모양")
     a = store.get("appearance")
 
     # ── 모드 (다크 / 라이트) ──
@@ -224,7 +224,7 @@ def build_appearance(store):
 
     s = p.section("색")
     accent_btn = color_button(a["accent"], lambda v: store.set("appearance", "accent", v))
-    row(s, "강조색", "선택 표시, 테두리, 패널 포인트 색",
+    row(s, "강조색", "선택 표시와 켜진 스위치의 색",
         icon=["preferences-desktop-theme", "applications-graphics"],
         control=accent_btn)
 
@@ -250,6 +250,9 @@ def build_appearance(store):
     row(s, "폴더 색", "탐색기·바탕 화면의 폴더를 강조색으로 칠합니다 (끄면 기본 파란 폴더)",
         icon=["folder", "inode-directory"],
         control=switch(a.get("folder_accent", True), lambda v: store.set("appearance", "folder_accent", v)))
+    row(s, "창 테두리에 강조색 표시", None,
+        icon=["preferences-system-windows", "window-new"],
+        control=switch(a.get("accent_border", False), lambda v: store.set("appearance", "accent_border", v)))
 
     color_btns = {
         "surface": color_button(a["surface"], lambda v: store.set("appearance", "surface", v)),

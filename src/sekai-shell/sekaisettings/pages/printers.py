@@ -2204,7 +2204,7 @@ class _Prefs:
 class PrintersPage(StatusLine):
     def __init__(self, store):
         self.me = _me()
-        self.p = Page("프린터", "프린터를 추가하고 기본 프린터와 인쇄 대기열을 관리합니다.")
+        self.p = Page("프린터")
         self.dead = False
         self.cups = "loading"      # loading | ok | missing | down
         self.snap = None           # 마지막으로 읽은 CUPS 상태 (snapshot)

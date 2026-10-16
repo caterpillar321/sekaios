@@ -28,7 +28,7 @@ def _hist_count():
 
 
 def build(store):
-    p = Page("알림", "알림 팝업과 알림 센터의 동작을 정합니다.")
+    p = Page("알림")
     n = store.get("notifications")
 
     s = p.section("표시")

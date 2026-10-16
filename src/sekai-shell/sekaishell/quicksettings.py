@@ -927,7 +927,8 @@ class QuickSettings(PanelPopup):
         self.t_dnd = Tile(["notifications-disabled-symbolic"], "방해 금지", self._toggle_dnd)
         self.t_night = Tile(["night-light-symbolic", "weather-clear-night-symbolic"], "야간 모드",
                             lambda: self.night.set(not self.night.on))
-        self.t_dark = Tile(["weather-clear-night-symbolic", "preferences-desktop-appearance-symbolic"],
+        # 야간 모드(달)와 헷갈리지 않게 반쪽 원 — 윈도우의 "대비/테마" 기호 (sekai-de 가 hicolor 에 넣는다)
+        self.t_dark = Tile(["sekai-dark-mode-symbolic", "preferences-desktop-appearance-symbolic"],
                            "다크 모드", self._toggle_dark)
         self._tiles = [self.t_wifi, self.t_wired, self.t_bt, self.t_air, self.t_dnd, self.t_night, self.t_dark]
         self._tile_layout = None

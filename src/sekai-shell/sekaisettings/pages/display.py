@@ -170,7 +170,7 @@ def _res_size(res, mon):
 
 
 def build(store):
-    p = Page("디스플레이", "모니터의 해상도, 주사율, 배율을 바꿉니다.")
+    p = Page("디스플레이")
     # 꺼 둔 모니터도 보여야 다시 켤 수 있다 — "monitors" 는 켜진 것만, "monitors all" 은 꺼진 것까지
     all_mons = hyprctl("monitors", "all", js=True) or hyprctl("monitors", js=True) or []
     mons = [m for m in all_mons if not m.get("disabled")]   # 배치·주 디스플레이는 켜진 것만

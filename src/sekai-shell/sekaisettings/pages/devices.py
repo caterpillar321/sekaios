@@ -66,7 +66,7 @@ def set_entry_value(e, text):
 
 # ── 키보드 / 마우스 ─────────────────────────────────────────
 def build_input(store):
-    p = Page("키보드 및 마우스", "입력 장치의 동작을 설정합니다.")
+    p = Page("키보드 및 마우스")
     i = store.get("input")
 
     s = p.section("키보드")

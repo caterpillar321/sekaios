@@ -29,7 +29,7 @@ def _osk(action):
 
 
 def build(store):
-    p = Page("접근성", "보기·듣기·입력을 쉽게 — 텍스트 크기, 돋보기, 색 필터, 대비 테마, 키보드 도움")
+    p = Page("접근성")
     x = store.get("a11y")
     a = store.get("appearance")
 

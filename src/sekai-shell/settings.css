@@ -36,7 +36,7 @@
     background: @card;
     border: 1px solid @line;
     border-bottom: 2px solid @line;
-    border-radius: 8px;
+    border-radius: 4px;
     color: @fg;
     caret-color: @accent;
     padding: 6px 10px;
@@ -49,7 +49,7 @@
 .side-row {
     padding: 9px 12px;
     margin: 1px 10px;
-    border-radius: 8px;
+    border-radius: 4px;
 }
 /* 선택 막대의 크기·자리를 선택 안 된 줄에도 (선택이 풀릴 때 막대가 줄 전체로 커지며 번쩍이지 않게) */
 .side-row, .side-list row { background-size: 3px 16px; background-position: 0% 50%; background-repeat: no-repeat; }
@@ -96,7 +96,7 @@
 .section row {
     background: @card;
     border: 1px solid @line;
-    border-radius: 8px;
+    border-radius: 4px;
     margin-bottom: 3px;
     padding: 14px 18px;
     min-height: 40px;
@@ -114,7 +114,7 @@
 .notice {
     background: alpha(@accent, 0.10);
     border: 1px solid alpha(@accent, 0.28);
-    border-radius: 8px;
+    border-radius: 4px;
     padding: 12px 16px;
     margin: 12px 0;
     color: @fg;
@@ -127,20 +127,20 @@ button {
     background: @hover;
     background-image: none;
     border: 1px solid @line;
-    border-radius: 6px;
+    border-radius: 4px;
     color: @fg;
     padding: 6px 16px;
     box-shadow: none;
 }
 button:hover  { background: @pressed; }
-button:active { background: alpha(@accent, 0.25); }
+button:active { background: @pressed; }
 button:disabled { color: @text3; }
 
 entry {
     background: @winbg;
     border: 1px solid @line;
     border-bottom: 2px solid alpha(@fg, 0.18);
-    border-radius: 6px;
+    border-radius: 4px;
     color: @fg;
     caret-color: @accent;
     padding: 6px 10px;
@@ -191,7 +191,7 @@ scale value { color: @text2; font-size: 9pt; font-feature-settings: "tnum"; }
 spinbutton {
     background: @winbg;
     border: 1px solid @line;
-    border-radius: 6px;
+    border-radius: 4px;
     color: @fg;
 }
 spinbutton button { border: none; background: transparent; border-radius: 0; padding: 4px 10px; }
@@ -200,7 +200,7 @@ spinbutton button:hover { background: @hover; }
 combobox button {
     background: @hover;
     border: 1px solid @line;
-    border-radius: 6px;
+    border-radius: 4px;
     padding: 6px 12px;
 }
 combobox window.popup, menu, .menu {
@@ -246,7 +246,7 @@ progressbar.update-progress progress {
     padding: 3px;
     margin: 5px;
     border: 2px solid transparent;
-    border-radius: 10px;
+    border-radius: 4px;
     background: @card;
 }
 .wall-tile:hover   { border-color: alpha(@accent, 0.5); }
@@ -275,13 +275,13 @@ scrollbar slider {
 }
 scrollbar slider:hover { background: alpha(@fg, 0.38); min-width: 6px; }
 
-tooltip { background: @card; color: @fg; border: 1px solid @line; border-radius: 6px; }
+tooltip { background: @card; color: @fg; border: 1px solid @line; border-radius: 4px; }
 
 /* 그래픽 페이지 — 보안 부팅 키 등록 비밀번호 (휴대폰으로 찍기 좋게 크게) */
 box.mok-card {
     background: @card;
     border: 1px solid alpha(@accent, 0.55);
-    border-radius: 8px;
+    border-radius: 4px;
 }
 label.mok-password { color: @accent; margin: 4px 0; }
 textview.report-text, textview.report-text text { font-size: 9.75pt; background: @card; }
@@ -291,7 +291,7 @@ button.mode-card {
     background: @card;
     background-image: none;
     border: 2px solid transparent;
-    border-radius: 10px;
+    border-radius: 4px;
     padding: 10px;
     box-shadow: none;
     color: @fg;
@@ -300,8 +300,8 @@ button.mode-card:hover { background: @hover; }
 button.mode-card.mode-on { border-color: @accent; }
 
 /* 디스플레이 배치 */
-.arrange-frame { border-radius: 10px; }
-.arrange-frame > border { border-radius: 10px; }
+.arrange-frame { border-radius: 4px; }
+.arrange-frame > border { border-radius: 4px; }
 window.identify-win { background: transparent; }
 .identify-num {
     font-size: 82.5pt;
@@ -352,7 +352,7 @@ box.prn-head { margin: 4px 0 18px 0; }
 button.prn-back {
     background: transparent;
     border-color: transparent;
-    border-radius: 6px;
+    border-radius: 4px;
     padding: 8px;
 }
 button.prn-back:hover { background: @hover; }
@@ -365,7 +365,7 @@ levelbar.snd-meter block.empty { background: transparent; border: none; }
 radio:checked { background: @accent; border-color: @accent; color: @on_accent; }
 
 /* 프린터 — 드라이버 고르기 (제조업체 · 모델 목록) */
-scrolledwindow.prn-list-box { border: 1px solid @line; border-radius: 6px; background: @card; }
+scrolledwindow.prn-list-box { border: 1px solid @line; border-radius: 4px; background: @card; }
 treeview.prn-list { background: @card; color: @fg; }
 treeview.prn-list:selected { background: @accent; color: @on_accent; }
 treeview.prn-list header button {
@@ -377,7 +377,7 @@ treeview.prn-list header button label { color: @text2; font-size: 9pt; font-weig
 /* 네트워크 — 연결 속성 */
 label.net-error { color: mix(#e0453a, @fg, 0.25); }
 box.net-head { margin: 4px 0 18px 0; }
-button.net-back { background: transparent; border-color: transparent; border-radius: 6px; padding: 8px; }
+button.net-back { background: transparent; border-color: transparent; border-radius: 4px; padding: 8px; }
 button.net-back:hover { background: @hover; }
 label.net-name { font-size: 15pt; font-weight: 700; color: @fg; }
 
@@ -387,4 +387,4 @@ label.side-hit-sub { color: @text3; font-size: 9pt; }
     background: alpha(@accent, 0.22);
     transition: background 400ms ease-out;
 }
-label.section-title.item-found { border-radius: 6px; }
+label.section-title.item-found { border-radius: 4px; }

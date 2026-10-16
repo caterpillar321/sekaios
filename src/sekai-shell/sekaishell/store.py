@@ -36,8 +36,9 @@ DEFAULTS = {
         "surface": "#1e1e22",     # 작업 표시줄·메뉴·팝업의 면
         "fg": "#f1f1f3",
         "titlebar_bg": "#2c2c30", # 창 제목줄 — GTK 다크 앱 본문(#2d2d2d)에 맞춤
-        "rounding": 10,
+        "rounding": 8,            # 윈도우 11 창 모서리
         "border_size": 1,
+        "accent_border": False,   # 창 테두리를 강조색으로 — 윈도우처럼 기본은 끔 (무채색 얇은 선)
         "gaps_in": 6,
         "gaps_out": 0,          # 최대화한 창이 화면에 꽉 차게 (윈도우처럼)
         "inactive_opacity": 1.0,
@@ -286,7 +287,14 @@ def _01(v):     return 1 if v else 0
 def _str(v):    return str(v)
 def _layout(v): return str(v) or "us"
 def _rgba(v):   return hex_to_rgba(v)
-def _accent(v): return hex_to_rgba(v, 0.53)
+def border_colors(a):
+    """(활성, 비활성) 창 테두리 색 — 윈도우 11 처럼 기본은 무채색, 활성 창은 조금 더 진한 선.
+    "강조색 테두리"를 켜면 활성 창만 강조색. 대비 테마는 write_hypr_fragment 가 따로 (노랑·흰색)"""
+    light = theme.mode_of(a) == "light"
+    inactive = "rgba(0000001f)" if light else "rgba(ffffff14)"
+    if a.get("accent_border"):
+        return hex_to_rgba(a.get("accent") or DEFAULTS["appearance"]["accent"], 0.53), inactive
+    return ("rgba(0000004d)" if light else "rgba(ffffff2e)"), inactive
 
 
 # 접근성 — 커서 색(테마)과 색 필터 셰이더
@@ -483,7 +491,9 @@ class Store:
         lines.append(f"    gaps_in = {int(a['gaps_in'])}")
         lines.append(f"    gaps_out = {int(a['gaps_out'])}")
         lines.append(f"    border_size = {int(a['border_size'])}")
-        lines.append(f"    col.active_border = {hex_to_rgba(a['accent'], 0.53)}")
+        active, inactive = border_colors(a)
+        lines.append(f"    col.active_border = {active}")
+        lines.append(f"    col.inactive_border = {inactive}")
         lines.append("}")
         lines.append("")
 
@@ -624,7 +634,6 @@ class Store:
         ("appearance", "animations"):       ("animations:enabled", _bool),
         ("appearance", "titlebar_height"):  ("plugin:hyprbars:bar_height", _int),
         ("appearance", "titlebar"):         ("plugin:hyprbars:enabled", _01),
-        ("appearance", "accent"):           ("general:col.active_border", _accent),
         ("appearance", "titlebar_bg"):      ("plugin:hyprbars:bar_color", _rgba),
         ("appearance", "fg"):               ("plugin:hyprbars:col.text", _rgba),
         ("input", "kb_layout"):             ("input:kb_layout", _layout),
@@ -694,8 +703,14 @@ class Store:
             self.apply_display()
         elif section == "a11y":
             self.apply_a11y(key)
-        elif section == "appearance" and key in ("accent", "folder_accent"):
-            self.apply_folders()
+        elif section == "appearance" and key in ("accent", "folder_accent", "accent_border"):
+            if key != "folder_accent" and self.get("appearance", "mode") != "contrast":
+                try:
+                    keyword("general:col.active_border", border_colors(self.get("appearance"))[0])
+                except Exception as e:
+                    dbg("테두리 색 반영 실패", e)
+            if key != "accent_border":
+                self.apply_folders()
         elif section == "appearance" and key == "cursor_size":
             self.apply_a11y("cursor_size")           # 다시 로그인하지 않아도 바로 (hyprctl setcursor)
         elif section == "power":

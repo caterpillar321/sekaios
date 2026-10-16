@@ -73,7 +73,7 @@ def image_build():
 
 def build_about(store):
     osr = _os_release()
-    p = Page("시스템 정보", "이 컴퓨터와 SekaiOS 에 대한 정보입니다.")
+    p = Page("시스템 정보")
 
     s = p.section("운영체제")
     row(s, "이름", icon=["sekaios", "distributor-logo", "computer"],
@@ -113,7 +113,7 @@ def build_about(store):
 def build_power(store):
     from sekaishell import power
     from sekaishell.power import battery_text
-    p = Page("전원 및 잠금", "전원 모드 · 배터리 · 화면을 끄고 잠그는 시간을 정합니다.")
+    p = Page("전원 및 잠금")
     has_idle = bool(shutil.which("swayidle"))
 
     # ── 배터리 (노트북) · 전원 모드 ──

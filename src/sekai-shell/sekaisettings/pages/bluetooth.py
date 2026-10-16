@@ -182,7 +182,7 @@ class _Asker:
 class BluetoothPage(StatusLine):
     def __init__(self, store):
         self.bt = bluetooth.get()
-        self.p = Page("블루투스", "헤드폰·스피커·키보드·마우스·휴대폰 같은 블루투스 장치를 연결합니다.")
+        self.p = Page("블루투스")
         self.dead = False
         self.ops = {}              # 장치 경로 → 하고 있는 일 (OP_TEXT 의 키)
         self.pairing = None        # 짝 맺고 연결까지 하는 중인 장치 (한 번에 하나)
