@@ -260,6 +260,9 @@ def conf_uses():
                     lines = u.text.splitlines()
                 except OSError:
                     continue
+                # systemd 가 먼저 확인하는 명령 (없으면 유닛을 건너뛴다) — 선택 기능
+                checked = {m.group(1) for m in re.finditer(r"^\s*(?:Condition|Assert)FileIsExecutable=\|?(\S+)\s*$",
+                                                          u.text, re.M)}
                 for i, raw in enumerate(lines, 1):
                     s = raw.strip()
                     if s.startswith("#"):
@@ -277,7 +280,7 @@ def conf_uses():
                     for c in _words(cmdline):
                         if c.startswith("$") or not (CMD_RE.match(c) or c.startswith("/")):
                             continue
-                        out.append(Use("cmd", c, u, i, strong=True))
+                        out.append(Use("cmd", c, u, i, guarded=c in checked, strong=True))
     return out
 
 

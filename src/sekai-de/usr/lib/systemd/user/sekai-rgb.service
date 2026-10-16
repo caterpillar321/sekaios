@@ -1,0 +1,21 @@
+# 로그인할 때 조명 색 넣기 — 램·그래픽카드 같은 ENE 조명 칩은 전원이 끊기면 색을 잊고 기본(무지개)으로 돌아간다.
+#   ~/.config/sekai/rgb 는 이 서비스만 쓰는 OpenRGB 설정 폴더: OpenRGB.json 에서 쓸 감지기만 켜 두고(버스를 덜 건드린다),
+#   profiles/login.json 이 넣을 색. 폴더가 없으면 아무것도 하지 않는다.
+#   만들기: openrgb --config ~/.config/sekai/rgb --noautoconnect -d 0 -m static -c 39C5BB … --save-profile login
+# 다른 OpenRGB(창)가 떠 있으면 건너뛴다 — 한 칩에 두 프로세스가 같이 쓰면 포인터·값 쌍이 섞여 엉뚱한 칸에 들어간다
+#   (프로세스 안의 잠금은 openrgb 1.0.0+sekai1 에서 고쳤지만 프로세스 사이는 막을 수 없다).
+# sekai-session.target 이 켠다 — 그때는 로그인한 사용자에게 /dev/i2c-* 권한(uaccess)이 넘어와 있다.
+[Unit]
+Description=조명 색 넣기 (OpenRGB 프로필)
+PartOf=sekai-session.target
+After=sekai-session.target
+ConditionPathExists=%h/.config/sekai/rgb/profiles/login.json
+ConditionFileIsExecutable=/usr/bin/openrgb
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecCondition=/bin/sh -c '! pgrep -x openrgb >/dev/null'
+ExecStart=/usr/bin/openrgb --config %h/.config/sekai/rgb --noautoconnect --profile login
+TimeoutStartSec=90
+Nice=10

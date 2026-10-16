@@ -7,4 +7,6 @@ Description=SekaiOS 그래픽 세션
 Documentation=man:systemd.special(7)
 BindsTo=graphical-session.target
 Wants=graphical-session-pre.target
+# 로그인할 때 조명 색 넣기 — ~/.config/sekai/rgb 가 있을 때만 (sekai-rgb.service)
+Wants=sekai-rgb.service
 After=graphical-session-pre.target
