@@ -265,6 +265,8 @@ def _flatpak_error(e):
     low = msg.lower()
     if "not authorized" in low or "authentication" in low or "dismissed" in low:
         return "인증이 취소되었습니다"
+    if "not allowed for user" in low:
+        return "이 계정에는 권한이 없습니다 — 관리자 계정으로 로그인해 주세요"
     if "no space" in low:
         return "디스크 공간이 부족합니다"
     if "could not resolve" in low or "unable to connect" in low or "timeout" in low or "network" in low:
@@ -274,6 +276,23 @@ def _flatpak_error(e):
     if "not installed" in low:
         return "설치되어 있지 않습니다"
     return msg
+
+
+def flatpak_updates():
+    """업데이트가 있는 시스템 설치 flatpak → [{"ref", "id", "app"(앱이면 True), "name", "old"}] · 실패하면 None.
+    인터넷으로 묻는다 — 작업 스레드에서. 런타임(앱이 함께 쓰는 공용 부품)도 들어 있다."""
+    try:
+        Flatpak = _flatpak()
+        inst = flatpak_installation()
+        out = []
+        for r in inst.list_installed_refs_for_update(None):
+            app = r.get_kind() == Flatpak.RefKind.APP
+            out.append({"ref": r.format_ref(), "id": r.get_name(), "app": app,
+                        "name": (r.get_appdata_name() if app else None) or r.get_name(),
+                        "old": r.get_appdata_version() or ""})
+        return out
+    except Exception:
+        return None
 
 
 def flatpak_plan(ref):
@@ -303,8 +322,9 @@ def flatpak_plan(ref):
 
 
 def run_flatpak(op, ref, on_line, on_done):
-    """op: install · remove. 줄(PROGRESS·ERROR·DONE)과 끝(코드)은 GTK 스레드에서. 제거한 뒤엔 아무도 안 쓰는
-    런타임도 정리한다 (flatpak uninstall --unused 처럼)."""
+    """op: install · remove · update (update 는 ref 에 목록도 — 앱과 런타임 여럿을 한 번에).
+    줄(PROGRESS·ERROR·DONE)과 끝(코드)은 GTK 스레드에서. 제거한 뒤엔 아무도 안 쓰는
+    런타임도 정리한다 (flatpak uninstall --unused 처럼). 업데이트는 데비안 기본 polkit 규칙상 암호를 묻지 않는다."""
     def work():
         try:
             Flatpak = _flatpak()
@@ -313,6 +333,9 @@ def run_flatpak(op, ref, on_line, on_done):
             t.set_no_interaction(True)
             if op == "install":
                 t.add_install(flatpak_remote(inst), ref, None)
+            elif op == "update":
+                for r in ([ref] if isinstance(ref, str) else ref):
+                    t.add_update(r, None, None)
             else:
                 t.add_uninstall(ref)
             st = {"n": 0, "total": 1, "err": None}
@@ -325,7 +348,7 @@ def run_flatpak(op, ref, on_line, on_done):
                 st["n"] += 1
                 parts = (o.get_ref() or "").split("/")
                 what = parts[1] if len(parts) > 1 else o.get_ref()
-                verb = "제거하는 중" if op == "remove" else "내려받는 중"
+                verb = {"remove": "제거하는 중", "update": "업데이트하는 중"}.get(op, "내려받는 중")
                 progress.set_update_frequency(400)
 
                 def changed(p):

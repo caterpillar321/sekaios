@@ -21,6 +21,7 @@ from sekaishell import appmgr, dbg  # noqa: E402
 from sekaishell.appkit import AppTheme  # noqa: E402
 
 from . import catalog as C  # noqa: E402
+from .updates import Updates  # noqa: E402
 from .widgets import Jobs, app_icon, fill, grid, label, launch, picture  # noqa: E402
 
 APP_ID = "org.sekaios.Store"
@@ -90,6 +91,9 @@ label.info-k { color: @text2; }
 label.info-v { color: @fg; }
 .store-shot { background: @card; border-radius: 8px; }
 .lib-row { background: @card; border: 1px solid @line; border-radius: 10px; padding: 10px 14px; }
+label.upd-state { color: @text2; }
+button.link-btn.upd-name { padding: 0; min-height: 0; }
+label.upd-err { color: mix(#e0453a, @fg, 0.25); }   /* 다크·라이트 모두 읽히게 */
 .store-notice { background: alpha(@accent, 0.10); border: 1px solid alpha(@accent, 0.30); border-radius: 8px; padding: 10px 14px; }
 """
 
@@ -144,6 +148,7 @@ class StoreWindow(Gtk.ApplicationWindow):
         self.get_style_context().add_class("store-window")
         self.cat = C.Catalog()
         self.jobs = Jobs(self.cat)
+        self.updates = Updates(self.cat, self.jobs)
         self.history = []               # 뒤로 가기 — [(쪽 이름, 인자)]
         self.cur = None
         self._search_src = 0
@@ -191,6 +196,7 @@ class StoreWindow(Gtk.ApplicationWindow):
         self.connect("delete-event", self._on_delete)
         self._lib_src = 0
         self.jobs.watch(self._on_job)
+        self.updates.watch(self._on_job)
         self.show_all()
         self._load()
 
@@ -292,6 +298,8 @@ class StoreWindow(Gtk.ApplicationWindow):
             self.show("home", None, push=False)
             self.search.set_text(p[1])
             self._run_search()
+        elif p and p[0] == "library":
+            self.show("library", None, push=False)
         else:
             self.show(then or "home", None, push=False)
         return False
@@ -343,9 +351,9 @@ class StoreWindow(Gtk.ApplicationWindow):
         if not before:
             GLib.timeout_add_seconds(5, tick)
 
-    def refresh_catalog(self, status=None):
-        """apt update (관리자) → 목록 다시 읽기"""
-        if self.jobs.busy() or getattr(self, "_refreshing", False):
+    def refresh_catalog(self, status=None, scan=False):
+        """apt update (관리자) → 목록 다시 읽기. scan: 그다음 앱 업데이트도 센다 (받지 못했으면 받아 둔 목록으로)"""
+        if self.jobs.busy() or self.updates.busy() or getattr(self, "_refreshing", False):
             if status is not None:
                 status.set_text("설치가 끝난 뒤에 새로 고칠 수 있습니다")
             return
@@ -366,6 +374,8 @@ class StoreWindow(Gtk.ApplicationWindow):
         def done(rc):
             self._refreshing = False
             self.spinner.stop()
+            if scan:
+                self.updates.scan()
             if rc in appmgr.CANCELLED and not err["e"]:
                 if target is not None:
                     target.set_text("인증이 취소되었습니다")
@@ -391,6 +401,8 @@ class StoreWindow(Gtk.ApplicationWindow):
         if name == "detail":
             self._build_detail(arg)
         elif name == "library":
+            if not self.updates.scanned:
+                self.updates.scan()
             self._build_library()
         elif name == "search":
             self._build_search(arg)
@@ -953,15 +965,14 @@ class StoreWindow(Gtk.ApplicationWindow):
         head = Gtk.Box(spacing=8)
         head.pack_start(label("라이브러리", "page-h"), False, False, 0)
         upd = Gtk.Button(label="업데이트 확인")
-        upd.connect("clicked", lambda *_: Gio.Subprocess.new(["sekai-settings", "--page=update"],
-                                                               Gio.SubprocessFlags.NONE))
+        upd.set_tooltip_text("앱 목록을 새로 받고 업데이트를 셉니다 (SekaiOS·데비안 시스템 업데이트는 설정 › 업데이트)")
+        upd.set_sensitive(not self.updates.scanning and not self.updates.busy())
         head.pack_end(upd, False, False, 0)
-        ref = Gtk.Button(label="앱 목록 새로 고침")
-        head.pack_end(ref, False, False, 0)
         v.pack_start(head, False, False, 0)
         status = label("", "detail-meta")
         v.pack_start(status, False, False, 0)
-        ref.connect("clicked", lambda *_: self.refresh_catalog(status))
+        upd.connect("clicked", lambda *_: self.refresh_catalog(status, scan=True))
+        self._lib_updates(v)
 
         if self.jobs.current or self.jobs.queue:
             v.pack_start(label("진행 중", "sec-h"), False, False, 0)
@@ -985,6 +996,91 @@ class StoreWindow(Gtk.ApplicationWindow):
         sw = _scroller(v)
         sw.show_all()
         self.stack.add_named(sw, "library")
+
+    def _lib_updates(self, v):
+        """라이브러리 › 업데이트 — apt 앱 · Flathub 앱 (updates.py)"""
+        u = self.updates
+        if not u.items:
+            if u.scanning:
+                v.pack_start(label("앱 업데이트를 확인하는 중…", "detail-meta"), False, False, 0)
+            elif u.note:
+                v.pack_start(label(u.note, "detail-meta", wrap=True), False, False, 0)
+            elif u.scanned:
+                v.pack_start(label("모든 앱이 최신 판입니다.", "detail-meta"), False, False, 0)
+            return
+        head = Gtk.Box(spacing=8)
+        head.pack_start(label(f"업데이트 {len(u.items)}개", "sec-h"), False, False, 0)
+        allb = Gtk.Button(label="모두 업데이트")
+        allb.get_style_context().add_class("accent-btn")
+        allb.set_sensitive(any(u.state(it["key"]) is None for it in u.items))
+        allb.connect("clicked", lambda *_: u.add_all())
+        head.pack_end(allb, False, False, 0)
+        v.pack_start(head, False, False, 0)
+        if u.note:
+            v.pack_start(label(u.note, "detail-meta", wrap=True), False, False, 0)
+        for it in u.items:
+            row = Gtk.Box(spacing=14)
+            row.get_style_context().add_class("lib-row")
+            row.pack_start(self._upd_icon(it), False, False, 0)
+            col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+            col.set_valign(Gtk.Align.CENTER)
+            if it["app"] is not None:
+                name = Gtk.Button(label=it["name"])
+                name.get_style_context().add_class("link-btn")
+                name.get_style_context().add_class("upd-name")     # 글자 이름(스토어 목록 밖 앱)과 줄을 맞춘다
+                name.set_halign(Gtk.Align.START)
+                name.connect("clicked", lambda *_, x=it["app"]: self.show_app(x))
+            else:
+                name = label(it["name"], "tile-name", ellipsize=True)
+            col.pack_start(name, False, False, 0)
+            if it["old"] and it["new"] and it["old"] != it["new"]:
+                ver = f"{it['old']}  →  {it['new']}"
+            elif it["key"] == "fp-runtimes":
+                ver = it["new"]
+            else:                                 # Flathub — 판 번호는 그대로인 새 빌드가 흔하다
+                ver = f"{it['old'] or it['new']} · 새 빌드" if it["old"] or it["new"] else "새 빌드"
+            extra = (" · Flathub" if it["kind"] == "flatpak" else "") + (
+                f" · 함께 올라가는 구성 요소 {it['more']}개" if it["more"] else "")
+            # 둘째 줄 하나에 — 진행·오류는 판 대신 보인다 (줄이 늘어 칸 높이가 바뀌지 않게, 긴 글은 툴팁으로)
+            st, err = u.state(it["key"]), u.errors.get(it["key"])
+            prog = u.progress(it["key"])
+            if st == "updating" and prog:
+                # 런타임 묶음은 지금 받는 것 이름까지, 앱은 이름이 이미 위에 있다
+                what = (prog["text"] or "업데이트하는 중") if it["key"] == "fp-runtimes" else "업데이트하는 중"
+                sub = label(f"{what} · {prog['pct']}%", "tile-sub upd-state", ellipsize=True)
+            elif err:
+                sub = label(err, "tile-sub upd-err", ellipsize=True)
+                sub.set_tooltip_text(err)
+            else:
+                sub = label(ver + extra, "tile-sub", ellipsize=True)
+            col.pack_start(sub, False, False, 0)
+            row.pack_start(col, True, True, 0)
+            b = Gtk.Button(label={"updating": "업데이트하는 중…", "queued": "대기 중"}.get(st, "업데이트"))
+            b.set_sensitive(st is None)
+            b.connect("clicked", lambda *_, k=it["key"]: u.add(k))
+            row.pack_end(b, False, False, 0)
+            v.pack_start(row, False, False, 0)
+
+    def _upd_icon(self, it):
+        if it["app"] is not None:
+            return app_icon(it["app"], 36)
+        info = None
+        try:
+            if it["desktop"]:
+                info = Gio.DesktopAppInfo.new_from_filename(it["desktop"])
+            elif it.get("id"):
+                info = Gio.DesktopAppInfo.new(it["id"] + ".desktop")
+        except (TypeError, GLib.Error):
+            info = None
+        img = Gtk.Image()
+        if info is not None and info.get_icon() is not None:
+            img.set_from_gicon(info.get_icon(), Gtk.IconSize.DIALOG)
+        else:
+            img.set_from_icon_name("application-x-addon" if it["key"] == "fp-runtimes"
+                                   else "application-x-executable", Gtk.IconSize.DIALOG)
+        img.set_pixel_size(36)
+        img.set_size_request(36, 36)
+        return img
 
     def _lib_rows(self, v, apps, removable):
         for a in apps:
@@ -1032,7 +1128,7 @@ class StoreWindow(Gtk.ApplicationWindow):
         return False
 
     def _on_delete(self, *_):
-        if not self.jobs.busy():
+        if not self.jobs.busy() and not self.updates.busy():
             return False
         # 설치 중에 닫으면 — 지금 것은 끝까지 가지만(도우미는 창과 상관없이 끝난다) 대기열은 사라진다
         d = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.QUESTION,
@@ -1120,6 +1216,8 @@ class StoreApp(Gtk.Application):
                 want = ("app", a.split("=", 1)[1])
             elif a.startswith("--search="):
                 want = ("search", a.split("=", 1)[1])
+            elif a == "--library":
+                want = ("library", None)
             else:
                 dbg(f"[sekai-store] 모르는 옵션: {a}")
         if self.win is None:
@@ -1134,6 +1232,8 @@ class StoreApp(Gtk.Application):
             elif want[0] == "search":
                 w.search.set_text(want[1])
                 w._run_search()
+            elif want[0] == "library":
+                w.show("library", None)
         w.present()
         return 0
 
@@ -1141,7 +1241,7 @@ class StoreApp(Gtk.Application):
 def main(argv=None):
     argv = argv if argv is not None else sys.argv[1:]
     if any(a in ("-h", "--help") for a in argv):
-        print("사용법: sekai-store [--app=<패키지>] [--search=<검색어>]")
+        print("사용법: sekai-store [--app=<패키지>] [--search=<검색어>] [--library]")
         return 0
     GLib.set_prgname(APP_ID)
     return StoreApp().run([sys.argv[0]] + list(argv))

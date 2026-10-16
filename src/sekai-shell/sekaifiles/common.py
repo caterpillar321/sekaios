@@ -478,6 +478,26 @@ class IconCache:
 ICONS = None
 
 
+def popup_below(menu, btn):
+    """단추 아래에 메뉴 — 메뉴가 닫힐 때 단추의 '마우스 올림' 표시를 정리한다.
+    메뉴가 입력을 잡고 있는 동안 포인터가 단추를 떠나도 단추는 leave 신호를 받지 못한다 → 다른 곳을 눌러
+    메뉴를 닫으면 단추가 밝은 채로 남아, 다시 마우스를 올렸다 내려야 풀렸다 (정렬·보기 단추)"""
+    def closed(_m):
+        def check():
+            win = btn.get_window()
+            seat = btn.get_display().get_default_seat()
+            if win is None or seat is None or seat.get_pointer() is None:
+                return False
+            _w, x, y, _mask = win.get_device_position(seat.get_pointer())
+            a = btn.get_allocation()
+            if not (a.x <= x < a.x + a.width and a.y <= y < a.y + a.height):
+                btn.unset_state_flags(Gtk.StateFlags.PRELIGHT)
+            return False
+        GLib.idle_add(check)
+    menu.connect("deactivate", closed)
+    menu.popup_at_widget(btn, Gdk.Gravity.SOUTH_WEST, Gdk.Gravity.NORTH_WEST, Gtk.get_current_event())
+
+
 def icons():
     global ICONS
     if ICONS is None:

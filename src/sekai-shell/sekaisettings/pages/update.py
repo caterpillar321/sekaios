@@ -1,7 +1,9 @@
-"""업데이트 — 데비안과 SekaiOS 저장소의 새 패키지를 확인하고 설치한다.
+"""업데이트 — SekaiOS 와 데비안 시스템의 새 패키지를 확인하고 설치한다 (앱 업데이트는 스토어에서).
 
+저장소 출처로 묶어 보인다 — SekaiOS · 데비안 시스템 · 다른 저장소. 묶음마다 따로 설치할 수 있다.
+일반 앱(크로뮴·VS Code·Flathub 앱)은 여기서 올리지 않는다 — 윈도우처럼 스토어 › 라이브러리에서 (sekaishell/aptapps.py).
 관리자 권한이 필요한 일은 /usr/libexec/sekai/sekai-update 가 한다 (pkexec).
-이 페이지는 그 출력(PROGRESS/PKG/COUNT/REBOOT/ERROR 줄)을 읽어 보여 줄 뿐이다.
+이 페이지는 그 출력(PROGRESS/PKG/GROUP/ALSO/APPS/COUNT/REBOOT/ERROR 줄)을 읽어 보여 줄 뿐이다.
 """
 import os
 import re
@@ -13,28 +15,32 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib, Pango  # noqa: E402
 
-from ..widgets import Page, button, info, row
+from sekaishell import aptapps
+from ..widgets import Page, button, info, row, subsection
 
 HELPER = "/usr/libexec/sekai/sekai-update"
 SOURCES = "/etc/apt/sources.list.d/sekaios.sources"
 SHOW_MAX = 40
+# 묶음 → (제목, 설명)
+GROUPS = [("sekai", "SekaiOS", "셸·합성기·설정 같은 SekaiOS 구성 요소"),
+          ("debian", "데비안 시스템", "커널·드라이버·라이브러리"),
+          ("other", "다른 저장소", "직접 추가한 저장소의 패키지 (앱이 아닌 것)")]
+GROUP_TITLE = {k: t for k, t, _s in GROUPS}
 
 
 def _pending():
-    """관리자 권한 없이 — 받아 둔 목록 기준으로 설치될 업데이트. 셀 수 없으면 None (없음과 구별)"""
-    try:
-        res = subprocess.run(["apt-get", "-s", "-q", "full-upgrade"], capture_output=True,
-                             text=True, timeout=60, env=dict(os.environ, LC_ALL="C.UTF-8"))
-    except Exception:
+    """관리자 권한 없이 — 받아 둔 목록 기준. → (시스템 [(이름, 지금, 새, 묶음, 보안?)], 앱 업데이트 수)
+    · 셀 수 없으면 None (없음과 구별). 지워지는 것은 (이름, "-", "삭제", 묶음 없음)"""
+    sysd, apps, _pins = aptapps.split(env=dict(os.environ, LC_ALL="C.UTF-8"))
+    if sysd is None:                             # 다른 설치가 잠금을 쥐고 있는 등
         return None
-    if res.returncode != 0:                      # 다른 설치가 잠금을 쥐고 있는 등
-        return None
-    pk = []
-    for line in res.stdout.splitlines():
-        m = re.match(r"Inst (\S+) (?:\[(\S+)\] )?\((\S+)", line)
-        if m:
-            pk.append((m.group(1), m.group(2) or "-", m.group(3)))
-    return pk
+    pk, gone = sysd
+    return list(pk) + [(n, "-", "삭제", None, False) for n in gone], len(apps)
+
+
+def _flatpak_count():
+    from sekaishell.updates import count_flatpak
+    return count_flatpak()
 
 
 def _last_check():
@@ -83,7 +89,7 @@ def _version():
 
 class UpdatePage:
     def __init__(self, store):
-        self.pkgs = []
+        self.pkgs = []                            # [(이름, 지금, 새, 묶음, 보안?)]
         self.p = Page("업데이트", "보안 수정과 새 기능을 받습니다. 설치는 직접 누를 때만 합니다.")
 
         # ── 상태 카드 ──
@@ -93,7 +99,7 @@ class UpdatePage:
                               control=Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8))
         box = self.status_row.control
         self.check_btn = button("업데이트 확인", self.check)
-        self.apply_btn = button("지금 설치", self.apply, cls="accent-btn")
+        self.apply_btn = button("모두 설치", lambda: self.apply(None), cls="accent-btn")
         self.reboot_btn = button("다시 시작", lambda: subprocess.Popen(["systemctl", "reboot"]),
                                  cls="accent-btn")
         for b in (self.check_btn, self.apply_btn, self.reboot_btn):
@@ -112,16 +118,29 @@ class UpdatePage:
         self.progress_text.set_no_show_all(True)
         self.p.add_widget(self.progress_text)
 
-        # ── 목록 ──
-        self.list_title = Gtk.Label(label="설치할 업데이트", xalign=0)
-        self.list_title.get_style_context().add_class("section-title")
-        self.list_title.set_no_show_all(True)
-        self.p.add_widget(self.list_title)
-        self.list = Gtk.ListBox()
-        self.list.set_selection_mode(Gtk.SelectionMode.NONE)
-        self.list.get_style_context().add_class("section")
-        self.list.set_no_show_all(True)
-        self.p.add_widget(self.list)
+        # ── 묶음별 목록 — SekaiOS · 데비안 시스템 · 다른 저장소 (+ 함께 지워지는 것) ──
+        self.groups = {}
+        for key, title, sub in GROUPS + [(None, "함께 지워지는 패키지", None)]:
+            holder = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            holder.set_no_show_all(True)
+            self.p.add_widget(holder)
+            lb = subsection(holder, title)
+            head = None
+            if key is not None:
+                btn = button("설치", lambda k=key: self.apply(k))
+                head = row(lb, title, sub, control=btn)
+                head.btn = btn
+            self.groups[key] = (holder, lb, head, sub)
+
+        # ── 앱 — 스토어에서 ──
+        s = self.p.section("앱")
+        self.apps_row = row(s, "앱 업데이트는 스토어에서",
+                            "크로뮴·VS Code 같은 앱과 Flathub 앱은 스토어 › 라이브러리에서 올립니다",
+                            icon=["sekai-store", "system-software-install", "org.gnome.Software"],
+                            control=button("스토어 열기", lambda: subprocess.Popen(
+                                ["sekai-store", "--library"], start_new_session=True,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)))
+        self.apps_n = {"apt": None, "flatpak": None}
 
         # ── 정보 ──
         s = self.p.section("정보")
@@ -137,6 +156,7 @@ class UpdatePage:
 
         self._set_status("확인하는 중…", "받아 둔 목록에서 찾고 있습니다")
         threading.Thread(target=self._load_cached, daemon=True).start()
+        threading.Thread(target=lambda: self._set_apps(flatpak=_flatpak_count()), daemon=True).start()
 
     @property
     def widget(self):
@@ -148,39 +168,58 @@ class UpdatePage:
         if hasattr(self.status_row, "sub_label"):
             self.status_row.sub_label.set_text(sub or "")
 
+    def _set_apps(self, **kw):
+        """앱 업데이트 수 (apt 앱 · Flathub) — 작업 스레드에서도 부른다"""
+        def put():
+            self.apps_n.update(kw)
+            known = [v for v in self.apps_n.values() if v is not None]
+            n = sum(known)
+            self.apps_row.title_label.set_text(f"앱 업데이트 {n}개 — 스토어에서" if n else "앱 업데이트는 스토어에서")
+            return False
+        GLib.idle_add(put)
+
+    def _pkg_row(self, lb, name, old, new, sec=False):
+        r = Gtk.ListBoxRow()
+        r.get_style_context().add_class("row")
+        h = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        n = Gtk.Label(label=name + ("  · 보안" if sec else ""), xalign=0)
+        n.get_style_context().add_class("row-title")
+        h.pack_start(n, True, True, 0)
+        v = Gtk.Label(label="지워짐" if new == "삭제" else
+                      f"{old}  →  {new}" if old != "-" else f"새로 설치  {new}")
+        v.get_style_context().add_class("row-value")
+        v.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        v.set_max_width_chars(72)
+        h.pack_end(v, False, False, 0)
+        r.add(h)
+        lb.add(r)
+
     def _show_list(self, pkgs):
-        for r in self.list.get_children():
-            self.list.remove(r)
-        for name, old, new in pkgs[:SHOW_MAX]:
-            r = Gtk.ListBoxRow()
-            r.get_style_context().add_class("row")
-            h = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-            # Flathub 앱은 "flatpak:<앱 id>" 로 온다 — 앱 id 와 출처로
-            shown = f"{name[len('flatpak:'):]}  (Flathub)" if name.startswith("flatpak:") else name
-            n = Gtk.Label(label=shown, xalign=0)
-            n.get_style_context().add_class("row-title")
-            h.pack_start(n, True, True, 0)
-            v = Gtk.Label(label="지워짐" if new == "삭제" else
-                          f"{old}  →  {new}" if old != "-" else f"새로 설치  {new}")
-            v.get_style_context().add_class("row-value")
-            v.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
-            v.set_max_width_chars(72)
-            h.pack_end(v, False, False, 0)
-            r.add(h)
-            self.list.add(r)
-        if len(pkgs) > SHOW_MAX:
-            r = Gtk.ListBoxRow()
-            r.get_style_context().add_class("row")
-            r.add(Gtk.Label(label=f"… 그리고 {len(pkgs) - SHOW_MAX}개 더", xalign=0))
-            self.list.add(r)
-        has = bool(pkgs)
-        for w in (self.list_title, self.list):
-            w.set_visible(has)
-        if has:
-            # no_show_all 이 켜진 위젯은 show_all 이 안쪽으로 내려가지 않는다 → 행을 직접
-            for r in self.list.get_children():
-                r.show_all()
-        self.apply_btn.set_visible(has and not self.p.busy)
+        for key, (holder, lb, head, sub) in self.groups.items():
+            mine = [p for p in pkgs if p[3] == key]
+            for r in lb.get_children():
+                if r is not head:
+                    lb.remove(r)
+            for name, old, new, _g, sec in mine[:SHOW_MAX]:
+                self._pkg_row(lb, name, old, new, sec)
+            if len(mine) > SHOW_MAX:
+                r = Gtk.ListBoxRow()
+                r.get_style_context().add_class("row")
+                r.add(Gtk.Label(label=f"… 그리고 {len(mine) - SHOW_MAX}개 더", xalign=0))
+                lb.add(r)
+            if head is not None:
+                nsec = sum(1 for p in mine if p[4])
+                head.title_label.set_text(f"업데이트 {len(mine)}개")
+                head.sub_label.set_text(sub + (f" · 보안 수정 {nsec}개" if nsec else ""))
+                head.btn.set_sensitive(not self.p.busy)
+            holder.set_visible(bool(mine))
+            if mine:
+                # no_show_all 이 켜진 위젯은 show_all 이 안쪽으로 내려가지 않는다 → 직접
+                for w in holder.get_children():
+                    w.show()
+                for r in lb.get_children():
+                    r.show_all()
+        self.apply_btn.set_visible(bool(pkgs) and not self.p.busy)
 
     def _summary(self, pkgs):
         last = _ago(_last_check())
@@ -190,47 +229,48 @@ class UpdatePage:
             self._set_status("최신 상태입니다", f"마지막 확인: {last}")
 
     def _load_cached(self):
-        pk = _pending()
-        GLib.idle_add(self._cached_done, pk)
+        r = _pending()
+        GLib.idle_add(self._cached_done, r)
 
-    def _cached_done(self, pk):
+    def _cached_done(self, r):
         if self.p.busy:
             return False
-        if pk is None:
+        if r is None:
             # 셀 수 없었다 (다른 설치가 잠금을 쥐었거나, 깨진 의존성, 시간 초과) — "최신"이라고 하지 않고 목록은 그대로
             self._set_status("업데이트를 확인하지 못했습니다",
                              "받아 둔 목록으로 셀 수 없었습니다. ‘업데이트 확인’으로 다시 확인해 주세요")
             self._show_list(self.pkgs)
             return False
-        self.pkgs = pk
-        self._summary(pk)
-        self._show_list(pk)
+        self.pkgs, napps = r
+        self._set_apps(apt=napps)
+        self._summary(self.pkgs)
+        self._show_list(self.pkgs)
         return False
 
     # ── 도우미 실행 ──
-    def _run(self, action, title):
+    def _run(self, args, title):
         if self.p.busy:
             return
         if not os.path.exists(HELPER):
             self._set_status("업데이트 도우미가 없습니다", HELPER)
             return
         self.p.busy = True
-        for b in (self.check_btn, self.apply_btn):
+        for b in (self.check_btn, self.apply_btn) + tuple(h.btn for _k, (_h, _l, h, _s) in self.groups.items() if h):
             b.set_sensitive(False)
         self.progress.set_fraction(0)
         self.progress.show()
         self.progress_text.set_text("관리자 인증을 기다리는 중…")
         self.progress_text.show()
         self._set_status(title, "창을 닫아도 작업은 계속됩니다")
-        self._got = {"pkgs": [], "count": None, "reboot": False, "error": None}
-        threading.Thread(target=self._worker, args=(action,), daemon=True).start()
+        self._got = {"pkgs": [], "count": None, "reboot": False, "error": None, "also": {}, "apps": None}
+        threading.Thread(target=self._worker, args=(args,), daemon=True).start()
 
-    def _worker(self, action):
+    def _worker(self, args):
         try:
-            p = subprocess.Popen(["pkexec", HELPER, action], stdout=subprocess.PIPE,
+            p = subprocess.Popen(["pkexec", HELPER] + args, stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT, text=True)
         except OSError as e:
-            GLib.idle_add(self._finish, action, f"실행하지 못했습니다: {e}")
+            GLib.idle_add(self._finish, args[0], f"실행하지 못했습니다: {e}")
             return
         for line in p.stdout:
             GLib.idle_add(self._line, line.rstrip("\n"))
@@ -240,7 +280,7 @@ class UpdatePage:
             err = "인증이 취소되었습니다"
         elif rc != 0:
             err = f"업데이트 도우미가 비정상 종료했습니다 (코드 {rc})"
-        GLib.idle_add(self._finish, action, err)
+        GLib.idle_add(self._finish, args[0], err)
 
     def _line(self, line):
         kind, _, rest = line.partition(" ")
@@ -254,7 +294,20 @@ class UpdatePage:
         elif kind == "PKG":
             parts = rest.split(" ")
             if len(parts) == 3:
-                self._got["pkgs"].append(tuple(parts))
+                # 묶음은 뒤따르는 GROUP 줄이 알려 준다 (지워지는 것은 묶음 없음)
+                self._got["pkgs"].append(tuple(parts) + ((None if parts[2] == "삭제" else "debian"), False))
+        elif kind == "GROUP":
+            parts = rest.split(" ")
+            got = self._got["pkgs"]
+            if len(parts) >= 2 and got and got[-1][0] == parts[0] and parts[1] in GROUP_TITLE:
+                got[-1] = got[-1][:3] + (parts[1], "security" in parts[2:])
+        elif kind == "ALSO":
+            parts = rest.split(" ")
+            if len(parts) == 2 and parts[0] in GROUP_TITLE and parts[1].isdigit():
+                self._got["also"][parts[0]] = int(parts[1])
+        elif kind == "APPS":
+            if rest.isdigit():
+                self._got["apps"] = int(rest)
         elif kind == "COUNT":
             try:
                 self._got["count"] = int(rest)
@@ -268,7 +321,7 @@ class UpdatePage:
 
     def _finish(self, action, err):
         self.p.busy = False
-        for b in (self.check_btn, self.apply_btn):
+        for b in (self.check_btn, self.apply_btn) + tuple(h.btn for _k, (_h, _l, h, _s) in self.groups.items() if h):
             b.set_sensitive(True)
         self.progress.hide()
         self.progress_text.hide()
@@ -287,58 +340,68 @@ class UpdatePage:
             return False
         if action == "check":
             self.pkgs = self._got["pkgs"]
+            if self._got["apps"] is not None:
+                self._set_apps(apt=self._got["apps"])
             self._summary(self.pkgs)
             self._show_list(self.pkgs)
+            threading.Thread(target=lambda: self._set_apps(flatpak=_flatpak_count()), daemon=True).start()
         else:
             self.ver_label.set_text(_version() or "알 수 없음")
-            left = self._got["count"]
             sub = ("다시 시작해야 일부 업데이트가 적용됩니다" if self._got["reboot"]
                    else "지금부터 새 버전이 쓰입니다 (열려 있던 앱은 다시 열면 적용)")
-            self.pkgs = []                       # 설치 전 목록은 이제 맞지 않는다
-            self._show_list(self.pkgs)
+            also = [f"{GROUP_TITLE[g]} {n}개" for g, n in self._got["also"].items()]
+            if also:
+                sub += " — 필요해서 " + "·".join(also) + "도 함께 올렸습니다"
             self._set_status("업데이트를 설치했습니다", sub)
-            if left:
-                # 남은 것(보류된 패키지 등)을 받아 둔 목록 기준으로 센다 — 수십 초 걸릴 수 있어 작업 스레드에서
-                threading.Thread(target=self._reload_after_apply, args=(left, sub), daemon=True).start()
+            # 남은 것(다른 묶음·보류된 패키지 등)을 받아 둔 목록 기준으로 센다 — 수십 초 걸릴 수 있어 작업 스레드에서
+            threading.Thread(target=self._reload_after_apply, args=(self._got["count"], sub), daemon=True).start()
             if self._got["reboot"]:
                 self.reboot_btn.show()
         return False
 
     def _reload_after_apply(self, left, sub):
-        pk = _pending()
-        GLib.idle_add(self._reloaded_after_apply, pk, left, sub)
+        r = _pending()
+        GLib.idle_add(self._reloaded_after_apply, r, left, sub)
 
-    def _reloaded_after_apply(self, pk, left, sub):
+    def _reloaded_after_apply(self, r, left, sub):
         if self.p.busy:
             return False
-        if pk is None:
+        if r is None:
             # 도우미는 남은 것이 있다고 했는데 목록을 셀 수 없었다 — 없는 것처럼 보이지 않게 개수만이라도
-            self._set_status("업데이트를 설치했습니다",
-                             f"{sub} — 남은 업데이트 {left}개는 목록을 읽지 못했습니다")
+            self.pkgs = []
+            self._show_list(self.pkgs)
+            if left:
+                self._set_status("업데이트를 설치했습니다",
+                                 f"{sub} — 남은 업데이트 {left}개는 목록을 읽지 못했습니다")
             return False
-        self.pkgs = pk
-        self._show_list(pk)
+        self.pkgs, napps = r
+        self._set_apps(apt=napps)
+        self._show_list(self.pkgs)
+        if self.pkgs:
+            self._set_status("업데이트를 설치했습니다", f"{sub} — 남은 업데이트 {len(self.pkgs)}개")
         return False
 
     def _reload_after_fail(self, err):
-        pk = _pending()
-        GLib.idle_add(self._reloaded_after_fail, pk, err)
+        r = _pending()
+        GLib.idle_add(self._reloaded_after_fail, r, err)
 
-    def _reloaded_after_fail(self, pk, err):
+    def _reloaded_after_fail(self, r, err):
         if self.p.busy:
             return False
-        if pk is not None:                       # 다시 셀 수 있었으면 그것으로 (못 셌으면 이전 목록 유지)
-            self.pkgs = pk
-            self._show_list(pk)
+        if r is not None:                        # 다시 셀 수 있었으면 그것으로 (못 셌으면 이전 목록 유지)
+            self.pkgs, napps = r
+            self._set_apps(apt=napps)
+            self._show_list(self.pkgs)
         self._set_status("업데이트하지 못했습니다",
                          err + (f" — 남은 업데이트 {len(self.pkgs)}개" if self.pkgs else ""))
         return False
 
     def check(self):
-        self._run("check", "업데이트를 확인하는 중…")
+        self._run(["check"], "업데이트를 확인하는 중…")
 
-    def apply(self):
-        self._run("apply", "업데이트를 설치하는 중…")
+    def apply(self, group):
+        what = "업데이트를 설치하는 중…" if group is None else f"{GROUP_TITLE[group]} 업데이트를 설치하는 중…"
+        self._run(["apply"] + ([group] if group else []), what)
 
 
 def build(store):

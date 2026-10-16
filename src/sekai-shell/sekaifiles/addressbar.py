@@ -13,7 +13,7 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
-from .common import COMPUTER, edit_text, icons, image, local_path, natural, theme_icon  # noqa: E402
+from .common import COMPUTER, edit_text, icons, image, local_path, natural, popup_below, theme_icon  # noqa: E402
 
 MENU_MAX = 400
 
@@ -191,13 +191,13 @@ class AddressBar(Gtk.Stack):
 
         if uri is None or uri == COMPUTER:
             fill(self.host.top_menu_items() if uri is None else self.host.drives_menu_items())
-            menu.popup_at_widget(btn, Gdk.Gravity.SOUTH_WEST, Gdk.Gravity.NORTH_WEST, Gtk.get_current_event())
+            popup_below(menu, btn)
             return
         loading = Gtk.MenuItem(label="읽는 중…")
         loading.set_sensitive(False)
         menu.append(loading)
         menu.show_all()
-        menu.popup_at_widget(btn, Gdk.Gravity.SOUTH_WEST, Gdk.Gravity.NORTH_WEST, Gtk.get_current_event())
+        popup_below(menu, btn)
         show_hidden = self.host.show_hidden
 
         def work():

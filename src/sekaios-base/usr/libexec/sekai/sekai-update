@@ -2,17 +2,22 @@
 # ═══════════════════════════════════════════════════════════════
 #  SekaiOS 업데이트 도우미 — 관리자 권한으로 실행된다 (pkexec)
 #
-#    sekai-update check    패키지 목록을 새로 받고, 설치할 업데이트를 알려 준다
-#    sekai-update apply    업데이트를 설치한다
+#    sekai-update check            패키지 목록을 새로 받고, 설치할 업데이트를 알려 준다
+#    sekai-update apply [묶음]     업데이트를 설치한다 — 묶음: sekai · debian · other (없으면 전부)
 #
 #  출력은 한 줄에 하나씩, 설정 앱이 읽는 형식:
 #    PROGRESS <0-100> <설명>
 #    PKG <이름> <지금 버전> <새 버전>
+#    GROUP <이름> <묶음> [security]    바로 앞 PKG 가 어느 저장소에서 오나 (옛 설정 앱은 모르는 줄이라 건너뛴다)
+#    ALSO <묶음> <개수>                묶음 하나만 설치했는데 다른 묶음 것도 함께 올라감 (의존성)
 #    COUNT <개수>
 #    REBOOT                    다시 시작이 필요함
 #    ERROR <설명>
-#  Flathub 앱(flatpak, 시스템 설치)도 함께 — PKG flatpak:<앱 id> <지금> <새> 로 보이고, apply 가 apt 다음에 올린다.
-#  인자는 위 두 가지만 받는다 — 관리자 권한으로 도는 프로그램이라
+#  묶음은 저장소 출처로 가른다 — SekaiOS 저장소 · 데비안(보안 포함) · 그 밖의 저장소(직접 추가한 업체 저장소).
+#  앱 업데이트는 스토어(라이브러리)가 맡는다 — 윈도우처럼 시스템과 앱을 나눈다. Flathub 앱, 그리고 apt 로 깐
+#  일반 앱(크로뮴·VS Code 등, sekaishell/aptapps.py 참고)은 지금 판에 묶어 두고 시스템만 올린다.
+#    APPS <개수>                       스토어에서 올릴 apt 앱 업데이트 수
+#  인자는 위 것만 받는다 — 관리자 권한으로 도는 프로그램이라
 #  바깥에서 명령·옵션을 넘길 수 없게 한다.
 #  (sekai-update guard 는 apply 가 apt 에 거는 설치 직전 검사 훅이다 — 아래 guard() 참고.
 #   표준 입력으로 받은 목록을 읽고 통과/거부만 한다)
@@ -20,9 +25,9 @@
 import os
 os.umask(0o022)  # pkexec 은 부른 사람의 umask 를 그대로 넘긴다 — root 가 만드는 파일이 남에게 쓰기로 열리지 않게
 import re
-import shutil
 import subprocess
 import sys
+import tempfile
 
 ENV = dict(os.environ, DEBIAN_FRONTEND="noninteractive", LANG="C.UTF-8", LC_ALL="C.UTF-8",
            PATH="/usr/sbin:/usr/bin:/sbin:/bin",
@@ -50,25 +55,20 @@ SELF = os.path.abspath(__file__)
 GUARD_TAG = "SEKAI-BLOCKED:"
 
 
-def simulate():
-    """full-upgrade 시뮬레이션 → (설치될 것 [(이름, 지금, 새)], 지워질 것 [이름]). 실패하면 None 과 오류.
-    실패(다른 프로그램이 dpkg 를 잡고 있음 등)를 "지울 것 없음"으로 읽으면 안 된다 — 빈 목록이
-    보호 패키지 검사를 그대로 통과했다(fail-open)."""
-    res = subprocess.run(["apt-get", "-s", "-q", "full-upgrade"], env=ENV,
-                         capture_output=True, text=True)
-    if res.returncode != 0:
-        err = next((l for l in reversed((res.stderr or res.stdout).splitlines())
-                    if l.startswith(("E:", "W:"))), f"apt-get 종료 코드 {res.returncode}")
-        return None, err
-    pk, gone = [], []
-    for line in res.stdout.splitlines():
-        # Inst 이름 [지금버전] (새버전 저장소 [아키])  /  Inst 이름 (새버전 …)  ← 새로 설치
-        m = re.match(r"Inst (\S+) (?:\[(\S+)\] )?\((\S+)", line)
-        if m:
-            pk.append((m.group(1), m.group(2) or "-", m.group(3)))
-        elif line.startswith(("Remv ", "Purg ")) and len(line.split()) > 1:
-            gone.append(line.split()[1])
-    return (pk, gone), None
+GROUPS = ("sekai", "debian", "other")
+# 시스템·앱 가르기는 설정 앱(sekai-shell)과 같은 모듈로 — 화면에 보인 목록과 실제로 설치하는 것이 같아야 한다.
+#   sekai-desktop 이 둘을 같은 판으로 묶어 함께 올라간다 (root 소유 /usr/lib/python3/dist-packages)
+try:
+    from sekaishell import aptapps
+except ImportError:
+    aptapps = None
+
+
+def split():
+    """→ (시스템 (설치될 것, 지워질 것), 앱 {앱: [...]}, 선호 파일 내용) · 실패하면 (None, 오류, None)"""
+    if aptapps is None:
+        return None, "설정 앱(sekai-shell)이 너무 옛 판입니다 — 터미널에서 sudo apt full-upgrade 로 올려 주세요", None
+    return aptapps.split(env=ENV, tmpdir="/run")
 
 
 def guard():
@@ -102,77 +102,25 @@ def guard_opts():
             "-o", f"DPkg::Tools::Options::{SELF}::Version=2"]
 
 
-# ── Flathub 앱 (flatpak) ──
-def flatpak_updates():
-    """[(앱 id, 지금 버전, 새 버전)] — 업데이트가 있는 시스템 설치 앱. flatpak 이 없거나 실패하면 빈 목록
-    (데비안 쪽 업데이트까지 막지 않는다)"""
-    if not shutil.which("flatpak"):
-        return []
-    subprocess.run(["flatpak", "update", "--appstream", "--system", "--noninteractive"], env=ENV,
-                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    res = subprocess.run(["flatpak", "remote-ls", "--system", "--updates", "--columns=application,version"],
-                         env=ENV, capture_output=True, text=True)
-    if res.returncode != 0:
-        return []
-    cur = subprocess.run(["flatpak", "list", "--system", "--columns=application,version"],
-                         env=ENV, capture_output=True, text=True).stdout
-    now = {}
-    for line in cur.splitlines():
-        f = line.split("\t")
-        if f and f[0]:
-            now[f[0]] = (f[1] if len(f) > 1 else "") or "-"
-    ups = []
-    for line in res.stdout.splitlines():
-        f = line.split("\t")
-        if f and f[0] and not f[0].startswith("Application"):
-            new = (f[1] if len(f) > 1 else "") or "새 판"
-            ups.append((f[0], now.get(f[0], "-"), new))
-    return ups
-
-
-def flatpak_apply(lo, hi):
-    """flatpak 업데이트 — 진행률은 대략 (flatpak 은 기계용 진행 출력이 없다): 앱 하나 끝날 때마다"""
-    if not shutil.which("flatpak"):
-        return 0, []
-    ups = flatpak_updates()
-    if not ups:
-        return 0, []
-    p = subprocess.Popen(["flatpak", "update", "--system", "-y", "--noninteractive"], env=ENV,
-                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    log, done = [], 0
-    for line in p.stdout:
-        line = line.strip()
-        log.append(line)
-        m = re.match(r"^Updating (\S+)", line)
-        if m:
-            done += 1
-            name = m.group(1).split("/")[1] if "/" in m.group(1) else m.group(1)
-            out("PROGRESS", int(lo + (hi - lo) * min(done, len(ups) * 2) / (len(ups) * 2 + 1)),
-                f"Flathub 앱 업데이트 중 {name}")
-    p.wait()
-    return p.returncode, log
-
-
 def check():
     out("PROGRESS", 2, "패키지 목록을 받는 중")
     rc, log = run_status(["apt-get", "-q", "update"], 2, 90, "목록")
     if rc != 0:
         err = next((l for l in reversed(log) if l.startswith(("E:", "W:", "Err"))), "알 수 없는 오류")
         out("ERROR", f"목록을 받지 못했습니다: {err}")
-    sim, err = simulate()
-    if sim is None:
-        out("ERROR", f"설치할 업데이트를 계산하지 못했습니다: {err}")
+    out("PROGRESS", 92, "설치할 업데이트를 계산하는 중")
+    sysd, apps, _pins = split()
+    if sysd is None:
+        out("ERROR", f"설치할 업데이트를 계산하지 못했습니다: {apps}")
         return 1
-    pk, gone = sim
-    for name, old, new in pk:
+    pk, gone = sysd
+    for name, old, new, grp, sec in pk:
         out("PKG", name, old, new)
+        out("GROUP", name, grp, *(["security"] if sec else []))
     for name in gone:                           # 지워지는 것도 미리 보여 준다
         out("PKG", name, "-", "삭제")
-    out("PROGRESS", 92, "Flathub 앱 업데이트를 확인하는 중")
-    fps = flatpak_updates()
-    for app, old, new in fps:
-        out("PKG", f"flatpak:{app}", old.replace(" ", "_"), new.replace(" ", "_"))
-    out("COUNT", len(pk) + len(fps))
+    out("APPS", len(apps))                      # 앱 업데이트는 스토어에서 — 개수만 알린다
+    out("COUNT", len(pk))
     out("PROGRESS", 100, "완료")
     return 0
 
@@ -183,22 +131,63 @@ REBOOT_PKGS = re.compile(r"^(linux-image-|linux-base$|libc6$|systemd$|dbus$|dbus
                          r"worldlink$|sekaicomp$|hyprland$|aquamarine$|mesa-|libgl1-mesa|nvidia-|firmware-|intel-microcode$|amd64-microcode$)")
 
 
-def apply():
+def apply(group=None):
+    """group: sekai·debian·other 하나만, None 이면 시스템 업데이트 전부. 앱 묶음은 지금 판에 묶어 둔다 (스토어 몫)"""
     out("PROGRESS", 1, "준비하는 중")
-    sim, err = simulate()
-    if sim is None:                             # 계산을 못 했으면 설치하지 않는다 (fail-closed)
-        out("ERROR", f"설치할 업데이트를 계산하지 못했습니다: {err} — 다른 설치가 끝난 뒤 다시 해 주세요")
+    sysd, apps, pins = split()
+    if sysd is None:                            # 계산을 못 했으면 설치하지 않는다 (fail-closed)
+        out("ERROR", f"설치할 업데이트를 계산하지 못했습니다: {apps} — 다른 설치가 끝난 뒤 다시 해 주세요")
         return 1
-    pk, gone = sim
+    pk, gone = sysd
+    pin_path = None
+    if pins:
+        # 선호 파일은 root 만 쓰는 /run 에 — 시뮬레이션과 같은 내용으로
+        fd, pin_path = tempfile.mkstemp(prefix="sekai-pin-", dir="/run")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(pins)
+    try:
+        return _apply(group, pk, gone, pin_path)
+    finally:
+        if pin_path:
+            os.unlink(pin_path)
+
+
+def _apply(group, pk, gone, pin_path):
+    prefs = ["-o", f"Dir::Etc::Preferences={pin_path}"] if pin_path else []
+    if group is None:
+        args = ["full-upgrade"]
+        mine = pk
+    else:
+        mine = [p for p in pk if p[3] == group]
+        targets = [p[0] for p in mine if p[1] != "-"]
+        if not targets:
+            out("ERROR", "이 묶음에는 설치할 업데이트가 없습니다 — ‘업데이트 확인’으로 다시 확인해 주세요")
+            return 1
+        args = ["install", "--only-upgrade"] + targets
+        plan, err = aptapps.simulate(args, pin_path, ENV)
+        if plan is None:
+            out("ERROR", f"설치할 업데이트를 계산하지 못했습니다: {err} — 다른 설치가 끝난 뒤 다시 해 주세요")
+            return 1
+        pk, gone = plan
+        for g in GROUPS:                        # 의존성 때문에 다른 묶음 것도 함께 올라간다
+            n = sum(1 for p in pk if p[3] == g and g != group)
+            if n:
+                out("ALSO", g, n)
     bad = [n for n in gone if PROTECTED.match(n)]
     if bad:
         out("ERROR", "이 업데이트는 꼭 필요한 패키지를 지우게 되어 설치하지 않았습니다: "
             + ", ".join(bad[:6]) + " — 저장소가 서로 충돌하고 있을 수 있습니다")
         return 1
-    before = [name for name, _o, _n in pk]
+    before = [p[0] for p in pk]
+    # install 은 이름을 준 패키지를 '직접 설치함'으로 바꾼다 — 따라 들어온 라이브러리였으면 원래대로 돌린다
+    auto = set(subprocess.run(["apt-mark", "showauto"], env=ENV, capture_output=True, text=True).stdout.split())
     # 실제 설치에도 같은 검사를 건다 (guard) — 위 시뮬레이션 뒤에 목록이 바뀌어도 dpkg 전에 멈춘다
-    rc, log = run_status(["apt-get", "-y", "-q"] + APT_OPTS + guard_opts() + ["full-upgrade"],
-                         1, 90, "설치")
+    rc, log = run_status(["apt-get", "-y", "-q"] + APT_OPTS + prefs + guard_opts() + args, 1, 97, "설치")
+    if group is not None:
+        back = [n for n in targets if n in auto]
+        if back:
+            subprocess.run(["apt-mark", "auto"] + back, env=ENV,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if rc != 0:
         blocked = next((l.split(GUARD_TAG, 1)[1].strip() for l in log if GUARD_TAG in l), None)
         if blocked is not None:
@@ -212,14 +201,9 @@ def apply():
         err = next((l for l in reversed(log) if l.startswith("E:")), "알 수 없는 오류")
         out("ERROR", f"설치하지 못했습니다: {err}")
         return 1
-    # Flathub 앱 — apt 가 끝난 뒤에. 실패해도 시스템 업데이트는 이미 끝났으니 알리기만 한다
-    frc, flog = flatpak_apply(90, 99)
-    if frc != 0:
-        err = next((l for l in reversed(flog) if l.lower().startswith(("error", "오류"))), "알 수 없는 오류")
-        out("ERROR", f"시스템 업데이트는 끝났지만 Flathub 앱 업데이트에 실패했습니다: {err}")
     out("PROGRESS", 100, "완료")
-    after, _err = simulate()
-    out("COUNT", (len(after[0]) if after else 0) + len(flatpak_updates() if frc != 0 else []))
+    after, _apps, _pins = split()
+    out("COUNT", len(after[0]) if after else 0)
     if (os.path.exists("/run/reboot-required")
             or any(REBOOT_PKGS.match(n) for n in before)):
         out("REBOOT")
@@ -227,15 +211,20 @@ def apply():
 
 
 def main():
-    if len(sys.argv) == 2 and sys.argv[1] == "guard":
+    a = sys.argv[1:]
+    if a == ["guard"]:
         return guard()                          # apt 훅 — 읽고 판정만 한다 (아무것도 바꾸지 않음)
     if os.geteuid() != 0:
         out("ERROR", "관리자 권한이 필요합니다")
         return 1
-    if len(sys.argv) != 2 or sys.argv[1] not in ("check", "apply"):
-        out("ERROR", "사용법: sekai-update check|apply")
-        return 2
-    return check() if sys.argv[1] == "check" else apply()
+    if a == ["check"]:
+        return check()
+    if a == ["apply"]:
+        return apply()
+    if len(a) == 2 and a[0] == "apply" and a[1] in GROUPS:
+        return apply(a[1])
+    out("ERROR", "사용법: sekai-update check | apply [sekai|debian|other]")
+    return 2
 
 
 if __name__ == "__main__":

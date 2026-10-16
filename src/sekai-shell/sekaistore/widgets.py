@@ -166,6 +166,24 @@ def fill(fb, store, apps, start=0, count=48):
     return min(len(apps), start + count)
 
 
+def feed_progress(prog, kind, rest):
+    """도우미 한 줄(PROGRESS·ERROR·APP)을 진행 상태 prog 에 담는다 → 진행률이 바뀌었으면 True
+    (설치·제거 대기열과 라이브러리 › 업데이트가 함께 쓴다)"""
+    if kind == "PROGRESS":
+        pct, _, text = rest.partition(" ")
+        try:
+            prog["pct"] = max(0, min(100, int(pct)))
+        except ValueError:
+            pass
+        prog["text"] = text
+        return True
+    if kind == "ERROR":
+        prog["error"] = rest
+    elif kind == "APP" and "apps" in prog:
+        prog["apps"].append(rest)
+    return False
+
+
 class Jobs:
     """설치·제거 대기열 — 한 번에 하나 (apt 는 동시에 못 돈다). 화면은 watch 로 상태를 따라간다."""
 
@@ -175,6 +193,7 @@ class Jobs:
         self.current = None             # (동작, 앱, {진행})
         self._watch = []
         self.errors = {}                # 패키지 → 마지막 오류
+        self.hold = False               # 라이브러리의 앱 업데이트(updates.py)가 도는 동안 — 다음 것을 시작하지 않는다
 
     def watch(self, cb):
         self._watch.append(cb)
@@ -227,8 +246,12 @@ class Jobs:
     def busy(self):
         return self.current is not None or bool(self.queue)
 
+    def kick(self):
+        """hold 가 풀렸다 — 기다리던 것을 시작"""
+        self._next()
+
     def _next(self):
-        if self.current is not None or not self.queue:
+        if self.current is not None or not self.queue or self.hold:
             return
         op, app = self.queue.pop(0)
         prog = {"pct": 0, "text": "관리자 인증을 기다리는 중…", "apps": [], "error": None}
@@ -236,18 +259,8 @@ class Jobs:
         self._notify(app)
 
         def line(kind, rest):
-            if kind == "PROGRESS":
-                pct, _, text = rest.partition(" ")
-                try:
-                    prog["pct"] = max(0, min(100, int(pct)))
-                except ValueError:
-                    pass
-                prog["text"] = text
+            if feed_progress(prog, kind, rest):
                 self._notify(app)
-            elif kind == "ERROR":
-                prog["error"] = rest
-            elif kind == "APP":
-                prog["apps"].append(rest)
             return False
 
         def done(rc):

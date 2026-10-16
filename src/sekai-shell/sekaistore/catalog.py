@@ -18,6 +18,7 @@ gi.require_version("AppStream", "1.0")
 from gi.repository import AppStream as AS  # noqa: E402
 from gi.repository import GLib  # noqa: E402
 
+from sekaishell import aptapps  # noqa: E402
 from sekaishell import search as S  # noqa: E402
 
 CACHE = os.path.expanduser("~/.cache/sekai/store")
@@ -272,16 +273,9 @@ class App:
         return ("theme", stock) if stock else None
 
 
-SEKAI_ROOTS = ("sekai-desktop", "sekai-de", "sekai-shell")
-
-
-def system_packages():
-    """SekaiOS 의 구성 요소가 (Depends 로) 꼭 필요로 하는 설치된 패키지 전부 — Recommends(크로뮴 등)는 빼서
-    사용자가 지울 수 있게 둔다. 지우는 길은 sekai-apps 가 어차피 막는다 — 이건 단추를 미리 끄는 용도."""
-    res = subprocess.run(["apt-cache", "depends", "--recurse", "--no-recommends", "--no-suggests", "--no-conflicts",
-                          "--no-breaks", "--no-replaces", "--no-enhances", "--installed", *SEKAI_ROOTS],
-                         capture_output=True, text=True)
-    return {l.strip() for l in res.stdout.splitlines() if l and not l.startswith(" ")}
+# SekaiOS 가 꼭 필요로 하는 패키지 — 지우는 길은 sekai-apps 가 어차피 막는다, 이건 단추를 미리 끄는 용도
+#   (Recommends 인 크로뮴 등은 빠져 사용자가 지울 수 있다)
+system_packages = aptapps.system_packages
 
 
 def _local_desktop_names():

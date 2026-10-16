@@ -24,7 +24,7 @@ from .addressbar import AddressBar  # noqa: E402
 from .common import (COMPUTER, HOME, TRASH, archive, copy_text, count_text, crumbs,  # noqa: E402
                      dbg, edit_text, favorites, fileops, fit_pixbuf, fmt_size, gfile_of, home_dir, icons,
                      image, is_in_trash, is_special, list_drives, local_path, location_icon, mount_names, norm_uri,
-                     parse_location, properties, quote_path, split_ext, theme_icon, thumbable, thumbs,
+                     parse_location, popup_below, properties, quote_path, split_ext, theme_icon, thumbable, thumbs,
                      title_of, uri_of_path, SORT_LABELS)
 from .folder import PX_L, PX_M, FolderModel  # noqa: E402
 from .navpane import NavPane  # noqa: E402
@@ -2171,7 +2171,7 @@ class ExplorerWindow(ToastMixin, Gtk.ApplicationWindow):
     def _popup_at_button(self, menu, btn):
         menu.show_all()
         menu.attach_to_widget(self, None)
-        menu.popup_at_widget(btn, Gdk.Gravity.SOUTH_WEST, Gdk.Gravity.NORTH_WEST, Gtk.get_current_event())
+        popup_below(menu, btn)
 
     def _new_submenu(self):
         m = _new_menu()
