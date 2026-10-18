@@ -179,6 +179,8 @@ button.fx-eject image { color: @text2; }
 /* 내용 */
 .fx-content { background: @winbg; }
 iconview.fx-icons { background-color: @winbg; color: @fg; font-size: 9.75pt; outline-style: none; }
+/* 마우스 올림 — IconView 는 커서 밑 항목을 prelight 로 그린다 (고른 항목은 아래 :selected 가 이긴다) */
+iconview.fx-icons.cell:hover { background-color: @hover; border-radius: 6px; }
 iconview.fx-icons:selected, iconview.fx-icons.cell:selected {
     background-color: @fx_sel;
     color: @fg;

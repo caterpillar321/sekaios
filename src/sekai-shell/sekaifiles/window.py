@@ -1743,7 +1743,7 @@ class ExplorerWindow(ToastMixin, Gtk.ApplicationWindow):
                 GLib.idle_add(lambda: (self._rename_again(e.uri), False)[1])
                 return
             self._want_select = ({gf.get_uri()}, False)
-            self._insert_now(gf)
+            self._insert_now(gf, replace=e.uri)
             self.focus_view()
         if old_ext.lower() != new_ext.lower() and not e.is_dir and old_ext:
             opener.ask(self, "이름 바꾸기",
@@ -1758,8 +1758,10 @@ class ExplorerWindow(ToastMixin, Gtk.ApplicationWindow):
         if self._select_uris([uri]):
             self.rename_selected()
 
-    def _insert_now(self, gf):
-        """감시 알림을 기다리지 않고 새 항목을 바로 넣는다 (새 폴더 → 곧바로 이름 바꾸기)"""
+    def _insert_now(self, gf, replace=None):
+        """감시 알림을 기다리지 않고 새 항목을 바로 넣는다 (새 폴더 → 곧바로 이름 바꾸기).
+        replace: 이름을 바꾼 옛 항목 — 새 항목을 넣는 같은 순간에 뺀다. 안 그러면 감시 알림이 올 때까지
+        옛 이름(새 폴더)과 새 이름이 함께 보이다가 옛것이 깜박이며 사라졌다"""
         from .common import ATTRS, Entry
         m = self.model
         gen = m.gen
@@ -1771,6 +1773,8 @@ class ExplorerWindow(ToastMixin, Gtk.ApplicationWindow):
                 return
             if m.gen != gen or m is not self.folder or self.uri != (m.dir.get_uri() if m.dir else None):
                 return
+            if replace and replace != src.get_uri():
+                m.remove(replace)
             m.upsert(Entry.from_info(None, info, gfile=src))
             self._try_select()
         gf.query_info_async(ATTRS, Gio.FileQueryInfoFlags.NONE, GLib.PRIORITY_DEFAULT, None, got)
