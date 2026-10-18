@@ -8,7 +8,7 @@ OUT=/build/deb
 #   예전엔 여기서 원본에 patch-*.py 를 적용했다. 이제 그 고친 것들은 포크의 커밋이다 (git log v0.50.1..sekai).
 #   재현할 수 있게 커밋을 고정한다 — 합성기를 고치면 포크에 커밋·푸시하고 여기 REF 와 rev_for 를 올린다.
 SEKAICOMP_URL="https://github.com/caterpillar321/worldlink.git"
-SEKAICOMP_REF="32e3cf3a2e5ea4ceed8a0abd8c84ef17adb1f770"
+SEKAICOMP_REF="2c8caeb4b940ea6c46fce38590016afc3cd2cd8d"
 MAINT="SekaiOS <sekai@localhost>"
 REV="sekai2"
 # 패키지별 리비전 (고친 패키지만 올린다 → apt 가 그 패키지만 업그레이드)
@@ -83,6 +83,7 @@ REV="sekai2"
 #      sekai42: 자동 모드 안전 규칙 — VGA·아날로그 DVI 는 권장 모드만, 기본 해상도가 50Hz 미만이면(4K@30) 50Hz 되는 같은 비율 최대 해상도 먼저 (KWin 처럼) ·
 #               커서 자동(no_hardware_cursors 2): 모든 모니터에서 하드웨어 커서를 먼저 시도하고 실패한 모니터만 소프트웨어 (mutter·KWin·wlroots 처럼) (포크 c6d8e57) — hyprbars sekai39 · hyprexpo sekai27
 #      sekai43: 하드웨어 커서가 3번 잇달아 실패한 모니터는 소프트웨어 커서로 굳힌다 — 커서를 받지 못하는 보조 GPU(Quadro)에서 움직일 때마다 시도·실패·기록 (로그인 한 번에 557번) (포크 32e3cf3) — hyprbars sekai40 · hyprexpo sekai28
+#      sekai44: X11 창이 _MOTIF_WM_HINTS 로 "장식 없음"을 알리면 제목줄을 앱이 그린다 — 막대를 빼서 RustDesk 제목줄이 두 줄이던 것 (포크 2c8caeb) — hyprbars sekai41 · hyprexpo sekai29
 #   aquamarine sekai3: 다른 GPU 로 화면을 넘길 때 그 GPU 의 그리기 영역(viewport)을 늘 맞춘다 — 같은 크기면 건너뛰는 캐시가 모든
 #      GPU 에 하나라 두 번째 GPU 는 0×0 이 되어 모니터가 단색 보라였다 · CPU 복사의 읽기 객체를 따로 두고 PBO 로 읽는다
 #      (patches/aquamarine/0001·0002, 원본 b2f6c1a·8a0eb4f 의 해당 부분)
@@ -92,7 +93,7 @@ REV="sekai2"
 #      로그아웃 때 죽였다 (~CEglContextGuard)
 #   aquamarine sekai6: ~CDRMOutput 가드를 expired() 로 — 끝날 때 CBackend 가 정적 소멸자에서 지워지며 이미 없앤 idle 목록에서
 #      지우다가 메모리를 깨뜨렸다 (로그인 화면 합성기가 끝날 때마다 세그폴트, 본컴 gdb 백트레이스로 확인)
-rev_for() { case "$1" in aquamarine) echo sekai6 ;; hyprbars) echo sekai40 ;; hyprexpo) echo sekai28 ;; worldlink|sekaicomp|hyprland) echo sekai43 ;; *) echo "$REV" ;; esac; }
+rev_for() { case "$1" in aquamarine) echo sekai6 ;; hyprbars) echo sekai41 ;; hyprexpo) echo sekai29 ;; worldlink|sekaicomp|hyprland) echo sekai44 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
