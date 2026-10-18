@@ -18,7 +18,8 @@ from . import dbg  # noqa: E402
 from . import firewall  # noqa: E402
 
 STATE = os.path.expanduser("~/.local/state/sekai/firewall-decisions.json")
-EVERY = 4                       # 초
+EVERY = 4                       # 초 — 이때는 /proc/net 만 본다 (firewall.listen_signature)
+FULL_EVERY = 15                 # 이만큼에 한 번은 기다리는 포트가 그대로여도 다 살핀다 (방화벽 설정·네트워크가 바뀐 경우)
 
 
 class FirewallPrompt:
@@ -62,11 +63,19 @@ class FirewallPrompt:
                 mt = os.path.getmtime(STATE)
             except OSError:
                 mt = None
-            if mt != getattr(self, "_mtime", None):
+            changed = mt != getattr(self, "_mtime", None)
+            if changed:
                 if hasattr(self, "_mtime"):
                     self.asked.clear()                     # 결정을 지우거나 바꿨다 — 이번 세션에 물은 것도 다시
                 self._mtime = mt
                 self.decisions = self._load()
+            # 기다리는 포트가 그대로면 건너뛴다 — 예전엔 4초마다 systemctl·ss(때로 앱 목록 전부·nmcli)를 띄웠다
+            sig = firewall.listen_signature()
+            self._n = getattr(self, "_n", 0) + 1
+            if not changed and sig == getattr(self, "_sig", None) and self._n % FULL_EVERY:
+                GLib.idle_add(self._found, None)
+                return
+            self._sig = sig
             if firewall.running():
                 apps = [a for a in firewall.listening_apps()
                         # 허용·거부를 이미 고른 앱은 다시 묻지 않는다 (예전엔 허용한 앱도 포트가 늘면 또 물었다)

@@ -65,6 +65,26 @@ def call(conn, service, path, iface, method, params=None,
               Gio.DBusCallFlags.NONE, timeout, None, done)
 
 
+def unpack_fast(v):
+    """GLib.Variant.unpack() 과 같되 바이트 배열(ay)은 bytes 로 — unpack() 은 바이트 하나하나를 파이썬 정수 리스트로 만들어
+    트레이 아이콘 그림(IconPixmap a(iiay), 256px 면 26만 개)을 받을 때마다 느렸다"""
+    t = v.get_type_string()
+    if t == "v":                                 # 상자 안은 열어 봐야 안다 (a{sv} 의 값)
+        return unpack_fast(v.get_variant())
+    if "ay" not in t and "v" not in t:
+        return v.unpack()
+    if t == "ay":
+        return v.get_data_as_bytes().get_data()
+    kids = [v.get_child_value(i) for i in range(v.n_children())]
+    if t.startswith("a{"):
+        return {unpack_fast(e.get_child_value(0)): unpack_fast(e.get_child_value(1)) for e in kids}
+    if t.startswith("a"):
+        return [unpack_fast(k) for k in kids]
+    if t.startswith("("):
+        return tuple(unpack_fast(k) for k in kids)
+    return v.unpack()
+
+
 def get_all(conn, service, path, iface, on_reply, timeout=3000):
     """org.freedesktop.DBus.Properties.GetAll 을 비동기로."""
     def done(out):
@@ -72,7 +92,7 @@ def get_all(conn, service, path, iface, on_reply, timeout=3000):
             on_reply({})
             return
         try:
-            on_reply(out.unpack()[0])
+            on_reply(unpack_fast(out.get_child_value(0)))
         except Exception as e:
             dbg("GetAll 해석 실패", e)
             on_reply({})

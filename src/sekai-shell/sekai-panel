@@ -1637,6 +1637,69 @@ def query_volume(cb):
     run_limited(["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"], done, capture=True)
 
 
+def clock_delay_ms(fmt):
+    """시계를 다음에 새로 칠 때까지 — 초가 보이면 다음 초, 아니면 다음 분(길어도 10초: 절전에서 깨거나 시간대를 바꿨을 때
+    늦어도 10초 안에 맞게). 예전엔 분만 보이는데도 작업 표시줄마다 1초마다 깨어 설정을 통째로 복사하고 글자를 다시 넣었다"""
+    now = time.time()
+    if any(c in (fmt or "") for c in ("%S", "%T", "%r", "%X", "%c", "%s")):
+        return max(20, int((1 - now % 1) * 1000) + 5)
+    return max(20, min(10000, int((60 - now % 60) * 1000) + 5))
+
+
+def set_text_if(label, text):
+    if label.get_text() != text:
+        label.set_text(text)
+
+
+class VolumeEvents:
+    """음량이 바뀌면 cb() — pactl subscribe 의 출력 장치(sink)·서버(기본 장치) 알림으로. 예전엔 5초마다 wpctl 을 띄웠다
+    (하루 1만 7천 번 — 쉬는 동안에도 CPU 를 깨웠다). pactl 이 끝나면 5초 뒤 다시 띄우고, 놓친 것은 60초마다 한 번 읽어 맞춘다.
+    setpriv --pdeathsig: 작업 표시줄이 죽으면(keep-running 이 다시 띄운다) pactl 도 같이 끝난다 — 안 그러면 하나씩 쌓였다"""
+
+    def __init__(self, cb):
+        self.cb = cb
+        self._soon_src = 0
+        self._start()
+        GLib.timeout_add_seconds(60, lambda: (self.cb(), True)[1])
+
+    def _start(self):
+        try:
+            self._proc = Gio.Subprocess.new(["setpriv", "--pdeathsig", "TERM", "pactl", "subscribe"],
+                                            Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE)
+        except GLib.Error as e:
+            dbg("[음량] pactl subscribe 실패", e)
+            GLib.timeout_add_seconds(5, self._restart)
+            return
+        stream = Gio.DataInputStream.new(self._proc.get_stdout_pipe())
+        stream.read_line_async(GLib.PRIORITY_DEFAULT, None, self._line)
+
+    def _line(self, stream, res):
+        try:
+            line, _n = stream.read_line_finish_utf8(res)
+        except GLib.Error:
+            line = None
+        if line is None:                         # pactl 이 끝났다 (PipeWire 재시작 등)
+            GLib.timeout_add_seconds(5, self._restart)
+            return
+        if " on sink " in line or " on server" in line:
+            self._soon()
+        stream.read_line_async(GLib.PRIORITY_DEFAULT, None, self._line)
+
+    def _soon(self):
+        if not self._soon_src:                   # 한 번 바꾸면 알림이 여러 줄 온다 — 모아서 한 번만 읽는다
+            self._soon_src = GLib.timeout_add(120, self._fire)
+
+    def _fire(self):
+        self._soon_src = 0
+        self.cb()
+        return False
+
+    def _restart(self):
+        self.cb()
+        self._start()
+        return False
+
+
 SEARCH_MODES = (("hide", "숨기기"), ("icon", "검색 아이콘만"), ("box", "검색 상자"))
 
 
@@ -2072,15 +2135,17 @@ class SecondaryPanel(Gtk.Window, TaskbarMixin):
         bar.pack_end(clock_btn, False, False, 0)
 
         self.rebuild_tasks()
+        self._src = 0
         self._tick()
-        self._src = GLib.timeout_add_seconds(1, self._tick)
-        self.connect("destroy", lambda *_: GLib.source_remove(self._src))
+        self.connect("destroy", lambda *_: self._src and GLib.source_remove(self._src))
 
     def _tick(self):
         t = time.localtime()
-        self.clock.set_text(time.strftime(sekai_conf("panel", "clock_format", "%H:%M") or "%H:%M", t))
-        self.clock_date.set_text(korean_date(t))
-        return True
+        fmt = sekai_conf("panel", "clock_format", "%H:%M") or "%H:%M"
+        set_text_if(self.clock, time.strftime(fmt, t))
+        set_text_if(self.clock_date, korean_date(t))
+        self._src = GLib.timeout_add(clock_delay_ms(fmt), self._tick)
+        return False
 
 
 class Panel(Gtk.Window, TaskbarMixin):
@@ -2198,10 +2263,10 @@ class Panel(Gtk.Window, TaskbarMixin):
         # ── 갱신 ──
         self.rebuild_tasks()
         self.update_sys()
-        GLib.timeout_add_seconds(1, self.tick_clock)
-        GLib.timeout_add_seconds(5, self.update_sys)
+        self._volume_events = VolumeEvents(self.update_sys)
         self.event_hooks = []
         hypr.subscribe(self.on_hypr_event)
+        self._clock_src = 0
         self.tick_clock()
 
     # ── 알림 버튼 표시 ──────────────────────────────────
@@ -2469,16 +2534,27 @@ class Panel(Gtk.Window, TaskbarMixin):
 
     # ── 시스템 정보 ──
     def tick_clock(self):
+        """시계 새로 칠하기 — 다음 번은 스스로 건다 (clock_delay_ms). 설정을 바꿨을 때처럼 바로 불러도 된다"""
+        if self._clock_src:
+            GLib.source_remove(self._clock_src)
         t = time.localtime()
-        self.clock.set_text(time.strftime(
-            sekai_conf("panel", "clock_format", "%H:%M") or "%H:%M", t))
-        self.clock_date.set_text(korean_date(t))
-        self.clock_btn.set_tooltip_text(time.strftime("%Y년 ", t) + korean_date(t, True))
-        return True
+        fmt = sekai_conf("panel", "clock_format", "%H:%M") or "%H:%M"
+        set_text_if(self.clock, time.strftime(fmt, t))
+        set_text_if(self.clock_date, korean_date(t))
+        tip = time.strftime("%Y년 ", t) + korean_date(t, True)
+        if self.clock_btn.get_tooltip_text() != tip:
+            self.clock_btn.set_tooltip_text(tip)
+        self._clock_src = GLib.timeout_add(clock_delay_ms(fmt), self._clock_due)
+        return False
+
+    def _clock_due(self):
+        self._clock_src = 0
+        self.tick_clock()
+        return False
 
     def refresh_sys(self, delay=150):
         """음량을 바꾼 직후 한 번 새로 읽기 — 1회용. 이미 걸려 있으면 다시 걸지 않는다.
-        (update_sys 는 5초 반복 타이머라 True 를 돌려준다 — 그대로 timeout_add 에 걸면 영원히 반복됐다)"""
+        (update_sys 는 True 를 돌려준다 — 그대로 timeout_add 에 걸면 영원히 반복됐다)"""
         if getattr(self, "_sys_src", 0):
             return
 
@@ -2489,7 +2565,7 @@ class Panel(Gtk.Window, TaskbarMixin):
         self._sys_src = GLib.timeout_add(delay, go)
 
     def update_sys(self):
-        """5초마다 (반복 타이머 — True) — 볼륨 아이콘. 조회는 기다리지 않는다 (query_volume)"""
+        """음량이 바뀌었을 때 (VolumeEvents) — 볼륨 아이콘. 조회는 기다리지 않는다 (query_volume)"""
         if not getattr(self, "_sys_busy", False):
             self._sys_busy = True                # wpctl 이 멈춰 있으면 새로 띄우지 않는다 (쌓이지 않게)
             query_volume(self._apply_sys)

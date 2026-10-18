@@ -48,6 +48,37 @@ def _ephemeral():
 DISCOVERY_UDP = {5353, 5355, 1900}
 
 
+_LOOP4 = "7F"                     # 127.x.x.x — /proc/net/tcp 의 주소는 낮은 바이트가 앞 (0100007F = 127.0.0.1)
+_LOOP6 = ("00000000000000000000000001000000", "0000000000000000FFFF0000")   # ::1 · ::ffff:127.x (끝 8자리가 v4)
+
+
+def listen_signature():
+    """지금 밖에서 들어오는 연결을 기다리는 포트들 — {(proto, port)} (127.0.0.1·::1 만 빼고).
+    프로그램을 띄우지 않고 /proc/net 만 읽는다 — 몇 초마다 보는 값이 바뀌었을 때만 listening_apps(ss 등)를 부르려고"""
+    out = set()
+    lo, hi = _ephemeral()
+    for proto, f, want in (("tcp", "tcp", "0A"), ("tcp", "tcp6", "0A"), ("udp", "udp", "07"), ("udp", "udp6", "07")):
+        try:
+            with open(f"/proc/net/{f}") as fh:
+                next(fh, None)
+                for line in fh:
+                    parts = line.split()
+                    if len(parts) < 4 or parts[3] != want:
+                        continue
+                    addr, _, port = parts[1].partition(":")
+                    if len(addr) == 8 and addr.endswith(_LOOP4):
+                        continue
+                    if addr == _LOOP6[0] or (addr.startswith(_LOOP6[1]) and addr.endswith(_LOOP4)):
+                        continue
+                    port = int(port, 16)
+                    if proto == "udp" and (lo <= port <= hi or port in DISCOVERY_UDP):
+                        continue                 # listening_apps 와 같게 — 나가는 쪽 UDP 는 브라우저가 수시로 열고 닫는다
+                    out.add((proto, port))
+        except (OSError, ValueError):
+            pass
+    return frozenset(out)
+
+
 def listening_apps():
     """밖에서 들어오는 연결을 기다리는 내 앱들 — [{id, name, ports}] (127.0.0.1·::1 에만 묶인 것은 빼고).
     임시 포트 범위의 UDP 는 뺀다 — 브라우저가 서버에 붙을 때(QUIC·WebRTC) 쓰는 나가는 쪽 소켓이라

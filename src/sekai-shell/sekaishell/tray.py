@@ -69,13 +69,10 @@ def pixmap_to_pixbuf(pixmaps, want=22):
     src = bytes(data)
     if len(src) < w * h * 4:
         return None
+    # ARGB(네트워크 바이트 순서) → RGBA — 슬라이스로 (예전엔 픽셀마다 파이썬 반복: 256px 면 6만 5천 번)
+    src = src[:w * h * 4]
     out = bytearray(w * h * 4)
-    for i in range(w * h):
-        a, r, g, b = src[i * 4], src[i * 4 + 1], src[i * 4 + 2], src[i * 4 + 3]
-        out[i * 4] = r
-        out[i * 4 + 1] = g
-        out[i * 4 + 2] = b
-        out[i * 4 + 3] = a
+    out[0::4], out[1::4], out[2::4], out[3::4] = src[1::4], src[2::4], src[3::4], src[0::4]
     pb = GdkPixbuf.Pixbuf.new_from_bytes(
         GLib.Bytes.new(bytes(out)), GdkPixbuf.Colorspace.RGB, True, 8,
         w, h, w * 4)
