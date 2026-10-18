@@ -111,7 +111,14 @@ def taskbar_search_mode(t):
     def pick(label):
         """우클릭 메뉴 › 검색 › label — 키보드로 고른다. Wayland 의 팝업 메뉴는 AT-SPI 가 화면 좌표를 모른다
         (메뉴 표면 안의 좌표만 — 누를 자리를 알 수 없다). 고른 줄은 selected 상태로 확인"""
-        t.click(config.SCREEN[0] // 2, config.SCREEN[1] - 24, btn="right")    # 작업 표시줄의 빈 곳
+        # 작업 표시줄의 빈 곳 — 커서를 먼저 올려 두고 누른다. 순간 이동하자마자 누르면 포인터 초점이 아직 옮겨 가기 전이라
+        #   (로그인 직후 등) 클릭이 아래의 바탕 화면으로 갔다
+        x, y = config.SCREEN[0] // 2, config.SCREEN[1] - 24
+        t.q.move(x - 40, y)
+        time.sleep(0.15)
+        t.q.move(x, y)
+        time.sleep(0.3)
+        t.click(x, y, btn="right")
         t.expect(t.ui.wait(app=PANEL, role="menu", name="검색", timeout=5), "우클릭 메뉴에 검색 (하위 메뉴)")
         # 키는 하나씩 — 로그인하고 처음 여는 메뉴는 보이고 나서 키보드를 잡기까지 늦어, 두 키를 한꺼번에(down+right)
         #   보내면 둘 다 흘렀다. 검색 줄이 골라진 걸 보고 하위 메뉴로
