@@ -152,12 +152,35 @@ def body_plain(body):
     return _convert(body, False)
 
 
+_IMAGE_HINTS = ("image-data", "image_data", "icon_data")
+
+
+def _notify_args(params):
+    """Notify 인자 — 그림 힌트(ay)만 GLib.Variant 로 둔다. 통째로 unpack() 하면 그림 바이트가 파이썬 정수 리스트가 돼
+    512x512 한 장에 2초 — 그동안 패널이 멈췄고 큰 그림은 보낸 앱이 시간 초과로 실패했다"""
+    out = [params.get_child_value(i).unpack() for i in (0, 1, 2, 3, 4, 5, 7)]
+    hints = {}
+    hv = params.get_child_value(6)
+    for i in range(hv.n_children()):
+        e = hv.get_child_value(i)
+        k = e.get_child_value(0).get_string()
+        val = e.get_child_value(1).get_variant()
+        hints[k] = val if k in _IMAGE_HINTS else val.unpack()
+    return out[0], out[1], out[2], out[3], out[4], out[5], hints, out[6]
+
+
 def pixbuf_from_image_data(v):
-    """image-data 힌트 (iiibiiay) → GdkPixbuf."""
+    """image-data 힌트 (iiibiiay) → GdkPixbuf. GLib.Variant 그대로 받으면 바이트를 풀지 않고 꺼낸다"""
     try:
-        w, h, rowstride, has_alpha, bps, channels, data = v
+        if isinstance(v, GLib.Variant):
+            w, h, rowstride = (v.get_child_value(i).get_int32() for i in range(3))
+            has_alpha, bps = v.get_child_value(3).get_boolean(), v.get_child_value(4).get_int32()
+            data = v.get_child_value(6).get_data_as_bytes()
+        else:
+            w, h, rowstride, has_alpha, bps, channels, data = v
+            data = GLib.Bytes.new(bytes(data))
         return GdkPixbuf.Pixbuf.new_from_bytes(
-            GLib.Bytes.new(bytes(data)), GdkPixbuf.Colorspace.RGB,
+            data, GdkPixbuf.Colorspace.RGB,
             bool(has_alpha), int(bps), int(w), int(h), int(rowstride))
     except Exception as e:
         dbg("image-data 해석 실패:", e)
@@ -216,6 +239,14 @@ class Notification:
             self.image = load_icon(self.app_icon)
         if self.image is None:
             self.image = load_icon(self.desktop_entry)
+        # 앱이 보낸 그림(image-data — 앨범 아트·프로필 사진)은 받은 크기 그대로라, 기록(최대 200건)에 큰 그림이 쌓였다.
+        #   카드는 32~36px 로 그리니 한 번만 72px(고해상도 2배) 안으로 줄여 둔다
+        if self.image is not None:
+            w, h = self.image.get_width(), self.image.get_height()
+            if max(w, h) > 72:
+                k = 72 / max(w, h)
+                self.image = self.image.scale_simple(max(1, round(w * k)), max(1, round(h * k)),
+                                                     GdkPixbuf.InterpType.BILINEAR)
 
     # 기록용 (픽스버프는 저장하지 않는다)
     def to_dict(self):
@@ -541,8 +572,7 @@ class NotificationService:
             inv.return_value(GLib.Variant(
                 "(ssss)", ("sekai-shell", "SekaiOS", "0.1", "1.2")))
         elif method == "Notify":
-            app, replaces, icon, summary, body, actions, hints, timeout = \
-                params.unpack()
+            app, replaces, icon, summary, body, actions, hints, timeout = _notify_args(params)
             nid = self.notify(app, replaces, icon, summary, body,
                               actions, hints, timeout)
             inv.return_value(GLib.Variant("(u)", (nid,)))

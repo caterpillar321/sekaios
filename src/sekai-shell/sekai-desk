@@ -1057,7 +1057,8 @@ class Desk(Gtk.Window):
         self.hover = None
         self.band = None                   # 끌어서 선택하는 사각형 (x0,y0,x1,y1)
         self.press = None
-        self.wall_src = None               # 원본 픽스버프
+        self.wall_src = None               # 원본 픽스버프 — 화면 크기 그림(wall_cache)을 만들면 놓는다
+        self.wall_file = None              # 그 원본을 다시 읽을 파일 (읽기에 성공한 것만)
         self.wall_path = None
         self.wall_cache = {}               # (w,h,mode) → cairo 표면
         self.fade_from = None              # 전환 효과용 이전 표면
@@ -1153,11 +1154,11 @@ class Desk(Gtk.Window):
             old = self._current_surface()
             try:
                 # 폰 사진은 EXIF 방향대로 세운다 (안 하면 사진 앱에서 배경으로 고른 세로 사진이 누워 보였다)
-                self.wall_src = GdkPixbuf.Pixbuf.new_from_file(path).apply_embedded_orientation()
-                self.wall_path = path
+                self.wall_src = self._decode_wall(path)
+                self.wall_path = self.wall_file = path
             except Exception as e:
                 dbg("배경 읽기 실패", path, e)
-                self.wall_src = None
+                self.wall_src = self.wall_file = None
             self.wall_cache.clear()
             if old is not None:                        # 이전 배경에서 새 배경으로 스르륵
                 self.fade_from = old
@@ -1299,6 +1300,21 @@ class Desk(Gtk.Window):
             return None
         return self._wall_surface(a.width, a.height)
 
+    @staticmethod
+    def _decode_wall(path):
+        # 폰 사진은 EXIF 방향대로 세운다 (안 하면 사진 앱에서 배경으로 고른 세로 사진이 누워 보였다)
+        return GdkPixbuf.Pixbuf.new_from_file(path).apply_embedded_orientation()
+
+    def _wall_pixbuf(self):
+        """원본 — 놓아 두었으면 파일에서 다시 읽는다 (화면 크기·배치가 바뀔 때만)"""
+        if self.wall_src is None and self.wall_file:
+            try:
+                self.wall_src = self._decode_wall(self.wall_file)
+            except Exception as e:
+                dbg("배경 다시 읽기 실패", self.wall_file, e)
+                self.wall_file = None
+        return self.wall_src
+
     def _wall_surface(self, W, H):
         key = (W, H, self.mode)
         if key in self.wall_cache:
@@ -1307,7 +1323,7 @@ class Desk(Gtk.Window):
         cr = cairo.Context(surf)
         cr.set_source_rgb(*self.bgcolor)
         cr.paint()
-        pb = self.wall_src if self.mode != "solid_color" else None
+        pb = self._wall_pixbuf() if self.mode != "solid_color" else None
         if pb is not None:
             bw, bh = pb.get_width(), pb.get_height()
             if self.mode == "tile":
@@ -1329,6 +1345,9 @@ class Desk(Gtk.Window):
                 Gdk.cairo_set_source_pixbuf(cr, scaled, (W - nw) / 2, (H - nh) / 2)
                 cr.paint()
         self.wall_cache = {key: surf}
+        # 원본은 놓는다 — 화면 크기 그림만 있으면 그릴 수 있다. 4K·폰 사진 원본을 모니터마다 세션 내내 들고 있어
+        #   바탕 화면이 180MB 넘게 차지했다 (2560x1440 화면이면 그림은 15MB)
+        self.wall_src = None
         return surf
 
     def on_draw(self, w, cr):

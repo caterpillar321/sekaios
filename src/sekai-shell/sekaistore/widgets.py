@@ -7,6 +7,7 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import GdkPixbuf, GLib, Gtk, Pango  # noqa: E402
 
 from sekaishell import appmgr  # noqa: E402
+from sekaishell.ui import spinner  # noqa: E402
 
 from . import catalog  # noqa: E402
 
@@ -73,8 +74,7 @@ def picture(url, width, height, cls="store-shot", on_fail=None):
     frame.get_style_context().add_class(cls)
     frame.set_size_request(width, height)
     img = Gtk.Image()
-    sp = Gtk.Spinner()
-    sp.start()
+    sp = spinner()                      # 그림을 못 받아 칸을 숨겨도 계속 돌지 않게 (보일 때만)
     box = Gtk.Box()
     box.set_center_widget(sp)
     frame.add(box)

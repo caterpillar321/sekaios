@@ -6,6 +6,18 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import GdkPixbuf, GLib, Gtk, Pango  # noqa: E402
 
 
+def spinner(size=0):
+    """돌아가는 표시 — 화면에 보일 때만 돈다. Gtk.Spinner 는 숨겨져도(가려진 스택 페이지, hide 한 칸) start 상태면
+    프레임 시계를 초당 60번 깨워, 쉬는 앱이 CPU 를 쓰고 깨어남이 이어졌다 (스토어의 '읽는 중' 표시가 목록을 다 읽은 뒤에도).
+    보이지 않게 되면(unmap) 멈추고, 다시 보이면 이어서 돈다. 다 됐으면 그냥 버리거나 숨기면 된다"""
+    sp = Gtk.Spinner()
+    if size:
+        sp.set_size_request(size, size)
+    sp.connect("map", lambda w: w.start())
+    sp.connect("unmap", lambda w: w.stop())
+    return sp
+
+
 def combo(items, active=None, on_change=None):
     """items = [(id, 표시이름), ...]
     지금 값이 목록에 없으면(지운 앱, 손으로 고친 설정 등) 첫 항목이 아니라 그 값을 그대로 보인다 —

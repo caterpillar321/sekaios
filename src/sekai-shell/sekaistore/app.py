@@ -19,6 +19,7 @@ from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 
 from sekaishell import appmgr, dbg  # noqa: E402
 from sekaishell.appkit import AppTheme  # noqa: E402
+from sekaishell.ui import spinner  # noqa: E402
 
 from . import catalog as C  # noqa: E402
 from .updates import Updates  # noqa: E402
@@ -224,9 +225,7 @@ class StoreWindow(Gtk.ApplicationWindow):
     def _loading_page(self):
         v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         v.set_valign(Gtk.Align.CENTER)
-        sp = Gtk.Spinner()
-        sp.set_size_request(32, 32)
-        sp.start()
+        sp = spinner(32)                # 보일 때만 돈다 — 목록을 다 읽어 이 페이지가 가려진 뒤에도 돌던 것
         v.pack_start(sp, False, False, 0)
         self.loading_text = label("앱 목록을 읽는 중…", "detail-meta", xalign=0.5)
         v.pack_start(self.loading_text, False, False, 0)
@@ -312,9 +311,7 @@ class StoreWindow(Gtk.ApplicationWindow):
         busy = subprocess.run(["systemctl", "is-active", "--quiet", "sekai-store-catalog.service"]).returncode == 0
         if busy:
             # 업데이트 직후 — sekai-store-catalog 가 뒤에서 받는 중 (다 받으면 _wait_catalog 가 다시 읽는다)
-            sp = Gtk.Spinner()
-            sp.start()
-            sp.set_size_request(28, 28)
+            sp = spinner(28)
             v.pack_start(sp, False, False, 0)
             v.pack_start(label("앱 목록을 받는 중입니다", "sec-h", xalign=0.5), False, False, 0)
             msg = "업데이트 뒤 처음 한 번 받습니다. 다 받으면 저절로 나타납니다."

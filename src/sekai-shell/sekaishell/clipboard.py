@@ -88,8 +88,10 @@ class ClipboardPopup(PanelPopup):
         self.fill()
 
     def fill(self):
+        # 떼어 내지 말고 부순다 — 줄의 지우기 단추가 자기 줄을 붙잡고 있어(순환) 떼어 내기만 하면 해제되지 않고,
+        #   Win+V 를 열 때마다 기록 줄 전부가 쌓였다 (40줄이면 100번에 70MB 넘게)
         for r in self.listbox.get_children():
-            self.listbox.remove(r)
+            r.destroy()
         lines = _list()
         for line in lines:
             _id, _, preview = line.partition("\t")
@@ -187,7 +189,7 @@ class ClipboardPopup(PanelPopup):
             subprocess.run(["cliphist", "delete"], input=(row.line + "\n").encode(), timeout=3)
         except Exception as e:
             dbg("cliphist delete 실패", e)
-        self.listbox.remove(row)
+        row.destroy()
         if not self.listbox.get_children():
             self.empty.show()
             self.clear_btn.set_sensitive(False)

@@ -345,8 +345,7 @@ def reveal(w, on):
 def busy_box(text):
     """돌아가는 표시 + 글 — 오래 걸리는 작업 동안"""
     b = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-    sp = Gtk.Spinner()
-    sp.start()
+    sp = _ui.spinner()                  # 작업 중에 다른 페이지로 가도 숨은 채 돌지 않게 (보일 때만)
     b.pack_start(sp, False, False, 0)
     b.pack_start(info(text), False, False, 0)
     return b
