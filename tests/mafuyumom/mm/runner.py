@@ -15,7 +15,7 @@ import os
 import time
 import traceback
 
-from . import checks, config, remote, vm
+from . import checks, config, remote, resmon, vm
 from .ui import UI
 
 TESTS = []
@@ -191,8 +191,8 @@ class T:
         return fn
 
 
-def run(selected, outdir, q):
-    results = []
+def run(selected, outdir, q, results=None):
+    results = [] if results is None else results      # 부른 쪽 목록에 채운다 — 도중에 멈춰도 거기까지 보고서에
     ui = UI(q)                    # 에이전트 하나를 끝까지 (요청마다 띄우면 앱에 pidfd 가 쌓인다 — mm_agent.serve)
     try:
         return _run(selected, outdir, q, ui, results)
@@ -218,6 +218,7 @@ def real_battery():
 
 
 def _run(selected, outdir, q, ui, results):
+    prev_res = None
     for tc in selected:
         if config.REAL:
             bat = real_battery()
@@ -251,6 +252,11 @@ def _run(selected, outdir, q, ui, results):
                 t.notes.append(f"(정리 실패: {e})")
         after = checks.probe(since - 1)
         probs = checks.problems(before, after)
+        # 자원 — 열린 메뉴를 닫고 잠깐 쉬게 둔 뒤 (resmon)
+        q.key("esc")
+        res = resmon.measure()
+        probs += resmon.problems(res, prev_res)
+        prev_res = res or prev_res
         tb = checks.tracebacks(since - 1) if after.get("tb", 0) > before.get("tb", 0) else ""
         if probs and status not in ("fail", "error"):
             t.shot("끝")
@@ -263,7 +269,7 @@ def _run(selected, outdir, q, ui, results):
               f"{' · ' + ', '.join(probs) if probs else ''}", flush=True)
         results.append({"id": tc["id"], "name": tc["name"], "suite": tc["suite"], "status": status, "msg": msg,
                         "secs": round(dt, 1), "problems": probs, "traceback": tb, "notes": t.notes,
-                        "findings": t.findings, "shots": t.shots})
+                        "findings": t.findings, "shots": t.shots, "res": res})
         # 세션이 무너졌으면 다시 로그인해 다음 시험이 이어지게
         if not vm.session_up():
             print("  ! 세션이 없다 — 다시 로그인", flush=True)

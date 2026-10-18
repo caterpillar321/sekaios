@@ -113,7 +113,13 @@ def taskbar_search_mode(t):
         (메뉴 표면 안의 좌표만 — 누를 자리를 알 수 없다). 고른 줄은 selected 상태로 확인"""
         t.click(config.SCREEN[0] // 2, config.SCREEN[1] - 24, btn="right")    # 작업 표시줄의 빈 곳
         t.expect(t.ui.wait(app=PANEL, role="menu", name="검색", timeout=5), "우클릭 메뉴에 검색 (하위 메뉴)")
-        t.key("down", "right")
+        # 키는 하나씩 — 로그인하고 처음 여는 메뉴는 보이고 나서 키보드를 잡기까지 늦어, 두 키를 한꺼번에(down+right)
+        #   보내면 둘 다 흘렀다. 검색 줄이 골라진 걸 보고 하위 메뉴로
+        for _ in range(3):
+            t.key("down")
+            if t.wait(lambda: "selected" in (t.ui.find(app=PANEL, role="menu", name="검색") or {}).get("states", []), 1.5):
+                break
+        t.key("right")
         t.expect(t.ui.wait(app=PANEL, role="radio menu item", name=label, timeout=3), f"검색 › {label}")
         for _ in range(4):
             if "selected" in (t.ui.find(app=PANEL, role="radio menu item", name=label) or {}).get("states", []):

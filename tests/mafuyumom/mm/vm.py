@@ -83,9 +83,19 @@ def fresh():
     shutil.copy(os.path.join(config.GOLDEN, "OVMF_VARS.fd"), RUN_VARS)
 
 
+def _kvm_access():
+    """/dev/kvm 은 uaccess 장치라 logind 가 화면 세션(서버면 gdm 로그인 화면)에 맞춰 ACL 을 다시 쓴다 — 넣어 둔 내 권한이
+    시험 도중에 지워져, 다시 부팅하는 시험(전원 단추 등)에서 qemu 가 "Permission denied" 로 멈췄다. 띄우기 직전마다 다시 넣는다"""
+    if os.access("/dev/kvm", os.R_OK | os.W_OK):
+        return
+    subprocess.run(["sudo", "-n", "setfacl", "-m", f"u:{os.environ.get('USER') or os.getlogin()}:rw", "/dev/kvm"],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def start():
     if config.REAL:
         return
+    _kvm_access()
     subprocess.run([
         "qemu-system-x86_64", "-name", "mafuyumom", "-enable-kvm", "-cpu", "host", "-smp", "4", "-m", "8192",
         "-machine", "q35",

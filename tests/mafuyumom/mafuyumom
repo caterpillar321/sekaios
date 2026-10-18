@@ -20,11 +20,12 @@ import os
 import re
 import sys
 import time
+import traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-from mm import config, remote, report, runner, vm  # noqa: E402
+from mm import config, remote, report, resmon, runner, vm  # noqa: E402
 
 
 def load_suites():
@@ -60,12 +61,22 @@ def cmd_run(a):
     outdir = os.path.join(config.REPORTS, time.strftime("%Y%m%d-%H%M%S"))
     os.makedirs(outdir, exist_ok=True)
     print(f"■ 시험 {len(sel)}개", flush=True)
-    results = runner.run(sel, outdir, q)
+    results = []
+    try:
+        runner.run(sel, outdir, q, results)
+    except BaseException as e:                     # 도중에 멈춰도(VM 이 안 뜸 등) 거기까지의 보고서는 남긴다
+        print(f"■ 도중에 멈춤: {type(e).__name__}: {e}", flush=True)
+        results.append({"id": "(멈춤)", "name": f"하네스가 멈췄다: {type(e).__name__}: {e}", "suite": "(하네스)",
+                        "status": "error", "msg": traceback.format_exc(limit=6), "secs": 0, "problems": [],
+                        "traceback": "", "notes": [], "findings": [], "shots": []})
     meta = {"when": time.strftime("%Y-%m-%d %H:%M"), "versions": versions, "secs": int(time.time() - t0),
             "golden": vm.golden_info()}
     cnt = report.write(outdir, results, meta)
     print(f"■ 결과: 통과 {cnt['pass']} · 경고 {cnt['warn']} · 실패 {cnt['fail']} · 오류 {cnt['error']} · "
           f"건너뜀 {cnt['skip']}", flush=True)
+    for n, first, last, peak in resmon.summary(results)[:6]:
+        if last - first >= resmon.GROW_MB:
+            print(f"■ 메모리 증가: {n} {first} → {last}MB (최고 {peak})", flush=True)
     print(f"■ 보고서: {outdir}/report.html", flush=True)
     if not a.keep:
         vm.stop(force=True)

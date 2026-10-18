@@ -34,6 +34,14 @@ def write(outdir, results, meta):
     for k, label in (("pass", "통과"), ("warn", "경고"), ("fail", "실패"), ("error", "오류"), ("skip", "건너뜀")):
         out.append(f"<div class=pill>{label}<b>{cnt[k]}</b></div>")
     out.append("</div>")
+    from . import resmon
+    rows = resmon.summary(results)
+    if rows:
+        out.append("<h2>자원 (처음 → 끝 · 가장 컸던 때, MB)</h2><div class=t><ul>")
+        for n, first, last, peak in rows[:15]:
+            mark = " class=find" if last - first >= resmon.GROW_MB else ""
+            out.append(f"<li{mark}>{e(n)}: {first} → {last} · 최고 {peak}{' — 누수 후보' if mark else ''}</li>")
+        out.append("</ul></div>")
     suites = []
     for r in results:
         if r["suite"] not in suites:
