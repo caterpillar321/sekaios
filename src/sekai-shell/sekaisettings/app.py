@@ -10,6 +10,7 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk, Gio, GLib  # noqa: E402
 
 from sekaishell.appkit import shot_when_asked
+from sekaishell import ui as _ui
 from sekaishell.store import Store
 from .util import dbg
 from .widgets import icon_image
@@ -276,6 +277,7 @@ class SettingsWindow(Gtk.Window):
                 import traceback
                 traceback.print_exc()
                 w = _error_page(pg["title"], e)
+            _ui.no_wheel_all(w)              # 닫힌 드롭다운은 휠에 값이 바뀌지 않게 (스크롤하다 해상도가 바뀌었다)
             if isinstance(w, Gtk.ScrolledWindow):
                 # 가로로도 밀릴 수 있게 — 페이지의 가장 넓은 줄이 창의 최소 폭을 잡지 않는다 (좁은 스냅 칸에 들어가게).
                 #   창이 그보다 넓으면 줄은 창 폭에 맞춰 그대로 늘어난다

@@ -18,6 +18,24 @@ def spinner(size=0):
     return sp
 
 
+def no_wheel(w):
+    """닫힌 드롭다운은 마우스 휠로 값을 바꾸지 않는다 (윈도우처럼) — 휠은 페이지 스크롤로 넘긴다.
+    GTK3 콤보는 닫혀 있어도 휠에 값이 바뀌어, 설정을 스크롤하다 커서가 지나간 해상도가 바뀌었다"""
+    def scroll(widget, _ev):
+        widget.stop_emission_by_name("scroll-event")
+        return False                       # 부모(스크롤 창)로
+    w.connect("scroll-event", scroll)
+    return w
+
+
+def no_wheel_all(root):
+    """root 안의 드롭다운 모두에 no_wheel — 설정 앱이 페이지를 만들 때"""
+    if isinstance(root, Gtk.ComboBox):
+        no_wheel(root)
+    if isinstance(root, Gtk.Container):
+        root.forall(no_wheel_all)
+
+
 def combo(items, active=None, on_change=None):
     """items = [(id, 표시이름), ...]
     지금 값이 목록에 없으면(지운 앱, 손으로 고친 설정 등) 첫 항목이 아니라 그 값을 그대로 보인다 —
@@ -37,6 +55,7 @@ def combo(items, active=None, on_change=None):
             c.set_sensitive(False)
     if on_change:
         c.connect("changed", lambda w: on_change(w.get_active_id()))
+    no_wheel(c)
     return c
 
 

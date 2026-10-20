@@ -155,6 +155,16 @@ _DISPLAY_KEYS = {"mode": "", "position": "", "scale": 1.0, "transform": 0, "vrr"
 #   옛 모니터를 다시 꽂으면 옛 설정이 돌아온다. 설명이 없는 모니터(가상 머신 등)와 예전 설정은 단자 이름.
 #   (전엔 단자 이름에만 묶여, 165Hz 모니터 자리에 60Hz 모니터를 꽂으면 로그인 화면·바탕화면이 못 받는 모드로 떴다)
 _DESC = re.compile(r"[A-Za-z0-9._()+/-][A-Za-z0-9 ._()+/-]{0,94}[A-Za-z0-9._()+/-]")   # 쉼표·# 없음 (규칙 문법)
+# 모니터 모드 — preferred 등 낱말이거나 WxH[@주사율Hz]. 주사율 자리에 다른 글자가 들어가면(2560x1440@autoHz)
+#   설정 앱이 그 값을 읽다 멈췄고 합성기도 엉뚱한 모드를 골랐다 → 이상한 값은 preferred 로
+_MODE_OK = re.compile(r"preferred|highrr|highres|\d{2,5}x\d{2,5}(@\d{1,3}(\.\d{1,3})?Hz)?")
+
+
+def display_mode(m):
+    mode = (m or {}).get("mode") or "preferred"
+    return mode if _MODE_OK.fullmatch(str(mode)) else "preferred"
+
+
 _DISPLAY_KEY_OK = re.compile(r"desc:" + _DESC.pattern + r"|[A-Za-z0-9._-]{1,32}")
 
 
@@ -578,7 +588,7 @@ class Store:
             if not m.get("enabled", True):
                 lines.append(f"monitor = {name}, disable")
                 continue
-            mode = m.get("mode") or "preferred"
+            mode = display_mode(m)
             pos = m.get("position") or "auto"
             scale = self._fit_scale(name, m)
             line = f"monitor = {name}, {mode}, {pos}, {scale}"
@@ -827,7 +837,7 @@ class Store:
             if not m.get("enabled", True):
                 keyword("monitor", f"{name}, disable")
                 continue
-            mode = m.get("mode") or "preferred"
+            mode = display_mode(m)
             arg = f"{name}, {mode}, {m.get('position') or 'auto'}, {self._fit_scale(name, m)}"
             if m.get("transform"):
                 arg += f", transform, {int(m['transform'])}"

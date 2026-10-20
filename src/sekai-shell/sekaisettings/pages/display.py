@@ -50,9 +50,15 @@ VRR = [("0", "끄기"), ("1", "켜기"), ("2", "전체 화면일 때만 (게임�
 
 
 def _split(mode):
-    """'2560x1440@164.96Hz' → ('2560x1440', '164.96')"""
+    """'2560x1440@164.96Hz' → ('2560x1440', '164.96'). 주사율이 숫자가 아니면 '' (예전에 잘못 저장된 @autoHz 에
+    페이지가 float() 하다 멈췄다)"""
     res, _, hz = (mode or "").partition("@")
-    return res, hz.rstrip("Hz")
+    hz = hz.removesuffix("Hz")
+    try:
+        float(hz)
+    except ValueError:
+        hz = ""
+    return res, hz
 
 
 def _by_res(modes):
@@ -458,21 +464,25 @@ def build(store):
                 quiet["on"] = prev
 
         def apply_mode(n, res, hz):
+            if res != "preferred" and not _split(f"{res}@{hz}Hz")[1]:
+                return                     # 그 해상도의 주사율을 모른다 — "auto" 를 모드에 넣지 않는다
             v = "preferred" if res == "preferred" else f"{res}@{hz}Hz"
             change(n, "mode", v)
             # 적용됐는지 실제 모니터 상태로 확인한다.
             #   드라이버가 모드를 거부하면 Hyprland 는 조용히 권장 모드로 되돌아간다.
-            GLib.timeout_add(1500, _verify, n, v)
+            GLib.timeout_add(1500, ctl[n]["verify"], n, v)       # 이 모니터의 것 (반복문의 늦은 바인딩 — 위 on_res)
 
         def on_res(v, n=name):
             if quiet["on"] or v is None:
                 return
             rc = ctl[n]["rate"]
             # 해상도를 바꾸면 그 해상도의 가장 높은 주사율로 (윈도우와 같게)
-            fill_rates(rc, v)
+            #   ctl[n]["fill"] — 이 모니터의 목록으로. 그냥 fill_rates 를 부르면 반복문의 마지막 모니터 것이라
+            #   (늦은 바인딩) 첫 모니터의 해상도를 바꾸면 주사율이 비어 "2560x1440@autoHz" 가 저장됐다
+            ctl[n]["fill"](rc, v)
             # 배율 목록도 새 해상도에 맞게 (지금 배율이 안 되면 가장 가까운 값 — 적용할 때 store 가 똑같이 맞춘다)
             ctl[n]["fill_scale"](ctl[n]["scale"], v, entry(n).get("scale") or float(ctl[n]["scale"].get_active_id() or 1.0))
-            apply_mode(n, v, rc.get_active_id())
+            ctl[n]["apply"](n, v, rc.get_active_id())
 
         def on_rate(v, n=name, f_res=f_res):
             if quiet["on"] or v is None or v == "auto":
@@ -486,7 +496,7 @@ def build(store):
                     ctl[n]["res"].set_active_id(res)
                 finally:
                     quiet["on"] = prev
-            apply_mode(n, res, v)
+            ctl[n]["apply"](n, res, v)
 
         res_combo = combo(res_items, s_res if s_res in rates else "preferred", on_res)
         rate_combo = Gtk.ComboBoxText()
@@ -608,6 +618,7 @@ def build(store):
         row(s, "이 모니터 사용", "끄면 화면이 꺼집니다 (마지막 남은 모니터는 끌 수 없음)",
             control=en_switch)
         ctl[name] = {"res": res_combo, "rate": rate_combo, "fill": fill_rates, "scale": scale_combo,
+                     "apply": apply_mode, "verify": _verify,
                      "fill_scale": fill_scale, "tr": tr_combo, "en": en_switch, "vrr": vrr_combo}
 
 
