@@ -221,6 +221,11 @@ entry.fx-rename {
     font-size: 9.75pt;
 }
 label.fx-empty { color: @text2; padding: 40px 24px; font-size: 9.75pt; }
+/* 읽기 전용 드라이브 안내 바 (윈도우 탐색기의 알림 줄처럼) */
+.fx-robar { background: alpha(@accent, 0.10); border-bottom: 1px solid @line; padding: 6px 12px 6px 14px; }
+.fx-robar label { font-size: 9.25pt; color: @fg; }
+.fx-robar image { color: @accent; }
+button.fx-robar-btn { padding: 2px 12px; min-height: 0; font-size: 9pt; }
 .fx-status { padding: 3px 10px 3px 14px; border-top: 1px solid @line; background: @winbg; }
 .fx-status label { font-size: 9pt; color: @text2; }
 button.fx-status-btn { padding: 2px 6px; }

@@ -271,6 +271,7 @@ class ExplorerWindow(ToastMixin, Gtk.ApplicationWindow):
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         content.get_style_context().add_class("fx-content")
         self.paned.pack2(content, True, False)
+        content.pack_start(self._build_robar(), False, False, 0)
         overlay = Gtk.Overlay()
         content.pack_start(overlay, True, True, 0)
         self.stack = Gtk.Stack()
@@ -921,6 +922,7 @@ class ExplorerWindow(ToastMixin, Gtk.ApplicationWindow):
         return f
 
     def _update_location(self):
+        self._update_robar()
         uri = self.uri
         mounts = self.mounts
         title = title_of(uri, mounts)
@@ -1559,6 +1561,9 @@ class ExplorerWindow(ToastMixin, Gtk.ApplicationWindow):
             opener.error(self, "설정을 바꾸지 못했습니다.", e.message)
             return
         name = f"{rec.get('label') or '로컬 디스크'} ({rec.get('letter')}:)"
+        # 다시 붙이느라 잠깐 떼면 탐색기가 "폴더가 사라졌다"고 위로 올라간다 — 보던 곳이 그 드라이브 안이면 끝나고 되돌아간다
+        here = local_path(self.uri) if getattr(self, "uri", None) else None
+        back = self.uri if here and (os.path.normpath(here) + "/").startswith(rec["path"].rstrip("/") + "/") else None
 
         def done(proc, res):
             try:
@@ -1569,6 +1574,8 @@ class ExplorerWindow(ToastMixin, Gtk.ApplicationWindow):
             code = proc.get_exit_status() if proc.get_if_exited() else -1
             if code in (126, 127):
                 return                                   # 인증 창을 닫았다
+            if back:
+                GLib.timeout_add(250, lambda: (self.navigate(back, push=False), False)[1])
             if code != 0:
                 opener.error(self, f"{name} 의 설정을 바꾸지 못했습니다.", (err or "").strip())
             else:
@@ -1639,6 +1646,54 @@ class ExplorerWindow(ToastMixin, Gtk.ApplicationWindow):
     def _drives_changed(self):
         if self._page_name() == "computer":
             GLib.timeout_add(150, lambda: (self.computer_page.refresh(), False)[1])
+        GLib.timeout_add(200, lambda: (self._update_robar(), False)[1])
+
+    # ── 읽기 전용 드라이브 안내 바 (sekai-drives — 윈도우 시스템·리눅스, 빠른 시작) ──
+    def _build_robar(self):
+        bar = self.robar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        bar.get_style_context().add_class("fx-robar")
+        bar.set_no_show_all(True)
+        icon = Gtk.Image.new_from_icon_name("changes-prevent-symbolic", Gtk.IconSize.MENU)
+        icon.show()
+        bar.pack_start(icon, False, False, 0)
+        self.robar_text = Gtk.Label(xalign=0)
+        self.robar_text.set_line_wrap(True)
+        self.robar_text.show()
+        bar.pack_start(self.robar_text, True, True, 0)
+        self.robar_btn = Gtk.Button(label="쓰기 허용")
+        self.robar_btn.get_style_context().add_class("fx-robar-btn")
+        self.robar_btn.set_valign(Gtk.Align.CENTER)
+        self.robar_btn.connect("clicked", lambda *_: self._robar_rec and self.ask_drive_write(self._robar_rec))
+        bar.pack_end(self.robar_btn, False, False, 0)
+        self._robar_rec = None
+        return bar
+
+    def _update_robar(self):
+        """지금 위치가 읽기 전용으로 붙은 내장 드라이브 안이면 안내 바 — 쓰기를 허용할 수 있으면 단추도"""
+        p = local_path(self.uri) if getattr(self, "uri", None) else None
+        rec = None
+        if p:
+            p = os.path.normpath(p)
+            for path, r in drive_letters().items():
+                if (p == path or p.startswith(path + "/")) and r.get("readonly"):
+                    rec = r
+                    break
+        self._robar_rec = rec
+        if not rec:
+            self.robar.hide()
+            return
+        name = f"{rec.get('label') or '로컬 디스크'} ({rec.get('letter')}:)"
+        reason = rec.get("reason")
+        if reason == "hibernated":
+            text = (f"{name} 는 윈도우 빠른 시작(또는 최대 절전) 때문에 읽기 전용입니다. "
+                    "윈도우에서 '다시 시작'으로 끄거나 빠른 시작을 끄면 쓸 수 있습니다.")
+        elif reason == "unclean":
+            text = f"{name} 는 윈도우가 깨끗하게 닫지 않아 읽기 전용입니다. 윈도우로 켰다가 '종료'로 끄면 쓸 수 있습니다."
+        else:
+            text = f"{name} 는 읽기 전용으로 연결되어 있습니다. 파일을 바꾸거나 새로 만들려면 쓰기를 허용하세요."
+        self.robar_text.set_text(text)
+        self.robar_btn.set_visible(reason == "policy")
+        self.robar.show()
 
     # ════════════════════════════════════════════════════════
     #  파일 작업

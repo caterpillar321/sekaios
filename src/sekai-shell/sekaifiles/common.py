@@ -641,7 +641,7 @@ def drive_letters():
         return {}
 
 
-def hidden_data_mounts(shown, devices=False):
+def hidden_data_mounts(shown, devices=False, ro_mark=True):
     """[(경로, 이름, gicon)] — Gio 가 숨긴 사용자 데이터 드라이브 연결. shown: 이미 보이는 뿌리 URI.
     devices=True 면 {실제 장치 경로: 연결 경로} (Gio 볼륨과 짝 맞추기용)"""
     try:
@@ -673,7 +673,7 @@ def hidden_data_mounts(shown, devices=False):
         name = labels.get(os.path.realpath(dev)) or ""
         rec = letters.get(os.path.normpath(path)) or {}
         if rec.get("letter"):                          # 윈도우처럼 "Data (D:)" — 이름이 없으면 "로컬 디스크 (D:)"
-            name = f"{name or '로컬 디스크'} ({rec['letter']}:)" + ("  · 읽기 전용" if rec.get("readonly") else "")
+            name = f"{name or '로컬 디스크'} ({rec['letter']}:)" + ("  · 읽기 전용" if ro_mark and rec.get("readonly") else "")
         name = name or display_basename(path)
         out.append((path, name, Gio.ThemedIcon.new_from_names(["drive-harddisk", "drive-harddisk-symbolic"])))
         shown.add(uri)
@@ -732,7 +732,7 @@ def mount_names(vm):
             p = None
         if p and p != "/" and not m.is_shadowed():
             out[os.path.normpath(p)] = m.get_name() or display_basename(p)
-    for path, name, _g in hidden_data_mounts({uri_of_path(p) for p in out}):
+    for path, name, _g in hidden_data_mounts({uri_of_path(p) for p in out}, ro_mark=False):   # 주소 창·탭은 이름만
         out[os.path.normpath(path)] = name
     return out
 
