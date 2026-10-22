@@ -632,10 +632,11 @@ def _device_labels():
 
 
 def drive_letters():
-    """연결 위치 → (문자, 읽기 전용) — sekai-drives 가 부팅 때 붙인 내장 드라이브 (윈도우의 D: · E:)"""
+    """연결 위치 → sekai-drives 의 기록 {letter, kind(data·windows·linux), uuid, write, readonly, reason}
+    — 부팅 때 붙인 내장 드라이브 (윈도우의 C: · D: · E:)"""
     try:
         with open("/run/sekai/drives.json", encoding="utf-8") as f:
-            return {os.path.normpath(d["path"]): (d.get("letter", ""), bool(d.get("readonly"))) for d in json.load(f)}
+            return {os.path.normpath(d["path"]): d for d in json.load(f) if isinstance(d, dict)}
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return {}
 
@@ -670,9 +671,9 @@ def hidden_data_mounts(shown, devices=False):
         if labels is None:
             labels, letters = _device_labels(), drive_letters()
         name = labels.get(os.path.realpath(dev)) or ""
-        let, ro = letters.get(os.path.normpath(path), ("", False))
-        if let:                                        # 윈도우처럼 "Data (D:)" — 이름이 없으면 "로컬 디스크 (D:)"
-            name = f"{name or '로컬 디스크'} ({let}:)" + ("  · 읽기 전용" if ro else "")
+        rec = letters.get(os.path.normpath(path)) or {}
+        if rec.get("letter"):                          # 윈도우처럼 "Data (D:)" — 이름이 없으면 "로컬 디스크 (D:)"
+            name = f"{name or '로컬 디스크'} ({rec['letter']}:)" + ("  · 읽기 전용" if rec.get("readonly") else "")
         name = name or display_basename(path)
         out.append((path, name, Gio.ThemedIcon.new_from_names(["drive-harddisk", "drive-harddisk-symbolic"])))
         shown.add(uri)

@@ -45,7 +45,8 @@ class DriveHint:
     def _check(self):
         try:
             with open(STATE, encoding="utf-8") as f:
-                drives = [d for d in json.load(f) if d.get("readonly")]
+                drives = [d for d in json.load(f) if d.get("readonly") and d.get("reason") in WHY]
+                # 윈도우 시스템(C:)·리눅스 드라이브가 정책으로 읽기 전용인 것은 알리지 않는다 (탐색기에서 쓰기 허용)
         except (OSError, ValueError, AttributeError):
             return
         if not drives:
@@ -56,8 +57,7 @@ class DriveHint:
         config.set_state("drives_ro_seen", key)
         names = ", ".join(f"{d.get('label') or '로컬 디스크'} ({d.get('letter')}:)" for d in drives)
         dbg(f"[drives] 읽기 전용: {names}")
-        reason = drives[0].get("reason")
-        body = WHY.get(reason, "윈도우가 이 드라이브를 사용 중인 상태로 남겨 두어 읽기만 됩니다.")
+        body = WHY[drives[0].get("reason")]
         try:
             act = subprocess.run(["notify-send", "-a", "파일 탐색기", "-i", "drive-harddisk", "-u", "critical",
                                   "--action=default=열기", f"{names} 을(를) 읽기 전용으로 연결했습니다", body],

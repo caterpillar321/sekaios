@@ -21,7 +21,7 @@ from sekaishell.appkit import ToastMixin  # noqa: E402
 
 from . import opener  # noqa: E402
 from .addressbar import AddressBar  # noqa: E402
-from .common import (COMPUTER, HOME, TRASH, archive, copy_text, count_text, crumbs,  # noqa: E402
+from .common import (COMPUTER, HOME, TRASH, archive, copy_text, count_text, crumbs, drive_letters,  # noqa: E402
                      dbg, edit_text, favorites, fileops, fit_pixbuf, fmt_size, gfile_of, home_dir, icons,
                      image, is_in_trash, is_special, list_drives, local_path, location_icon, mount_names, norm_uri,
                      parse_location, popup_below, properties, quote_path, split_ext, theme_icon, thumbable, thumbs,
@@ -1515,6 +1515,66 @@ class ExplorerWindow(ToastMixin, Gtk.ApplicationWindow):
                 self.navigate(m.get_root().get_uri())
         d.volume.mount(Gio.MountMountFlags.NONE, op, None, done)
 
+    # ── 내장 드라이브 쓰기 허용 (sekai-drives — 윈도우 시스템 C:·리눅스 드라이브는 처음엔 읽기 전용) ──
+    @staticmethod
+    def _drive_rec(d):
+        p = local_path(d.root_uri) if d.root_uri else None
+        return drive_letters().get(os.path.normpath(p)) if p else None
+
+    def _drive_write_items(self, m, d):
+        rec = self._drive_rec(d)
+        if not rec:
+            return
+        if rec.get("kind") in ("windows", "linux"):
+            _sep(m)
+            if rec.get("write"):
+                _mitem(m, "읽기 전용으로 되돌리기", lambda: self.set_drive_write(rec, False), ["changes-prevent-symbolic"])
+            else:
+                _mitem(m, "쓰기 허용…", lambda: self.ask_drive_write(rec), ["changes-allow-symbolic"])
+        elif rec.get("readonly") and rec.get("reason") in ("hibernated", "unclean"):
+            _sep(m)
+            _mitem(m, "읽기 전용 — 윈도우 빠른 시작" if rec["reason"] == "hibernated" else "읽기 전용 — 깨끗하지 않게 꺼짐",
+                   None, ["changes-prevent-symbolic"], None, False)
+
+    def ask_drive_write(self, rec):
+        name = f"{rec.get('label') or '로컬 디스크'} ({rec.get('letter')}:)"
+        if rec.get("kind") == "windows":
+            text = ("윈도우가 설치된 드라이브입니다. 여기서 윈도우 파일을 바꾸거나 지우면 윈도우가 켜지지 않을 수 있습니다.\n"
+                    "윈도우의 빠른 시작이 켜져 있으면 쓰기를 허용해도 읽기 전용으로 남습니다.")
+        else:
+            text = ("다른 리눅스가 설치된 드라이브일 수 있습니다. 그 시스템 파일을 바꾸면 그 리눅스가 켜지지 않을 수 있고, "
+                    "그 리눅스가 최대 절전 중이면 파일이 손상될 수 있습니다.")
+        opener.ask(self, f"{name} 에 쓰기를 허용할까요?", text,
+                   [("취소", Gtk.ResponseType.CANCEL), ("쓰기 허용", Gtk.ResponseType.OK)],
+                   lambda r: r == Gtk.ResponseType.OK and self.set_drive_write(rec, True),
+                   kind=Gtk.MessageType.WARNING, default=Gtk.ResponseType.CANCEL)
+
+    def set_drive_write(self, rec, on):
+        """관리자 인증(pkexec) → sekai-drives set-write — 드라이브를 그 설정으로 다시 붙인다 (디스크마다 기억)"""
+        try:
+            p = Gio.Subprocess.new(["pkexec", "/usr/libexec/sekai/sekai-drives", "set-write", rec["uuid"],
+                                    "on" if on else "off"],
+                                   Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_PIPE)
+        except GLib.Error as e:
+            opener.error(self, "설정을 바꾸지 못했습니다.", e.message)
+            return
+        name = f"{rec.get('label') or '로컬 디스크'} ({rec.get('letter')}:)"
+
+        def done(proc, res):
+            try:
+                _ok, _out, err = proc.communicate_utf8_finish(res)
+            except GLib.Error:
+                err = ""
+            self._drives_changed()
+            code = proc.get_exit_status() if proc.get_if_exited() else -1
+            if code in (126, 127):
+                return                                   # 인증 창을 닫았다
+            if code != 0:
+                opener.error(self, f"{name} 의 설정을 바꾸지 못했습니다.", (err or "").strip())
+            else:
+                self.toast(f"{name} 에 이제 쓸 수 있습니다" if on else f"{name} 을(를) 읽기 전용으로 되돌렸습니다")
+        p.communicate_utf8_async(None, None, done)
+
     @staticmethod
     def _drive_dev(d):
         """드라이브의 장치 (/dev/sdb1) — 포맷은 디스크 관리가 한다. 루트·네트워크 드라이브는 None"""
@@ -2427,6 +2487,7 @@ class ExplorerWindow(ToastMixin, Gtk.ApplicationWindow):
             if d.removable and (d.can_eject or d.can_unmount):
                 _sep(m)
                 _mitem(m, "꺼내기", lambda: self.eject_drive(d), ["media-eject-symbolic"])
+            self._drive_write_items(m, d)
             _sep(m)
             _mitem(m, "포맷…", lambda: self.format_drive(d), None, None, self._drive_dev(d) is not None)
             _mitem(m, "속성", lambda: self.show_properties([Gio.File.new_for_uri(d.root_uri)]),
@@ -2450,6 +2511,7 @@ class ExplorerWindow(ToastMixin, Gtk.ApplicationWindow):
             if d.removable and (d.can_eject or d.can_unmount):
                 _sep(m)
                 _mitem(m, "꺼내기", lambda: self.eject_drive(d), ["media-eject-symbolic"])
+            self._drive_write_items(m, d)
             _sep(m)
             _mitem(m, "포맷…", lambda: self.format_drive(d), None, None, self._drive_dev(d) is not None)
             _mitem(m, "속성", lambda: self.show_properties([Gio.File.new_for_uri(d.root_uri)]),
