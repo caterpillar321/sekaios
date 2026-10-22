@@ -12,7 +12,7 @@
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402
+from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 from .common import COMPUTER, HOME, TRASH, favorites, icons, image, list_drives, norm_uri, uri_of_path  # noqa: E402
 from .views import DropTarget  # noqa: E402
@@ -80,6 +80,9 @@ class NavPane(Gtk.Box):
         self._sigs = [vm.connect(sig, lambda *_: self.rebuild_later())
                       for sig in ("mount-added", "mount-removed", "mount-changed", "volume-added", "volume-removed",
                                   "volume-changed", "drive-connected", "drive-disconnected", "drive-changed")]
+        # Gio 가 숨긴 데이터 드라이브(common.hidden_data_mounts)는 VolumeMonitor 가 알리지 않는다 — 마운트 표 자체를 본다
+        self._umon = Gio.UnixMountMonitor.get()
+        self._umon_sig = self._umon.connect("mounts-changed", lambda *_: self.rebuild_later())
         self.rebuild()
 
     def shutdown(self):
@@ -90,6 +93,9 @@ class NavPane(Gtk.Box):
             except Exception:
                 pass
         self._sigs = []
+        if self._umon_sig:
+            self._umon.disconnect(self._umon_sig)
+            self._umon_sig = 0
         if self._rebuild_src:
             GLib.source_remove(self._rebuild_src)
             self._rebuild_src = 0

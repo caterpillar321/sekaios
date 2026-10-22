@@ -610,11 +610,67 @@ class Drive:
         self.can_unmount = False
 
 
+# Gio 가 "시스템 마운트"로 숨기는 연결 중 사용자 데이터 드라이브 — 윈도우는 연결된 데이터 볼륨이면 어떻게 연결했든
+#   내 PC 에 보인다. Gio 는 /media·홈·fstab 의 x-gvfs-show 만 보여서 /mnt/d 처럼 손으로(또는 fstab 에 표시 없이) 연결한
+#   D: 가 탐색기에서 통째로 빠졌다. 시스템 영역(아래 폴더·루트와 같은 장치의 하위 볼륨)은 그대로 숨긴다
+_DATA_FS = {"ntfs3", "ntfs", "fuseblk", "exfat", "vfat", "msdos", "ext2", "ext3", "ext4", "xfs", "btrfs", "f2fs", "hfsplus"}
+_SYSTEM_DIRS = ("/boot", "/efi", "/home", "/var", "/usr", "/opt", "/srv", "/tmp", "/root", "/snap", "/.snapshots",
+                "/proc", "/sys", "/dev", "/run", "/etc", "/nix", "/swap")
+
+
+def _device_labels():
+    """장치 경로(실제) → 볼륨 이름 (/dev/disk/by-label)"""
+    out = {}
+    d = "/dev/disk/by-label"
+    try:
+        for n in os.listdir(d):
+            out[os.path.realpath(os.path.join(d, n))] = n.replace("\\x20", " ")
+    except OSError:
+        pass
+    return out
+
+
+def hidden_data_mounts(shown, devices=False):
+    """[(경로, 이름, gicon)] — Gio 가 숨긴 사용자 데이터 드라이브 연결. shown: 이미 보이는 뿌리 URI.
+    devices=True 면 {실제 장치 경로: 연결 경로} (Gio 볼륨과 짝 맞추기용)"""
+    try:
+        mounts = Gio.unix_mounts_get()[0]
+    except Exception:
+        return []
+    root_dev = None
+    for m in mounts:
+        if m.get_mount_path() == "/":
+            root_dev = os.path.realpath(m.get_device_path())
+    labels = None
+    out = []
+    for m in mounts:
+        path, dev, fs = m.get_mount_path(), m.get_device_path() or "", m.get_fs_type() or ""
+        if fs not in _DATA_FS or not dev.startswith("/dev/") or dev.startswith(("/dev/loop", "/dev/zram", "/dev/ram")):
+            continue
+        if path == "/" or any(path == d or path.startswith(d + "/") for d in _SYSTEM_DIRS):
+            continue
+        if Gio.unix_mount_is_system_internal(m) or os.path.realpath(dev) == root_dev:
+            continue                                   # 루트와 같은 장치 = SekaiOS 자신(btrfs 하위 볼륨 등)
+        uri = uri_of_path(path)
+        if uri in shown:
+            continue
+        if devices:
+            out.append((os.path.realpath(dev), path))
+            continue
+        if labels is None:
+            labels = _device_labels()
+        name = labels.get(os.path.realpath(dev)) or display_basename(path)
+        out.append((path, name, Gio.ThemedIcon.new_from_names(["drive-harddisk", "drive-harddisk-symbolic"])))
+        shown.add(uri)
+    return dict(out) if devices else out
+
+
 def list_drives(vm):
     """Gio.VolumeMonitor → [Drive] (루트 먼저). 모두 메인 스레드의 빠른 호출 (디스크를 읽지 않는다)"""
     out = [Drive("root", ROOT_LABEL, Gio.ThemedIcon.new_from_names(["drive-harddisk-system", "drive-harddisk"]),
                  root_uri="file:///")]
     seen = set()
+    hidden = hidden_data_mounts(set(), devices=True)       # Gio 볼륨인데 숨은 위치(/mnt/d)에 연결된 것 — 한 칸으로
     for v in vm.get_volumes():
         m = v.get_mount()
         if m is not None and m.is_shadowed():
@@ -622,6 +678,9 @@ def list_drives(vm):
         root = m.get_root().get_uri() if m is not None else None
         if root in ("file:///", None) and m is not None:
             continue
+        dev = v.get_identifier("unix-device")
+        if m is None and dev and os.path.realpath(dev) in hidden:
+            root = uri_of_path(hidden[os.path.realpath(dev)])   # 연결돼 있다 — "연결되지 않음"으로 보이지 않게
         d = Drive("vol:" + (v.get_uuid() or v.get_identifier("unix-device") or v.get_name() or str(id(v))),
                   v.get_name() or "볼륨", v.get_icon(), volume=v, mount=m, root_uri=root)
         drv = v.get_drive()
@@ -641,7 +700,10 @@ def list_drives(vm):
         d.removable = True
         d.can_eject = bool(m.can_eject())
         d.can_unmount = bool(m.can_unmount())
+        seen.add(root)
         out.append(d)
+    for path, name, gicon in hidden_data_mounts(seen):
+        out.append(Drive("sys:" + path, name, gicon, root_uri=uri_of_path(path)))
     return out
 
 
@@ -655,6 +717,8 @@ def mount_names(vm):
             p = None
         if p and p != "/" and not m.is_shadowed():
             out[os.path.normpath(p)] = m.get_name() or display_basename(p)
+    for path, name, _g in hidden_data_mounts({uri_of_path(p) for p in out}):
+        out[os.path.normpath(path)] = name
     return out
 
 

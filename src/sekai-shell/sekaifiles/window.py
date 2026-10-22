@@ -323,6 +323,8 @@ class ExplorerWindow(ToastMixin, Gtk.ApplicationWindow):
         self._vm_sigs = [app.vm.connect(s, lambda *_: self._drives_changed())
                          for s in ("mount-added", "mount-removed", "mount-changed", "volume-added",
                                    "volume-removed", "volume-changed")]
+        self._umon = Gio.UnixMountMonitor.get()              # Gio 가 숨긴 데이터 드라이브 (common.hidden_data_mounts)
+        self._umon_sig = self._umon.connect("mounts-changed", lambda *_: self._drives_changed())
         self.details.set_sort_indicator(self.sort_field, self.sort_desc)
         self.root_box = root
         root.show_all()
@@ -2703,6 +2705,9 @@ class ExplorerWindow(ToastMixin, Gtk.ApplicationWindow):
             except Exception:
                 pass
         self._vm_sigs = []
+        if self._umon_sig:
+            self._umon.disconnect(self._umon_sig)
+            self._umon_sig = 0
         self.nav.shutdown()
         self.home_page.shutdown()
 
