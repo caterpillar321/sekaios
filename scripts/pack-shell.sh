@@ -446,6 +446,8 @@ if [ "$1" = "configure" ]; then
     systemctl enable sekai-scrub.timer >/dev/null 2>&1 || true
     # 지난번 커널 패닉 기록 확인 (pstore) — 로그인하면 패널이 알린다. 패닉 뒤 자동 재시작은 sysctl.d/60-sekai-panic.conf
     systemctl enable sekai-crashcheck.service >/dev/null 2>&1 || true
+    # 내장 데이터 드라이브(NTFS·exFAT·FAT)를 켤 때마다 /mnt/<문자> 에 (윈도우의 D: · E:) — sekai-drives
+    systemctl enable sekai-drives.service >/dev/null 2>&1 || true
     [ -d /run/systemd/system ] && sysctl -q -p /etc/sysctl.d/60-sekai-panic.conf >/dev/null 2>&1 || true
     if [ ! -d /run/live/medium ] && [ ! -f /etc/snapper/configs/root ] \
        && [ "$(findmnt -no FSTYPE,FSROOT / 2>/dev/null)" = "btrfs /@" ] && mountpoint -q /.snapshots; then
@@ -592,7 +594,7 @@ Depends: shim-signed, grub-efi-amd64-signed, grub-efi-amd64-bin, grub2-common, o
  efibootmgr, mokutil, pciutils, openssl,
  plymouth (>= 24.004.60-5+sekai1), plymouth-themes,
  network-manager, systemd-resolved, flatpak, btrfs-progs, snapper, firewalld, power-profiles-daemon,
- cryptsetup, cryptsetup-initramfs, systemd-cryptsetup,
+ cryptsetup, cryptsetup-initramfs, systemd-cryptsetup, ntfs-3g,
  libtss2-esys-3.0.2-0t64, libtss2-rc0t64, libtss2-mu-4.0.1-0t64, libtss2-tcti-device0t64
 Replaces: sekai-desktop (<< ${FULL})
 Breaks: sekai-desktop (<< ${FULL})

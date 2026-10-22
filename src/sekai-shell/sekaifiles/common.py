@@ -7,6 +7,7 @@
   · 아이콘 그림 캐시 · 아이콘 보기의 두 줄 이름 자르기
 """
 import importlib
+import json
 import os
 import re
 import stat
@@ -630,6 +631,15 @@ def _device_labels():
     return out
 
 
+def drive_letters():
+    """연결 위치 → (문자, 읽기 전용) — sekai-drives 가 부팅 때 붙인 내장 드라이브 (윈도우의 D: · E:)"""
+    try:
+        with open("/run/sekai/drives.json", encoding="utf-8") as f:
+            return {os.path.normpath(d["path"]): (d.get("letter", ""), bool(d.get("readonly"))) for d in json.load(f)}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return {}
+
+
 def hidden_data_mounts(shown, devices=False):
     """[(경로, 이름, gicon)] — Gio 가 숨긴 사용자 데이터 드라이브 연결. shown: 이미 보이는 뿌리 URI.
     devices=True 면 {실제 장치 경로: 연결 경로} (Gio 볼륨과 짝 맞추기용)"""
@@ -658,8 +668,12 @@ def hidden_data_mounts(shown, devices=False):
             out.append((os.path.realpath(dev), path))
             continue
         if labels is None:
-            labels = _device_labels()
-        name = labels.get(os.path.realpath(dev)) or display_basename(path)
+            labels, letters = _device_labels(), drive_letters()
+        name = labels.get(os.path.realpath(dev)) or ""
+        let, ro = letters.get(os.path.normpath(path), ("", False))
+        if let:                                        # 윈도우처럼 "Data (D:)" — 이름이 없으면 "로컬 디스크 (D:)"
+            name = f"{name or '로컬 디스크'} ({let}:)" + ("  · 읽기 전용" if ro else "")
+        name = name or display_basename(path)
         out.append((path, name, Gio.ThemedIcon.new_from_names(["drive-harddisk", "drive-harddisk-symbolic"])))
         shown.add(uri)
     return dict(out) if devices else out

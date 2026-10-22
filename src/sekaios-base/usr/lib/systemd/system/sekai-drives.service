@@ -1,0 +1,16 @@
+[Unit]
+Description=SekaiOS 내장 데이터 드라이브 연결 (D: · E: …)
+# 윈도우처럼 내장 디스크의 데이터 볼륨(NTFS·exFAT·FAT)을 켤 때마다 /mnt/<문자> 에 붙인다 — 로그인 화면 전에.
+#   윈도우 빠른 시작·최대 절전 중인 NTFS 는 읽기 전용으로 (sekai-drives 의 설명). 설치 USB(라이브)에선 하지 않는다
+After=local-fs.target
+Before=greetd.service display-manager.service
+ConditionPathExists=!/run/live/medium
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/sekai/sekai-drives mount
+TimeoutStartSec=90
+
+[Install]
+WantedBy=multi-user.target

@@ -32,6 +32,7 @@ from sekaishell.shell import ShellService                # noqa: E402
 from sekaishell.updates import UpdateNotifier            # noqa: E402
 from sekaishell.gpuhint import GpuHint                   # noqa: E402
 from sekaishell.crashhint import CrashHint               # noqa: E402
+from sekaishell.drivehint import DriveHint               # noqa: E402
 from sekaishell import pins                               # noqa: E402
 from sekaishell import startpins                          # noqa: E402
 from sekaishell import monitors                           # noqa: E402
@@ -2759,6 +2760,7 @@ def main():
         panel.fwprompt = FirewallPrompt()
     panel.gpuhint = GpuHint()
     panel.crashhint = CrashHint()          # 지난번 커널 패닉으로 다시 시작했으면 알린다
+    panel.drivehint = DriveHint()          # 윈도우 빠른 시작 때문에 읽기 전용으로 붙은 내장 드라이브를 알린다
     # 접근성 — 돋보기 · 색 필터 · 화상 키보드 · 고정 키 표시 · Shift 다섯 번 묻기 (sekaishell/a11y.py)
     from sekaishell.a11y import A11y
     a11y = A11y(hypr, osd, int(sekai_conf("panel", "height", PANEL_HEIGHT)) + 12)
