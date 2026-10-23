@@ -625,7 +625,12 @@ def _device_labels():
     d = "/dev/disk/by-label"
     try:
         for n in os.listdir(d):
-            out[os.path.realpath(os.path.join(d, n))] = n.replace("\\x20", " ")
+            raw = re.sub(r"\\x([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), n)   # udev 의 \xNN
+            try:
+                raw = raw.encode("latin-1").decode("utf-8")
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                pass
+            out[os.path.realpath(os.path.join(d, n))] = raw
     except OSError:
         pass
     return out
@@ -694,10 +699,14 @@ def list_drives(vm):
         if root in ("file:///", None) and m is not None:
             continue
         dev = v.get_identifier("unix-device")
+        name = v.get_name() or "볼륨"
         if m is None and dev and os.path.realpath(dev) in hidden:
             root = uri_of_path(hidden[os.path.realpath(dev)])   # 연결돼 있다 — "연결되지 않음"으로 보이지 않게
+            rec = drive_letters().get(os.path.normpath(hidden[os.path.realpath(dev)])) or {}
+            if rec.get("letter"):
+                name = f"{rec.get('label') or name} ({rec['letter']}:)" + ("  · 읽기 전용" if rec.get("readonly") else "")
         d = Drive("vol:" + (v.get_uuid() or v.get_identifier("unix-device") or v.get_name() or str(id(v))),
-                  v.get_name() or "볼륨", v.get_icon(), volume=v, mount=m, root_uri=root)
+                  name, v.get_icon(), volume=v, mount=m, root_uri=root)
         drv = v.get_drive()
         d.removable = bool(v.can_eject() or (drv is not None and (drv.is_removable() or drv.is_media_removable())))
         d.can_eject = bool((m is not None and m.can_eject()) or v.can_eject())

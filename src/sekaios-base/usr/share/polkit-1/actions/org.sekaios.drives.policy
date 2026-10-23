@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- SekaiOS 내장 드라이브 도우미 — 탐색기의 "쓰기 허용 / 읽기 전용으로 되돌리기"가 pkexec 로 부른다.
+     인자는 도우미가 검사한다 (지금 연결된 드라이브의 열쇠만, on·off 만) -->
+<policyconfig>
+  <vendor>SekaiOS</vendor>
+  <action id="org.sekaios.drives">
+    <description>Change whether an internal drive can be written</description>
+    <description xml:lang="ko">내장 드라이브 쓰기 설정 바꾸기</description>
+    <message>Authentication is required to change whether this drive can be written</message>
+    <message xml:lang="ko">이 드라이브에 쓰기를 허용하거나 막으려면 인증이 필요합니다</message>
+    <icon_name>drive-harddisk</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/sekai/sekai-drives</annotate>
+  </action>
+</policyconfig>

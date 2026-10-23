@@ -1527,20 +1527,23 @@ class ExplorerWindow(ToastMixin, Gtk.ApplicationWindow):
         rec = self._drive_rec(d)
         if not rec:
             return
-        if rec.get("kind") in ("windows", "linux"):
+        if rec.get("kind") in ("windows", "linux", "unknown"):
             _sep(m)
             if rec.get("write"):
                 _mitem(m, "읽기 전용으로 되돌리기", lambda: self.set_drive_write(rec, False), ["changes-prevent-symbolic"])
             else:
                 _mitem(m, "쓰기 허용…", lambda: self.ask_drive_write(rec), ["changes-allow-symbolic"])
-        elif rec.get("readonly") and rec.get("reason") in ("hibernated", "unclean"):
+        elif rec.get("readonly") and rec.get("reason") not in (None, "policy"):
             _sep(m)
-            _mitem(m, "읽기 전용 — 윈도우 빠른 시작" if rec["reason"] == "hibernated" else "읽기 전용 — 깨끗하지 않게 꺼짐",
+            _mitem(m, "읽기 전용 — 윈도우 빠른 시작" if rec["reason"] in ("hibernated", "unclean") else "읽기 전용 — 쓰기로 연결 못 함",
                    None, ["changes-prevent-symbolic"], None, False)
 
     def ask_drive_write(self, rec):
         name = f"{rec.get('label') or '로컬 디스크'} ({rec.get('letter')}:)"
-        if rec.get("kind") == "windows":
+        if rec.get("kind") == "unknown":
+            text = ("안을 확인하지 못한 NTFS 드라이브입니다. 윈도우 시스템 드라이브일 수도 있습니다 — "
+                    "윈도우 파일을 바꾸면 윈도우가 켜지지 않을 수 있습니다.")
+        elif rec.get("kind") == "windows":
             text = ("윈도우가 설치된 드라이브입니다. 여기서 윈도우 파일을 바꾸거나 지우면 윈도우가 켜지지 않을 수 있습니다.\n"
                     "윈도우의 빠른 시작이 켜져 있으면 쓰기를 허용해도 읽기 전용으로 남습니다.")
         else:
@@ -1688,11 +1691,15 @@ class ExplorerWindow(ToastMixin, Gtk.ApplicationWindow):
             text = (f"{name} 는 윈도우 빠른 시작(또는 최대 절전) 때문에 읽기 전용입니다. "
                     "윈도우에서 '다시 시작'으로 끄거나 빠른 시작을 끄면 쓸 수 있습니다.")
         elif reason == "unclean":
-            text = f"{name} 는 윈도우가 깨끗하게 닫지 않아 읽기 전용입니다. 윈도우로 켰다가 '종료'로 끄면 쓸 수 있습니다."
+            text = (f"{name} 는 윈도우가 캐시에 둔 채 꺼져 읽기 전용입니다 (빠른 시작이나 갑작스러운 종료). "
+                    "윈도우에서 빠른 시작을 끄고 '다시 시작'으로 한 번 끄면 쓸 수 있습니다.")
+        elif reason in ("mount-ro", "mount-rw-failed"):
+            text = (f"{name} 를 쓰기로 연결하지 못해 읽기 전용입니다. 드라이브에 오류가 있을 수 있습니다 — "
+                    "윈도우에서 디스크 검사(chkdsk)를 해 보세요.")
         else:
             text = f"{name} 는 읽기 전용으로 연결되어 있습니다. 파일을 바꾸거나 새로 만들려면 쓰기를 허용하세요."
         self.robar_text.set_text(text)
-        self.robar_btn.set_visible(reason == "policy")
+        self.robar_btn.set_visible(reason == "policy" and rec.get("kind") != "data")
         self.robar.show()
 
     # ════════════════════════════════════════════════════════

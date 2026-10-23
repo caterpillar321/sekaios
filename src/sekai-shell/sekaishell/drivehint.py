@@ -19,8 +19,10 @@ WHY = {
     "hibernated": ("윈도우의 빠른 시작(또는 최대 절전) 때문에 윈도우가 이 드라이브를 아직 쓰는 중입니다. "
                    "지금 쓰면 윈도우가 다시 켜질 때 파일이 사라지거나 드라이브가 손상될 수 있어 읽기만 됩니다.\n"
                    "윈도우에서 '다시 시작'으로 끄거나, 제어판 › 전원 옵션에서 '빠른 시작 켜기'를 끄면 다음부터 쓸 수 있습니다."),
-    "unclean": ("윈도우가 이 드라이브를 깨끗하게 닫지 않고 꺼졌습니다. 손상을 막으려고 읽기만 됩니다.\n"
-                "윈도우로 한 번 켰다가 '종료'로 끄면 다음부터 쓸 수 있습니다."),
+    "unclean": ("윈도우가 이 드라이브를 캐시에 둔 채 꺼졌습니다 (빠른 시작이나 갑작스러운 종료). 손상을 막으려고 읽기만 됩니다.\n"
+                "윈도우에서 빠른 시작을 끄고 '다시 시작'으로 한 번 끄면 다음부터 쓸 수 있습니다."),
+    "mount-ro": ("쓰기로 연결하지 못해 읽기만 됩니다. 드라이브에 오류가 있을 수 있습니다 — 윈도우에서 디스크 검사(chkdsk)를 해 보세요."),
+    "mount-rw-failed": ("쓰기로 연결하지 못해 읽기만 됩니다. 드라이브에 오류가 있을 수 있습니다 — 윈도우에서 디스크 검사(chkdsk)를 해 보세요."),
 }
 
 
@@ -57,7 +59,8 @@ class DriveHint:
         config.set_state("drives_ro_seen", key)
         names = ", ".join(f"{d.get('label') or '로컬 디스크'} ({d.get('letter')}:)" for d in drives)
         dbg(f"[drives] 읽기 전용: {names}")
-        body = WHY[drives[0].get("reason")]
+        order = ["hibernated", "unclean", "mount-rw-failed", "mount-ro"]          # 여럿이면 가장 중요한 까닭으로
+        body = WHY[min((d.get("reason") for d in drives), key=order.index)]
         try:
             act = subprocess.run(["notify-send", "-a", "파일 탐색기", "-i", "drive-harddisk", "-u", "critical",
                                   "--action=default=열기", f"{names} 을(를) 읽기 전용으로 연결했습니다", body],

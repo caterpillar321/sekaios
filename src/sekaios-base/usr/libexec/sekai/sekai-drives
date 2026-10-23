@@ -5,58 +5,95 @@
 붙이지 않아, D: 를 쓰는 프로그램이 누군가 탐색기에서 연결해 주기 전까지 경로를 못 찾았다.
 sekai-drives.service 가 로그인 화면 전에 한 번 돈다. 내장 디스크(이동식·USB 가 아닌)의 볼륨을 종류별로:
 
-  윈도우 데이터 (NTFS·exFAT·FAT)        쓰기 가능
-  윈도우 시스템 (Windows\\System32 가 있는 NTFS)   읽기 전용 — 문자는 C: (비어 있으면)
-  리눅스 (ext2/3/4·btrfs·xfs·f2fs)      읽기 전용 — 다른 리눅스 설치본일 수 있다. 저널을 재생하지 않고 붙인다
-                                          (그냥 ro 로 붙이면 그 리눅스가 최대 절전 중일 때도 디스크에 쓴다)
+  data     윈도우 데이터 (NTFS·exFAT·FAT)              쓰기 가능
+  windows  윈도우 시스템 (Windows\\System32 가 있는 NTFS)  읽기 전용 — 문자는 C: (비어 있으면)
+  boot     윈도우 부팅 파티션 (bootmgr · Boot\\BCD — BIOS 방식의 System Reserved)  붙이지 않는다 (윈도우도 숨긴다)
+  unknown  NTFS 인데 안을 볼 수 없었다                     읽기 전용 (모르면 안전한 쪽)
+  linux    리눅스 (ext2/3/4·btrfs·xfs·f2fs)               읽기 전용 — 다른 리눅스 설치본일 수 있다. 저널을 재생하지 않고
+                                                          붙인다 (그냥 ro 로 붙이면 그 리눅스가 최대 절전 중일 때도 디스크에 쓴다)
 
-  읽기 전용인 종류도 사용자가 드라이브마다 쓰기를 허용할 수 있다 (탐색기 › 드라이브 오른쪽 클릭 › 쓰기 허용 — 관리자).
+  읽기 전용인 종류도 사용자가 드라이브마다 쓰기를 허용할 수 있다 (탐색기 › 쓰기 허용 — 관리자 인증, set-write).
+  모든 연결은 nosuid,nodev — 다른 OS 디스크의 setuid 프로그램·장치 파일로 root 를 얻지 못하게.
 
-- 빼는 것: EFI·복구·MSR 파티션, fstab 에 있는 것, 이미 다른 곳에 붙은 것(SekaiOS 자신 포함), 이동식(automount 가 맡는다)
-- 문자: 볼륨 일련번호(UUID)마다 한 번 정해 /var/lib/sekai/drive-letters.json 에 기억 — 디스크를 빼도 그 문자는 비워 둔다.
-  연결 위치는 /mnt/<문자>
-- NTFS 는 쓰기로 붙이기 전에 ntfs-3g.probe 로 본다: 윈도우 빠른 시작·최대 절전(14)이나 깨끗하지 않게 꺼짐(15)이면
-  쓰기를 허용했어도 읽기 전용. 그 상태에서 쓰면 윈도우가 다시 켜질 때 옛 상태로 돌아가 파일이 사라지거나 깨진다
-- 결과는 /run/sekai/drives.json (누구나 읽기) — 탐색기가 "Data (D:)" 로 이름을 붙이고, 작업 표시줄이 빠른 시작 때문에
-  읽기 전용이 된 드라이브를 로그인할 때 알린다 (sekaishell.drivehint)
+- 빼는 것: EFI·복구·MSR·XBOOTLDR·LDM·저장소 공간 파티션, GPT 속성이 "필수·숨김·문자 없음"인 것, fstab 에 있는 것
+  (UUID=·PARTUUID=·LABEL=·PARTLABEL=·/dev/… 를 실제 장치로 풀어 비교), 이미 다른 곳에 붙은 것(SekaiOS 자신 포함),
+  이동식(로그인한 뒤 automount 가 맡는다), 복제 디스크라 구별할 수 없는 볼륨
+- 문자: 첫 윈도우 시스템 드라이브의 레지스트리(SYSTEM 하이브 › MountedDevices)를 읽기만 해 윈도우와 같은 문자.
+  그 밖은 볼륨 일련번호마다 한 번 정해 /var/lib/sekai/drive-letters.json 에 기억 (C~Z, 디스크를 빼도 비워 둔다).
+  fstab 이 쓰는 /mnt/<문자> 는 쓰지 않는다. 연결 위치는 /mnt/<문자>
+- 빠른 시작: 윈도우 시스템 드라이브가 최대 절전(ntfs-3g.probe 14)이면 그 PC 의 윈도우 볼륨(NTFS·exFAT·FAT) 전부 읽기 전용.
+  데이터 NTFS 도 쓰기 전에 probe — 최대 절전(14)·윈도우 캐시에 남은 상태(15)면 읽기 전용. 그 상태에서 쓰면 윈도우가
+  다시 켜질 때 옛 상태로 돌아가 파일이 사라지거나 깨진다. 쓰기로 붙인 뒤 실제로 쓰기 가능한지 다시 확인한다
+- 결과는 /run/sekai/drives.json (누구나 읽기) — 탐색기 이름 "Data (D:)"·읽기 전용 안내 바, 작업 표시줄의 로그인 알림
 
   sekai-drives mount                     붙이기 (서비스)
-  sekai-drives set-write <UUID> on|off   쓰기 허용 바꾸고 다시 붙이기 (관리자 — 탐색기가 pkexec 로)
+  sekai-drives set-write <열쇠> on|off   쓰기 허용 바꾸고 다시 붙이기 (관리자 — 탐색기가 pkexec 로)
   sekai-drives list                      지금 상태
 """
+import fcntl
 import json
 import os
 import pwd
+import re
+import stat
 import subprocess
 import sys
-import shutil
 import tempfile
 import uuid as uuidlib
 
 LETTERS = "/var/lib/sekai/drive-letters.json"
 STATE = "/run/sekai/drives.json"
+LOCK = "/run/sekai/drives.lock"
+TMPROOT = "/run/sekai/drives-tmp"                # 검사용 임시 연결 — root 만 (0700). /tmp 에 두면 남의 것과 섞인다
+VALID = "cdefghijklmnopqrstuvwxyz"             # A·B 는 윈도우도 플로피용으로 비워 둔다
 WIN_FS = {"ntfs", "exfat", "vfat"}
 LINUX_FS = {"ext2", "ext3", "ext4", "btrfs", "xfs", "f2fs"}
 SKIP_PARTTYPES = {
     "c12a7328-f81f-11d2-ba4b-00a0c93ec93b",      # EFI 시스템
     "de94bba4-06d1-4d40-a16a-bfd50179d6ac",      # 윈도우 복구
     "e3c9e316-0b5c-4db8-817d-f92df00215ae",      # MSR
-    "0xef", "0x27",                              # MBR 의 EFI · 복구
+    "bc13c2ff-59e6-4262-a352-b275fd6f7172",      # XBOOTLDR (다른 리눅스의 /boot)
+    "5808c8aa-7e8f-42e0-85d2-e1e90434cfb3",      # 윈도우 LDM 메타데이터
+    "af9b60a0-1431-4f62-bc68-3311714a69ad",      # 윈도우 LDM 데이터
+    "e75caf8f-f680-4cee-afa3-b001e56efc2d",      # 윈도우 저장소 공간
+    "0xef", "0x27", "0x42",                      # MBR 의 EFI · 복구 · LDM
 }
+# GPT 파티션 속성: 0 = 플랫폼 필수, 62 = 숨김, 63 = 드라이브 문자 없음 (윈도우도 문자를 주지 않는다)
+SKIP_ATTRS = (1 << 0) | (1 << 62) | (1 << 63)
 PROBE = {14: "hibernated", 15: "unclean"}       # ntfs-3g.probe --readwrite 의 반환값
+HIVE_MAX = 128 << 20
+SAFE = "nosuid,nodev"
+
+
+def valid_letter(c):
+    return isinstance(c, str) and len(c) == 1 and c in VALID
 
 
 def log(*a):
     print("[sekai-drives]", *a, file=sys.stderr, flush=True)
 
 
-def run(argv, **kw):
-    return subprocess.run(argv, capture_output=True, text=True, **kw)
+class R:
+    def __init__(self, rc, out="", err=""):
+        self.returncode, self.stdout, self.stderr = rc, out, err
+
+
+def run(argv, timeout=30):
+    """명령 — 시간 제한이 있다 (느린·고장 난 디스크 하나로 로그인 화면이 기다리지 않게). 실행 파일이 없으면 127"""
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        return R(p.returncode, p.stdout, p.stderr)
+    except subprocess.TimeoutExpired:
+        log("시간 초과:", " ".join(argv))
+        return R(124, "", "시간 초과")
+    except OSError as e:
+        return R(127, "", str(e))
 
 
 def lsblk():
     """[(장치 dict, 디스크 dict)] — 파일 시스템이 있는 파티션(또는 파티션 없는 디스크 · LVM 볼륨)"""
-    out = run(["lsblk", "-J", "-o", "NAME,PATH,TYPE,FSTYPE,UUID,PARTUUID,PTUUID,START,LOG-SEC,LABEL,PARTTYPE,MOUNTPOINTS,RM,HOTPLUG,TRAN"]).stdout
+    out = run(["lsblk", "-J", "-o", "NAME,PATH,TYPE,FSTYPE,UUID,PARTUUID,PTUUID,PTTYPE,START,LABEL,PARTLABEL,PARTTYPE,"
+                                    "PARTFLAGS,MOUNTPOINTS,RM,HOTPLUG,TRAN"]).stdout
     res = []
 
     def walk(node, disk):
@@ -66,24 +103,51 @@ def lsblk():
             res.append((node, disk or node))
         for c in node.get("children") or []:
             walk(c, disk)
-    for n in json.loads(out or "{}").get("blockdevices", []):
-        walk(n, None)
+    try:
+        for n in json.loads(out or "{}").get("blockdevices", []):
+            walk(n, None)
+    except ValueError:
+        pass
     return res
 
 
-def fstab_specs():
-    """fstab 에 적힌 장치 (UUID= · LABEL= · PARTUUID= · /dev/…) 와 연결 위치"""
-    specs, dirs = set(), set()
+def _unescape(s):
+    """fstab 의 \\040 같은 8진 표기와 따옴표"""
+    s = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), s)
+    return s[1:-1] if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'" else s
+
+
+def fstab():
+    """(fstab 이 가리키는 장치 식별자들, 연결 위치들). 식별자는 node_ids 와 같은 꼴"""
+    ids, dirs = set(), set()
     try:
-        with open("/etc/fstab", encoding="utf-8") as f:
+        with open("/etc/fstab", encoding="utf-8", errors="replace") as f:
             for line in f:
                 p = line.split()
-                if len(p) >= 2 and not p[0].startswith("#"):
-                    specs.add(p[0])
-                    dirs.add(os.path.normpath(p[1]))
+                if len(p) < 2 or p[0].startswith("#"):
+                    continue
+                spec, d = _unescape(p[0]), _unescape(p[1])
+                dirs.add(os.path.normpath(d))
+                if spec.startswith("/dev/"):
+                    ids.add("dev:" + os.path.realpath(spec))
+                elif "=" in spec:
+                    k, _, v = spec.partition("=")
+                    k = k.upper()
+                    ids.add(f"{k}={v.lower() if k in ('UUID', 'PARTUUID') else v}")
     except OSError:
         pass
-    return specs, dirs
+    return ids, dirs
+
+
+def node_ids(node):
+    out = {"dev:" + os.path.realpath(node.get("path") or "")}
+    for k, f in (("UUID", "uuid"), ("PARTUUID", "partuuid")):
+        if node.get(f):
+            out.add(f"{k}={node[f].lower()}")
+    for k, f in (("LABEL", "label"), ("PARTLABEL", "partlabel")):
+        if node.get(f):
+            out.add(f"{k}={node[f]}")
+    return out
 
 
 def owner():
@@ -104,77 +168,124 @@ def load_json(path, default):
 
 def save_json(path, data, mode=0o644):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".sekai-")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=1)
     os.chmod(tmp, mode)
     os.replace(tmp, path)
 
 
-def is_windows_system(dev):
-    """Windows\\System32 가 있나 — 읽기 전용으로 잠깐 붙여 본다 (최대 절전 중이어도 읽기는 안전하다)"""
-    tmp = tempfile.mkdtemp(prefix="sekai-drives-")
+def tmpdir():
+    os.makedirs(TMPROOT, mode=0o700, exist_ok=True)
+    os.chmod(TMPROOT, 0o700)
+    return tempfile.mkdtemp(dir=TMPROOT)
+
+
+def unmount_dir(d):
+    if os.path.ismount(d) and run(["umount", d]).returncode != 0:
+        run(["umount", "-l", d])
     try:
-        ok = run(["mount", "-t", "ntfs3", "-o", "ro,noatime", dev, tmp]).returncode == 0 or \
-            run(["mount", "-t", "ntfs-3g", "-o", "ro", dev, tmp]).returncode == 0
-        if not ok:
-            return False
+        os.rmdir(d)
+    except OSError:
+        pass
+
+
+def cleanup_temp():
+    """지난번에 떼지 못하고 남은 검사용 연결 정리 — 우리 폴더(TMPROOT) 안의 것만"""
+    try:
+        for n in os.listdir(TMPROOT):
+            unmount_dir(os.path.join(TMPROOT, n))
+    except OSError:
+        pass
+
+
+def _child(base, name):
+    """base 안의 name (대소문자 무시) — 링크·장치가 아닌 진짜 폴더나 일반 파일만"""
+    try:
+        names = {n.lower(): n for n in os.listdir(base)}
+    except OSError:
+        return None
+    n = names.get(name)
+    return os.path.join(base, n) if n else None
+
+
+def _copy_hive(src):
+    """SYSTEM 하이브 복사본 (TMPROOT) — 일반 파일이고 HIVE_MAX 이하일 때만, 링크를 따라가지 않는다"""
+    try:
+        st = os.lstat(src)
+    except OSError:
+        return None
+    if not stat.S_ISREG(st.st_mode) or st.st_size > HIVE_MAX:
+        return None
+    fd, dst = tempfile.mkstemp(dir=TMPROOT, prefix="hive-")
+    try:
+        with os.fdopen(fd, "wb") as out, open(src, "rb", opener=lambda p, fl: os.open(p, fl | os.O_NOFOLLOW)) as inp:
+            left = HIVE_MAX
+            while left > 0:
+                b = inp.read(min(1 << 20, left))
+                if not b:
+                    break
+                out.write(b)
+                left -= len(b)
+        return dst
+    except OSError:
         try:
-            top = {n.lower(): n for n in os.listdir(tmp)}
-            win = top.get("windows")
-            return bool(win) and any(n.lower() == "system32" for n in os.listdir(os.path.join(tmp, win)))
-        except OSError:
-            return False
-        finally:
-            run(["umount", tmp])
-    finally:
-        try:
-            os.rmdir(tmp)
+            os.unlink(dst)
         except OSError:
             pass
+        return None
 
 
-def windows_letters(dev, mounted=None):
-    """윈도우가 정한 문자 — 시스템 드라이브의 레지스트리(Windows\\System32\\config\\SYSTEM › MountedDevices)를 읽기만 한다.
-    {"gpt": {파티션 GUID: 문자}, "mbr": {(디스크 서명, 시작 바이트): 문자}}. 못 읽으면 빈 것 (SekaiOS 가 정한다)"""
-    out = {"gpt": {}, "mbr": {}}
-    try:
-        import hivex
-    except ImportError:
-        return out
-    tmp = None
-    hive = None
-    base = mounted
+def inspect_ntfs(dev, want_hive=False, mounted=None):
+    """(종류, 하이브 복사본) — 종류: windows · boot · data · unknown. 읽기 전용(+noexec)으로 잠깐 붙여 본다
+    (최대 절전 중이어도 읽기는 안전하다). 이미 붙어 있으면(mounted) 그 자리를 본다"""
+    tmp, base = None, mounted
     try:
         if not base:
-            tmp = tempfile.mkdtemp(prefix="sekai-drives-")
-            if run(["mount", "-t", "ntfs3", "-o", "ro,noatime", dev, tmp]).returncode != 0 and \
-                    run(["mount", "-t", "ntfs-3g", "-o", "ro", dev, tmp]).returncode != 0:
-                return out
+            tmp = tmpdir()
+            if run(["mount", "-t", "ntfs3", "-o", f"ro,noatime,noexec,{SAFE}", dev, tmp]).returncode != 0 and \
+                    run(["mount", "-t", "ntfs-3g", "-o", f"ro,noexec,{SAFE}", dev, tmp]).returncode != 0:
+                return "unknown", None
             base = tmp
-        hive = base
-        for part in ("windows", "system32", "config", "system"):
-            names = {n.lower(): n for n in os.listdir(hive)}
-            if part not in names:
-                return out
-            hive = os.path.join(hive, names[part])
-        # 복사본을 읽는다 — 원본을 연 채로는 잠깐 붙인 드라이브를 떼지 못해(사용 중) 그 자리가 남았고,
-        #   그러면 그 드라이브가 "다른 곳에도 붙은 것"으로 보여 목록에서 빠졌다
-        copy = tempfile.NamedTemporaryFile(prefix="sekai-hive-", delete=False)
-        copy.close()
-        shutil.copyfile(hive, copy.name)
+        try:
+            os.listdir(base)
+        except OSError:
+            return "unknown", None
+        win = _child(base, "windows")
+        s32 = _child(win, "system32") if win and os.path.isdir(win) and not os.path.islink(win) else None
+        if s32 and os.path.isdir(s32) and not os.path.islink(s32):
+            hive = None
+            if want_hive:
+                cfg = _child(s32, "config")
+                src = _child(cfg, "system") if cfg and os.path.isdir(cfg) and not os.path.islink(cfg) else None
+                hive = _copy_hive(src) if src else None
+            return "windows", hive
+        bootdir = _child(base, "boot")
+        if _child(base, "bootmgr") or (bootdir and _child(bootdir, "bcd")):
+            return "boot", None
+        return "data", None
+    finally:
         if tmp:
-            run(["umount", tmp])
-        hive = copy.name
+            unmount_dir(tmp)
+
+
+def windows_letters(hive):
+    """윈도우가 정한 문자 — SYSTEM 하이브 복사본의 MountedDevices 를 읽기만 한다.
+    {"gpt": {파티션 GUID: 문자}, "mbr": {(디스크 서명, 시작 바이트): 문자}}. 못 읽으면 빈 것 (SekaiOS 가 정한다)"""
+    out = {"gpt": {}, "mbr": {}}
+    if not hive:
+        return out
+    try:
+        import hivex
         h = hivex.Hivex(hive)
         md = h.node_get_child(h.root(), "MountedDevices")
-        if not md:
-            return out
-        for v in h.node_values(md):
+        for v in (h.node_values(md) if md else []):
             key = h.value_key(v)
             if not (key.startswith("\\DosDevices\\") and len(key) == 14 and key[13] == ":"):
                 continue
             letter = key[12].lower()
+            if not valid_letter(letter):
+                continue                                                  # 하이브는 남의 디스크 내용 — C~Z 만
             data = h.value_value(v)[1]
             if len(data) == 24 and data.startswith(b"DMIO:ID:"):          # GPT — 파티션 GUID (윈도우 바이트 순서)
                 out["gpt"][str(uuidlib.UUID(bytes_le=bytes(data[8:24])))] = letter
@@ -183,56 +294,53 @@ def windows_letters(dev, mounted=None):
     except Exception as e:
         log("윈도우 문자를 읽지 못했다:", e)
     finally:
-        h = None
-        if hive and os.path.basename(hive).startswith("sekai-hive-"):
-            try:
-                os.unlink(hive)
-            except OSError:
-                pass
-        if tmp:
-            if os.path.ismount(tmp) and run(["umount", tmp]).returncode != 0:
-                run(["umount", "-l", tmp])
-            try:
-                os.rmdir(tmp)
-            except OSError:
-                pass
+        try:
+            os.unlink(hive)
+        except OSError:
+            pass
     return out
 
 
-def windows_letter_of(node, wl):
+def windows_letter_of(node, disk, wl):
     pu = (node.get("partuuid") or "").lower()
     if pu in wl["gpt"]:
         return wl["gpt"][pu]
+    sig = (node.get("ptuuid") or disk.get("ptuuid") or "").lower()
     try:
-        key = ((node.get("ptuuid") or "").lower(), int(node.get("start") or 0) * int(node.get("log-sec") or 512))
+        start = int(node.get("start") or 0) * 512                         # lsblk START 는 늘 512바이트 단위
     except (TypeError, ValueError):
         return None
-    return wl["mbr"].get(key)
+    return wl["mbr"].get((sig, start))
+
+
+def probe(dev):
+    r = run(["ntfs-3g.probe", "--readwrite", dev])
+    return -1 if r.returncode in (124, 127) else r.returncode             # 시간 초과·검사기 없음 = 모름
 
 
 def mount_tries(fs, rw, uid, gid):
-    """[(-t, -o)] 차례로 시도할 것"""
-    m = "rw" if rw else "ro"
+    """[(-t, -o)] 차례로 시도할 것 — 모두 nosuid,nodev"""
+    m = f"{'rw' if rw else 'ro'},noatime,{SAFE}"
     if fs == "ntfs":
-        t = [("ntfs3", f"{m},noatime,uid={uid},gid={gid},iocharset=utf8" + (",prealloc" if rw else ""))]
-        return t if rw else t + [("ntfs-3g", f"ro,uid={uid},gid={gid}")]
+        t = [("ntfs3", f"{m},uid={uid},gid={gid},iocharset=utf8" + (",prealloc" if rw else ""))]
+        return t if rw else t + [("ntfs-3g", f"ro,{SAFE},uid={uid},gid={gid}")]
     if fs == "exfat":
-        return [("exfat", f"{m},noatime,uid={uid},gid={gid},iocharset=utf8")]
+        return [("exfat", f"{m},uid={uid},gid={gid},iocharset=utf8")]
     if fs == "vfat":
-        return [("vfat", f"{m},noatime,uid={uid},gid={gid},utf8")]
+        return [("vfat", f"{m},uid={uid},gid={gid},utf8")]
     if rw:
-        return [(fs, "rw,noatime")]
+        return [(fs, m)]
     # 리눅스 읽기 전용 — 저널·로그를 재생하지 않는다 (재생하면 읽기 전용이어도 디스크에 쓴다)
-    return {"ext2": [("ext2", "ro")], "ext3": [("ext3", "ro,noload")], "ext4": [("ext4", "ro,noload")],
-            "xfs": [("xfs", "ro,norecovery")], "btrfs": [("btrfs", "ro,rescue=nologreplay")],
-            "f2fs": [("f2fs", "ro,norecovery")]}.get(fs, [])
+    return {"ext2": [("ext2", m)], "ext3": [("ext3", m + ",noload")], "ext4": [("ext4", m + ",noload")],
+            "xfs": [("xfs", m + ",norecovery")], "btrfs": [("btrfs", m + ",rescue=nologreplay")],
+            "f2fs": [("f2fs", m + ",norecovery")]}.get(fs, [])
 
 
 def mount_one(dev, fs, path, rw, uid, gid):
     os.makedirs(path, exist_ok=True)
     err = "연결 실패"
     for t, o in mount_tries(fs, rw, uid, gid):
-        r = run(["mount", "-t", t, "-o", o, dev, path])
+        r = run(["mount", "-t", t, "-o", o, dev, path], timeout=60)
         if r.returncode == 0:
             return ""
         err = (r.stderr or r.stdout).strip() or err
@@ -244,67 +352,89 @@ def mount_one(dev, fs, path, rw, uid, gid):
 
 
 def mounted_ro(path):
-    opts = run(["findmnt", "-no", "OPTIONS", path]).stdout.strip().split(",")
-    return "ro" in opts
+    return "ro" in run(["findmnt", "-no", "OPTIONS", path]).stdout.strip().split(",")
 
 
-def cleanup_temp():
-    """지난번에 떼지 못하고 남은 임시 연결(/tmp/sekai-drives-*)을 정리한다"""
-    for line in run(["findmnt", "-rn", "-o", "TARGET"]).stdout.splitlines():
-        if line.startswith(tempfile.gettempdir() + "/sekai-drives-"):
-            run(["umount", "-l", line])
-            try:
-                os.rmdir(line)
-            except OSError:
-                pass
-
-
-def cmd_mount():
+def _mount_pass():
     cleanup_temp()
-    letters = load_json(LETTERS, {})
+    run(["udevadm", "settle", "-t", "5"], timeout=10)       # 늦게 잡히는 디스크 — 조금만 기다린다
+    letters = {k: v for k, v in load_json(LETTERS, {}).items() if isinstance(v, dict)}
+    for v in letters.values():                              # 손으로 고친 파일 — 한 글자 C~Z 만
+        if "letter" in v and not valid_letter(v["letter"]):
+            v.pop("letter", None)
     old = {d.get("uuid"): d for d in load_json(STATE, []) if isinstance(d, dict)}
-    specs, fstab_dirs = fstab_specs()
+    fs_ids, fstab_dirs = fstab()
+    reserved = {d[5:] for d in fstab_dirs if re.fullmatch(r"/mnt/[a-z]", d)}
     uid, gid = owner()
-    ours = {f"/mnt/{v['letter']}" for v in letters.values() if isinstance(v, dict) and v.get("letter")}
-    cands = []
+    ours = {d.get("path") for d in old.values() if d.get("path")} | \
+        {f"/mnt/{v['letter']}" for v in letters.values() if v.get("letter")}
+    cands, seen_btrfs = [], set()
     for node, disk in lsblk():
-        dev, fs, uuid = node.get("path"), node.get("fstype"), node.get("uuid")
-        if fs not in WIN_FS | LINUX_FS or not uuid or not dev:
+        dev, fs, vol = node.get("path"), node.get("fstype"), node.get("uuid")
+        if fs not in WIN_FS | LINUX_FS or not vol or not dev:
             continue
         if disk.get("rm") or disk.get("hotplug") or (disk.get("tran") or "") == "usb":
             continue                                   # 이동식 — 로그인한 뒤 automount 가 맡는다
         if (node.get("parttype") or "").lower() in SKIP_PARTTYPES:
             continue
-        if {f"UUID={uuid}", dev, f"LABEL={node.get('label')}"} & specs:
+        try:
+            if int(node.get("partflags") or "0", 16) & SKIP_ATTRS and (disk.get("pttype") or "") == "gpt":
+                continue                               # 필수·숨김·문자 없음 (제조사 복구 파티션 등)
+        except ValueError:
+            pass
+        if node_ids(node) & fs_ids:
             continue                                   # fstab 이 정한다 (디스크 관리의 연결 위치 변경 포함)
         mps = [m for m in node.get("mountpoints") or [] if m]
         if mps and not set(mps) <= ours:
             continue                                   # 다른 곳에 붙었다 (SekaiOS 자신 · 사용자가 붙인 것)
-        cands.append((node, fs, uuid, dev, mps))
-    # 기억하는 열쇠 = 볼륨 일련번호. 디스크를 복제하면 둘이 같을 수 있다 — 겹치면 파티션 번호(PARTUUID)를 붙여 구별
-    dup = {c[2] for c in cands if sum(1 for x in cands if x[2] == c[2]) > 1}
-    cands = [(n, fs, (f"{u}/{n.get('partuuid') or d}" if u in dup else u), d, mps) for n, fs, u, d, mps in cands]
-    state, changed = [], False
-    kinds = {}
-    for node, fs, uuid, dev, mps in cands:            # 종류 — 윈도우 시스템을 먼저 봐야 C: 를 줄 수 있다
-        rec = letters.get(uuid) if isinstance(letters.get(uuid), dict) else {}
+        if fs == "btrfs":                              # 여러 장치 btrfs — 같은 UUID 의 장치들이 한 파일 시스템
+            if vol in seen_btrfs:
+                continue
+            seen_btrfs.add(vol)
+        cands.append([node, disk, fs, vol, dev, mps])
+    # 기억하는 열쇠 = 볼륨 일련번호. 디스크를 복제하면 둘이 같을 수 있다 — 겹치면 파티션 번호(PARTUUID)를 붙이고,
+    #   그래도 같으면(디스크 통째 복제) 구별할 수 없어 붙이지 않는다 (엉뚱한 쪽에 문자·쓰기 설정이 가지 않게)
+    count = {}
+    for c in cands:
+        count[c[3]] = count.get(c[3], 0) + 1
+    for c in cands:
+        if count[c[3]] > 1:
+            c[3] = f"{c[3]}/{c[0].get('partuuid') or c[4]}"
+    count = {}
+    for c in cands:
+        count[c[3]] = count.get(c[3], 0) + 1
+    for c in [c for c in cands if count[c[3]] > 1]:
+        log(c[4], "복제 디스크로 보여 구별할 수 없다 — 붙이지 않는다")
+        cands.remove(c)
+    # 종류 — 윈도우 시스템을 먼저 봐야 C: 와 윈도우 문자를 정할 수 있다
+    kinds, hive = {}, None
+    for node, disk, fs, key, dev, mps in cands:
+        rec = letters.get(key, {})
         if fs in LINUX_FS:
-            kinds[uuid] = "linux"
-        elif fs == "ntfs" and (rec.get("kind") == "windows" if mps else is_windows_system(dev)):
-            kinds[uuid] = "windows"
+            kinds[key] = "linux"
+        elif fs != "ntfs":
+            kinds[key] = "data"
         else:
-            kinds[uuid] = "data"
-    cands.sort(key=lambda c: 0 if kinds[c[2]] == "windows" else 1)
-    # 윈도우가 정한 문자를 먼저 — 윈도우와 SekaiOS 에서 같은 드라이브가 같은 문자이게 (첫 윈도우 시스템 드라이브의 레지스트리)
-    win = next((c for c in cands if kinds[c[2]] == "windows"), None)
-    wl = windows_letters(win[3], win[4][0] if win and win[4] else None) if win else {"gpt": {}, "mbr": {}}
+            k, h = inspect_ntfs(dev, want_hive=hive is None, mounted=mps[0] if mps else None)
+            if k == "unknown" and mps and rec.get("kind"):
+                k = rec["kind"]                        # 이미 붙어 있다 — 지난번 판정
+            kinds[key] = k
+            if h:
+                hive = h
+    for c in [c for c in cands if kinds[c[3]] == "boot"]:
+        cands.remove(c)                                # 윈도우 부팅 파티션 — 윈도우도 문자를 주지 않고 숨긴다
+    wl = windows_letters(hive)
+    # 빠른 시작 — 윈도우 시스템이 최대 절전이면 그 PC 의 윈도우 볼륨 전부 (exFAT·FAT 은 스스로 알 수 없다)
+    hibernated = any(kinds[c[3]] == "windows" and not c[5] and probe(c[4]) == 14 for c in cands)
+    cands.sort(key=lambda c: 0 if kinds[c[3]] == "windows" else 1)
+    changed = False
     want = {}
-    for node, fs, uuid, dev, mps in cands:
-        w = windows_letter_of(node, wl)
-        if w and w not in want.values():
-            want[uuid] = w
+    for node, disk, fs, key, dev, mps in cands:
+        w = windows_letter_of(node, disk, wl)
+        if w and w not in reserved and w not in want.values():
+            want[key] = w
     for key, rec in letters.items():                   # 그 문자를 쓰던 다른 드라이브는 문자를 내준다 (다음에 새로 받는다)
-        if isinstance(rec, dict) and rec.get("letter") in want.values() and want.get(key) != rec.get("letter"):
+        if rec.get("letter") in want.values() and want.get(key) != rec.get("letter"):
             rec.pop("letter", None)
             changed = True
     for key, w in want.items():
@@ -313,73 +443,115 @@ def cmd_mount():
             log(key, "윈도우의 문자", w.upper() + ":")
             rec["letter"] = w
             changed = True
-    taken = {v["letter"] for v in letters.values() if isinstance(v, dict) and v.get("letter")} | \
-        {d[5:] for d in fstab_dirs if d.startswith("/mnt/") and len(d) == 6}
-    for node, fs, uuid, dev, mps in cands:
-        kind = kinds[uuid]
-        rec = letters.get(uuid) if isinstance(letters.get(uuid), dict) else None
-        if not rec or not rec.get("letter"):
-            pref = ["c"] if kind == "windows" else []
-            free = [c for c in pref + list("defghijklmnopqrstuvwxyz") if c not in taken
-                    and not os.path.ismount(f"/mnt/{c}")]
-            if not free:
-                continue
-            rec = rec or {}
-            rec["letter"] = free[0]
-            letters[uuid] = rec
-            taken.add(free[0])
+    for rec in letters.values():                       # fstab 이 /mnt/<문자> 를 쓰면 그 문자는 내준다
+        if rec.get("letter") in reserved:
+            rec.pop("letter", None)
             changed = True
-        if rec.get("kind") != kind or rec.get("label") != (node.get("label") or ""):
-            rec.update(kind=kind, label=node.get("label") or "")
-            changed = True
-        path = mps[0] if mps else f"/mnt/{rec['letter']}"   # 붙어 있으면 이번 부팅은 그 자리 그대로 (문자가 바뀌었어도 다음 부팅에)
-        write = rec.get("write", kind == "data")
-        if mps:                                        # 이미 우리가 붙여 두었다 — 상태만 이어 간다
-            ro = mounted_ro(path)
-            reason = (old.get(uuid) or {}).get("reason") if ro else None
-        else:
-            if os.path.isdir(path) and os.listdir(path):
-                log(dev, path, "자리가 비어 있지 않다 — 건너뜀")
-                continue
-            reason = None if write else "policy"
-            if write and fs == "ntfs":
-                try:
-                    rc = run(["ntfs-3g.probe", "--readwrite", dev]).returncode
-                except OSError:
-                    rc = -1                            # 검사기가 없다 — 모르면 읽기 전용 (안전한 쪽)
-                if rc != 0:
-                    reason = PROBE.get(rc, f"probe-{rc}")
-            err = mount_one(dev, fs, path, reason is None, uid, gid)
-            if err:
-                log(dev, path, err)
-                continue
-            ro = reason is not None
-            log(dev, "→", path, kind, "읽기 전용" if ro else "쓰기 가능", reason or "")
-        state.append({"letter": path[5:].upper(), "path": path, "dev": dev, "uuid": uuid, "kind": kind,
-                      "label": node.get("label") or "", "fs": fs, "write": bool(write),
-                      "readonly": bool(ro), "reason": reason})
-    if changed:
-        save_json(LETTERS, letters)
-    save_json(STATE, state)
+    taken = {v["letter"] for v in letters.values() if v.get("letter")} | reserved
+    state = []
+    try:
+        for node, disk, fs, key, dev, mps in cands:
+            kind = kinds[key]
+            rec = letters.get(key)
+            if not rec or not rec.get("letter"):
+                pref = ["c"] if kind == "windows" else []
+                free = [c for c in pref + list(VALID[1:]) if c not in taken and not os.path.ismount(f"/mnt/{c}")]
+                if not free:
+                    continue
+                rec = rec or {}
+                rec["letter"] = free[0]
+                letters[key] = rec
+                taken.add(free[0])
+                changed = True
+            if rec.get("kind") != kind or rec.get("label") != (node.get("label") or ""):
+                rec.update(kind=kind, label=node.get("label") or "")
+                changed = True
+            path = mps[0] if mps else f"/mnt/{rec['letter']}"   # 붙어 있으면 이번 부팅은 그 자리 (문자가 바뀌었어도 다음 부팅에)
+            write = rec.get("write", kind == "data")
+            if mps:                                    # 이미 우리가 붙여 두었다 — 실제 상태를 잇는다
+                ro = mounted_ro(path)
+                reason = ((old.get(key) or {}).get("reason") or "policy") if ro else None
+            else:
+                if os.path.isdir(path) and os.listdir(path):
+                    log(dev, path, "자리가 비어 있지 않다 — 건너뜀")
+                    continue
+                reason = None if write else "policy"
+                if write and fs in WIN_FS and hibernated:
+                    reason = "hibernated"
+                elif write and fs == "ntfs":
+                    rc = probe(dev)
+                    if rc != 0:
+                        reason = PROBE.get(rc, "unknown" if rc == -1 else f"probe-{rc}")
+                err = mount_one(dev, fs, path, reason is None, uid, gid)
+                if err and reason is None:             # 쓰기로 붙지 않으면 읽기 전용으로라도
+                    log(dev, path, "쓰기로 연결 실패 —", err)
+                    reason = "mount-rw-failed"
+                    err = mount_one(dev, fs, path, False, uid, gid)
+                if err:
+                    log(dev, path, err)
+                    continue
+                ro = mounted_ro(path)
+                if ro and reason is None:              # 커널이 조용히 읽기 전용으로 붙였다 (더러움 표시 등)
+                    reason = "mount-ro"
+                log(dev, "→", path, kind, "읽기 전용" if ro else "쓰기 가능", reason or "")
+            state.append({"letter": path[5:].upper(), "path": path, "dev": dev, "uuid": key, "kind": kind,
+                          "label": node.get("label") or "", "fs": fs, "write": bool(write),
+                          "readonly": bool(ro), "reason": reason if ro else None})
+    finally:
+        if changed:
+            save_json(LETTERS, letters)
+        save_json(STATE, state)
 
 
-def cmd_set_write(uuid, on):
-    letters = load_json(LETTERS, {})
-    rec = letters.get(uuid)
-    if not isinstance(rec, dict):
-        sys.exit("모르는 드라이브입니다")
-    rec["write"] = bool(on)
-    save_json(LETTERS, letters)
-    path = f"/mnt/{rec['letter']}"
-    if os.path.ismount(path):
-        r = run(["umount", path])
-        if r.returncode != 0:
+class Lock:
+    """mount · set-write 가 함께 돌지 않게 (탐색기 창 두 곳·부팅 서비스)"""
+    def __enter__(self):
+        os.makedirs(os.path.dirname(LOCK), exist_ok=True)
+        self.f = open(LOCK, "w")
+        fcntl.flock(self.f, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *a):
+        fcntl.flock(self.f, fcntl.LOCK_UN)
+        self.f.close()
+
+
+def cmd_mount():
+    with Lock():
+        _mount_pass()
+
+
+def cmd_set_write(key, on):
+    with Lock():
+        letters = load_json(LETTERS, {})
+        rec = letters.get(key)
+        st = next((d for d in load_json(STATE, []) if d.get("uuid") == key), None)
+        if not isinstance(rec, dict) or not st:
+            sys.exit("지금 연결되어 있지 않은 드라이브입니다")
+        before = rec.get("write")
+        path = st["path"]                              # 실제로 붙은 자리 (문자가 바뀐 부팅이어도)
+        if os.path.ismount(path) and run(["umount", path], timeout=60).returncode != 0:
             sys.exit("드라이브를 쓰는 프로그램이 있어 다시 연결하지 못했습니다 — 그 프로그램을 닫고 다시 해 주세요")
-    cmd_mount()
-    st = next((d for d in load_json(STATE, []) if d.get("uuid") == uuid), None)
-    if st and on and st.get("readonly"):
-        sys.exit("윈도우 빠른 시작(또는 최대 절전) 때문에 아직 읽기 전용입니다" if st.get("reason") == "hibernated"
-                 else "드라이브가 깨끗하게 닫히지 않아 아직 읽기 전용입니다")
+        rec["write"] = bool(on)
+        save_json(LETTERS, letters)
+        _mount_pass()
+        now = next((d for d in load_json(STATE, []) if d.get("uuid") == key), None)
+        if not now:                                    # 다시 붙지 않았다 — 설정을 되돌리고 원래대로
+            letters = load_json(LETTERS, {})
+            if isinstance(letters.get(key), dict):
+                if before is None:
+                    letters[key].pop("write", None)
+                else:
+                    letters[key]["write"] = before
+                save_json(LETTERS, letters)
+            _mount_pass()
+            sys.exit("드라이브를 다시 연결하지 못했습니다")
+        if on and now.get("readonly"):
+            sys.exit({"hibernated": "윈도우 빠른 시작(또는 최대 절전) 때문에 아직 읽기 전용입니다",
+                      "unclean": "윈도우가 이 드라이브를 캐시에 둔 채 꺼져(빠른 시작 등) 아직 읽기 전용입니다",
+                      }.get(now.get("reason"), "쓰기로 연결하지 못해 아직 읽기 전용입니다 — 디스크 검사가 필요할 수 있습니다"))
+        if not on and not now.get("readonly"):
+            sys.exit("읽기 전용으로 되돌리지 못했습니다")
 
 
 def cmd_list():

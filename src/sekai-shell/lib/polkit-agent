@@ -413,8 +413,12 @@ def app_for(name, path=""):
                     continue
                 gi_ = app.get_icon()
                 ic = gi_.to_string() if gi_ is not None else ""
+                shown = app.should_show()
                 for key in {exe, os.path.basename(exe)}:
-                    _apps.setdefault(key, (app.get_name() or os.path.basename(exe), ic))
+                    # 같은 실행 파일의 항목이 여럿이면 메뉴에 보이는 것 — 탐색기(sekai-files)가 숨은
+                    #   "압축 풀기"(sekai-files --extract)로 보였다
+                    if key not in _apps or (shown and not _apps[key][2]):
+                        _apps[key] = (app.get_name() or os.path.basename(exe), ic, shown)
         except Exception as e:                         # .desktop 가 깨져 있어도 창은 떠야 한다
             dbg("앱 목록을 읽지 못함", e)
     hit = _apps.get(path) or _apps.get(name)
