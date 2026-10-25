@@ -94,7 +94,10 @@ REV="sekai2"
 #      로그아웃 때 죽였다 (~CEglContextGuard)
 #   aquamarine sekai6: ~CDRMOutput 가드를 expired() 로 — 끝날 때 CBackend 가 정적 소멸자에서 지워지며 이미 없앤 idle 목록에서
 #      지우다가 메모리를 깨뜨렸다 (로그인 화면 합성기가 끝날 때마다 세그폴트, 본컴 gdb 백트레이스로 확인)
-rev_for() { case "$1" in aquamarine) echo sekai6 ;; hyprbars) echo sekai42 ;; hyprexpo) echo sekai30 ;; worldlink|sekaicomp|hyprland) echo sekai45 ;; *) echo "$REV" ;; esac; }
+#   aquamarine sekai7: modifier 가 없는(INVALID) 커서 버퍼는 setCursor 에서 거절한다 — 커밋이 조용히 버리고 커서 면을 끄는데
+#      성공이라 답해 합성기가 하드웨어 커서를 믿고 아무것도 안 그렸다 (llvmpipe 로 뜬 AMD 로그인 화면, 8600G 2026-10-25) →
+#      이제 실패로 알려 그 모니터는 소프트웨어 커서로 (patches/aquamarine/0004)
+rev_for() { case "$1" in aquamarine) echo sekai7 ;; hyprbars) echo sekai42 ;; hyprexpo) echo sekai30 ;; worldlink|sekaicomp|hyprland) echo sekai45 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"

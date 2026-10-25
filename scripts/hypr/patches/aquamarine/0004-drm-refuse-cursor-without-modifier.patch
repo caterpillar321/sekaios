@@ -1,0 +1,18 @@
+diff --git a/src/backend/drm/DRM.cpp b/src/backend/drm/DRM.cpp
+--- a/src/backend/drm/DRM.cpp
++++ b/src/backend/drm/DRM.cpp
+@@ -1917,6 +1917,14 @@
+             return false;
+         }
+ 
++        // The commit drops a cursor fb without an explicit modifier (see "Dropping invalid buffer for cursor plane") and disables the
++        // plane, while this used to report success — the compositor kept the hardware cursor and nothing was drawn. Refuse it here
++        // instead so the caller falls back to a software cursor (gbm buffers from llvmpipe / implicit-modifier drivers).
++        if (fb->dead || fb->buffer->dmabuf().modifier == DRM_FORMAT_MOD_INVALID) {
++            backend->backend->log(AQ_LOG_ERROR, "drm: Cursor buffer has no explicit modifier, the cursor plane can't take it");
++            return false;
++        }
++
+         cursorHotspot = hotspot;
+ 
+         backend->backend->log(AQ_LOG_DEBUG, std::format("drm: Cursor buffer imported into KMS with id {}", fb->id));
