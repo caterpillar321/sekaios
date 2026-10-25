@@ -57,13 +57,16 @@ def reset(bus, addr):
 
 
 def fix(name):
-    bus, addr = name.split("-")
-    if not os.path.exists(f"/dev/i2c-{bus}"):
-        subprocess.run(["modprobe", "-q", "i2c-dev"], check=False)
     try:
+        bus, addr = name.split("-")
+        if not os.path.exists(f"/dev/i2c-{bus}"):
+            # 절대 경로로 — udev RUN·종료 훅에는 PATH 가 없어 "modprobe" 를 못 찾고(FileNotFoundError) 여기서 끝났다.
+            #   i2c-dev 가 미리 올라와 있지 않은 PC(OpenRGB 를 안 깐 sekai-pc)에선 prime 이 부팅마다 exit 1 —
+            #   그 PC 에서 누가 SPD 를 읽으면 쪽 번호가 7 로 남고 종료 훅도 못 되돌렸다 (2026-10-25)
+            subprocess.run(["/usr/sbin/modprobe", "-q", "i2c-dev"], check=False)
         reset(int(bus), int(addr, 16))
-    except OSError as e:
-        log(f"{name}: {e}")
+    except Exception as e:                      # 한 장치가 실패해도 나머지 장치는 되돌린다
+        log(f"{name}: {e!r}")
 
 
 def main():
