@@ -1,0 +1,14 @@
+[Unit]
+Description=SekaiOS PCI 호환성 확인 (칩셋 슬롯 그래픽 카드 · 자동 재배치)
+# 이번 부팅의 커널 기록을 보고 다음 부팅의 pci=realloc=off 를 정한다 (sekai-pci 의 설명). 로그인 화면을 기다리게 하지 않는다
+After=local-fs.target systemd-journald.service systemd-udev-trigger.service
+ConditionPathExists=!/run/live/medium
+
+[Service]
+Type=oneshot
+ExecStartPre=-/usr/bin/udevadm settle -t 10
+ExecStart=/usr/libexec/sekai/sekai-pci check
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

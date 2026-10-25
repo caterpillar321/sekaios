@@ -4,6 +4,7 @@ NVIDIA 카드가 있으면 NVIDIA 공식 드라이버를 설치·제거할 수 �
 관리자 권한이 필요한 일은 /usr/libexec/sekai/sekai-gpu 가 한다 (pkexec).
 이 페이지는 그 출력(GPU/SECUREBOOT/NVIDIA/MOK/PROGRESS/MOKPASS/REBOOT/ERROR 줄)을 읽어 보여 줄 뿐이다.
 """
+import json
 import os
 import subprocess
 import threading
@@ -12,9 +13,11 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib, Pango  # noqa: E402
 
-from ..widgets import Page, button, info, row
+from ..widgets import Page, button, combo, info, row
 
 HELPER = "/usr/libexec/sekai/sekai-gpu"
+PCI_HELPER = "/usr/libexec/sekai/sekai-pci"   # PCI 자동 재배치(pci=realloc=off) — 칩셋 슬롯 그래픽 카드 호환
+PCI_MODES = [("auto", "자동 (권장)"), ("off", "다시 잡지 않음"), ("on", "커널 기본값")]
 
 VENDOR_NAME = {"nvidia": "NVIDIA", "intel": "Intel", "amd": "AMD", "vmware": "VMware",
                "virtio": "가상 GPU", "qemu": "가상 GPU"}
@@ -43,6 +46,29 @@ def _status():
         elif kind == "MOK":
             st["mok"] = rest.strip()
     return st
+
+
+def _pci_status():
+    try:
+        res = subprocess.run([PCI_HELPER, "status"], capture_output=True, text=True, timeout=10)
+        return json.loads(res.stdout)
+    except Exception:
+        return None
+
+
+def _pci_sub(ps):
+    """PCI 행 설명 — 무엇을 하는지 + 지금 상태"""
+    base = "칩셋 슬롯에 꽂은 그래픽 카드(RTX 50 등) 때문에 켤 때 USB 포트가 멈추면, 부팅할 때 장치 주소를 다시 잡지 않게 합니다."
+    if not ps:
+        return base
+    want, now = ps.get("configured"), ps.get("active")
+    if want != now:
+        state = "다시 시작하면 적용됩니다"
+    elif now:
+        state = "지금: 다시 잡지 않음" + (" — " + ps["reason"] if ps.get("mode") == "auto" and ps.get("reason") else "")
+    else:
+        state = "지금: 커널 기본값 (필요하면 다시 잡음)"
+    return base + "\n" + state
 
 
 def _mode():
@@ -133,6 +159,12 @@ class GraphicsPage:
         steps.set_margin_bottom(12)
         self.p.add_widget(self.mok_card)
 
+        s = self.p.section("호환성")
+        self.pci_ps = None
+        self.pci_combo = combo(PCI_MODES, "auto", self._pci_set)
+        self.pci_combo.set_sensitive(False)
+        self.pci_row = row(s, "PCI 장치 주소 다시 잡기", _pci_sub(None), control=self.pci_combo)
+
         s = self.p.section("정보")
         self.sb_label = info("…")
         row(s, "보안 부팅", "켜져 있으면 직접 만든 드라이버는 등록한 키로 서명되어야 올라갑니다",
@@ -195,6 +227,35 @@ class GraphicsPage:
     def _load(self):
         st = _status()
         GLib.idle_add(self._show, st)
+        ps = _pci_status()
+        GLib.idle_add(self._pci_show, ps)
+
+    def _pci_show(self, ps):
+        self.pci_ps = ps
+        self.pci_row.sub_label.set_text(_pci_sub(ps))
+        if ps:
+            self._pci_quiet = True
+            self.pci_combo.set_active_id(ps.get("mode", "auto"))
+            self._pci_quiet = False
+            self.pci_combo.set_sensitive(True)
+        return False
+
+    def _pci_set(self, mode):
+        if getattr(self, "_pci_quiet", False) or not self.pci_ps or mode == self.pci_ps.get("mode"):
+            return
+        self.pci_combo.set_sensitive(False)
+
+        def work():
+            try:
+                ok = subprocess.run(["pkexec", PCI_HELPER, "set", mode], capture_output=True,
+                                    timeout=300).returncode == 0
+            except Exception:
+                ok = False
+            ps = _pci_status()
+            GLib.idle_add(self._pci_show, ps)       # 실패(인증 취소 포함)면 원래 값으로 돌아간다
+            if not ok:
+                GLib.idle_add(self.pci_row.sub_label.set_text, "바꾸지 못했습니다 (인증을 취소했거나 부팅 메뉴를 만들지 못함)")
+        threading.Thread(target=work, daemon=True).start()
 
     def _show(self, st):
         self.st = st

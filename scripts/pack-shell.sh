@@ -448,6 +448,8 @@ if [ "$1" = "configure" ]; then
     systemctl enable sekai-crashcheck.service >/dev/null 2>&1 || true
     # 내장 드라이브를 켤 때마다 /mnt/<문자> 에 (윈도우의 C: · D: — 윈도우 시스템·리눅스는 읽기 전용부터) — sekai-drives
     systemctl enable sekai-drives.service >/dev/null 2>&1 || true
+    # 칩셋 슬롯 블랙웰 카드 — 커널 자동 재배치가 칩셋 USB 를 죽이면 다음 부팅부터 pci=realloc=off (sekai-pci)
+    systemctl enable sekai-pci.service >/dev/null 2>&1 || true
     [ -d /run/systemd/system ] && sysctl -q -p /etc/sysctl.d/60-sekai-panic.conf >/dev/null 2>&1 || true
     if [ ! -d /run/live/medium ] && [ ! -f /etc/snapper/configs/root ] \
        && [ "$(findmnt -no FSTYPE,FSROOT / 2>/dev/null)" = "btrfs /@" ] && mountpoint -q /.snapshots; then

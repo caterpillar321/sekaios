@@ -51,6 +51,11 @@ ALWAYS="${GRUB_CMDLINE_LINUX:-}"
 #   source 하지 않고 형식을 확인한 값만 쓴다
 VIDEO=$(sed -n 's/^SEKAI_VIDEO_OPTS="\(.*\)"$/\1/p' /var/lib/sekai/boot-video 2>/dev/null | head -1)
 case "$VIDEO" in *[!A-Za-z0-9=:@x\ -]*) VIDEO= ;; esac
+# PCI 자동 재배치 끄기 (pci=realloc=off) — sekai-pci 가 적는다 (설정 › 그래픽, 칩셋 슬롯 블랙웰 카드가 USB 를 죽이면 자동).
+#   USB 키보드가 살아야 하니 복구·기본 화면 모드에도. 정해진 값만 받는다
+PCI=$(sed -n 's/^SEKAI_PCI_OPTS="\(.*\)"$/\1/p' /var/lib/sekai/boot-pci 2>/dev/null | head -1)
+[ "$PCI" = "pci=realloc=off" ] || PCI=
+ALWAYS="$ALWAYS $PCI"
 NORMAL="$SEKAI_KERNEL_OPTS ${GRUB_CMDLINE_LINUX_DEFAULT:-} $ALWAYS $VIDEO"
 
 latest=$(echo "$KERNELS" | head -1)
