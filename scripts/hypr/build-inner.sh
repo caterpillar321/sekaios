@@ -97,7 +97,10 @@ REV="sekai2"
 #   aquamarine sekai7: modifier 가 없는(INVALID) 커서 버퍼는 setCursor 에서 거절한다 — 커밋이 조용히 버리고 커서 면을 끄는데
 #      성공이라 답해 합성기가 하드웨어 커서를 믿고 아무것도 안 그렸다 (llvmpipe 로 뜬 AMD 로그인 화면, 8600G 2026-10-25) →
 #      이제 실패로 알려 그 모니터는 소프트웨어 커서로 (patches/aquamarine/0004)
-rev_for() { case "$1" in aquamarine) echo sekai7 ;; hyprbars) echo sekai42 ;; hyprexpo) echo sekai30 ;; worldlink|sekaicomp|hyprland) echo sekai45 ;; *) echo "$REV" ;; esac; }
+#   aquamarine sekai8: 구형(legacy) KMS 커밋이 커서를 바꾸지 않는 프레임마다 커서를 숨겼다 — 가만히 있는데 화면이 다시 그려지면
+#      (마우스가 지나간 곳의 효과·시계) 커서가 사라지고 움직이면 나타났다. nouveau 는 기본으로 원자 설정을 안 줘 legacy 를 탄다
+#      (드라이버 안 깐 GTX 1660 SUPER, sekai-pc-subone 2026-10-25). 원본 main 에도 같은 코드 (patches/aquamarine/0005)
+rev_for() { case "$1" in aquamarine) echo sekai8 ;; hyprbars) echo sekai42 ;; hyprexpo) echo sekai30 ;; worldlink|sekaicomp|hyprland) echo sekai45 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"

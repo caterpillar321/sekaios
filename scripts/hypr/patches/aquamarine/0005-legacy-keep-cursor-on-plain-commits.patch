@@ -1,0 +1,20 @@
+diff --git a/src/backend/drm/impl/Legacy.cpp b/src/backend/drm/impl/Legacy.cpp
+--- a/src/backend/drm/impl/Legacy.cpp
++++ b/src/backend/drm/impl/Legacy.cpp
+@@ -86,8 +86,14 @@
+ 
+     // TODO: gamma
+ 
+-    if (data.cursorFB && connector->crtc->cursor && connector->output->cursorVisible && enable &&
+-        (STATE.committed & COutputState::AQ_OUTPUT_STATE_CURSOR_SHAPE || STATE.committed & COutputState::AQ_OUTPUT_STATE_CURSOR_POS)) {
++    // Only touch the cursor when this commit changes it (shape / position) or modesets the CRTC. Every other commit used to fall
++    // into the hide branch below, so any repaint while the pointer stood still (a hover effect, a clock tick) made the cursor
++    // vanish until the next motion — legacy KMS is what nouveau gets (no atomic for userspace by default).
++    const bool CURSORCHANGE =
++        (STATE.committed & COutputState::AQ_OUTPUT_STATE_CURSOR_SHAPE) || (STATE.committed & COutputState::AQ_OUTPUT_STATE_CURSOR_POS) || data.modeset;
++    if (!CURSORCHANGE || !connector->crtc->cursor) {
++        // leave the cursor plane as it is
++    } else if (data.cursorFB && connector->output->cursorVisible && enable) {
+         uint32_t boHandle = 0;
+         auto     attrs    = data.cursorFB->buffer->dmabuf();
+ 
