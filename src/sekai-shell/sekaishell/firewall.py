@@ -148,6 +148,33 @@ def zone_ports(zone):
     return out
 
 
+def app_service(app_id):
+    """허용한 앱(sekai-app-<id>)의 (포트 집합, "home"|"all") — 없으면 None.
+    모든 네트워크 허용이면 공용 존에도 들어 있다 (sekai-firewall app add)"""
+    svc = f"sekai-app-{app_id}"
+    try:
+        cfg = _fw_call("getServiceSettings2", GLib.Variant("(s)", (svc,)), iface="org.fedoraproject.FirewallD1")
+        ports = {f"{p}/{proto}" for p, proto in cfg.get("ports", [])}
+        where = "all" if svc in _fw_call("getServices", GLib.Variant("(s)", ("public",))) else "home"
+        return ports, where
+    except Exception:
+        return None
+
+
+def public_connections():
+    """지금 연결된 네트워크 중 공용(public)인 것 — [(uuid, 이름)]. 존을 안 정한 연결도 공용"""
+    out = []
+    _, txt = _out(["nmcli", "-t", "-f", "UUID,DEVICE,NAME", "connection", "show", "--active"])
+    for line in txt.splitlines():
+        parts = line.split(":", 2)
+        if len(parts) < 3 or not parts[0] or parts[1] in ("", "lo"):
+            continue
+        z = _out(["nmcli", "-g", "connection.zone", "connection", "show", "uuid", parts[0]])[1].strip()
+        if z not in ("home",):
+            out.append((parts[0], parts[2].replace("\\:", ":")))
+    return out
+
+
 def active_zones():
     """지금 연결된 네트워크들의 존 — 비어 있으면(존을 안 정한 연결) public"""
     zones = set()

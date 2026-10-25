@@ -170,7 +170,11 @@ def cmd_profile(uuid, zone):
 def app_add(app, name, where, ports):
     svc = f"sekai-app-{app}"
     zones = ["home"] if where == "home" else ["home", "public"]
-    app_remove(app, quiet=True)                       # 같은 앱을 다시 추가하면 새 포트·범위로 바꾼다
+    # 같은 앱을 다시 추가하면 새 포트·범위로 바꾼다 — 처음이면 지우지 않는다: 없는 서비스를 지우려 하면 firewalld 가
+    #   NOT_ENABLED·INVALID_SERVICE 를 남겨, 허용이 안 들어간 줄 알았다 (2026-10-25 Maya — 실제로는 들어가 있었다)
+    rc, out = fw("--get-services")
+    if rc == 0 and svc in out.split():
+        app_remove(app, quiet=True)
     for args in ([f"--new-service={svc}"], [f"--service={svc}", f"--set-short={name}"],
                  [f"--service={svc}", "--set-description=SekaiOS 허용된 앱"],
                  *[[f"--service={svc}", f"--add-port={p}"] for p in ports]):
@@ -183,6 +187,8 @@ def app_add(app, name, where, ports):
 def app_remove(app, quiet=False):
     svc = f"sekai-app-{app}"
     for z in ZONES:
+        if fw(f"--zone={z}", f"--query-service={svc}")[0] != 0:
+            continue                                  # 그 존엔 없다 — 지우려 하면 firewalld 가 NOT_ENABLED 경고를 남긴다
         fw(f"--zone={z}", f"--remove-service={svc}" if daemon() else f"--remove-service-from-zone={svc}")
     rc, out = fw(f"--delete-service={svc}")
     if rc != 0 and not quiet and "INVALID_SERVICE" not in (out or ""):

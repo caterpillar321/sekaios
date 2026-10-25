@@ -77,16 +77,27 @@ class FirewallPrompt:
                 return
             self._sig = sig
             if firewall.running():
-                apps = [a for a in firewall.listening_apps()
-                        # 허용·거부를 이미 고른 앱은 다시 묻지 않는다 (예전엔 허용한 앱도 포트가 늘면 또 물었다)
-                        if a["exe"] not in self.decisions and a["exe"] not in self.asked]
-                if apps:
+                listening = firewall.listening_apps()
+                # 허용한 앱이 나중에 새 포트로도 기다리면 그 포트만 더할지 묻는다 — 허용할 때 열려 있던 포트만 서비스에
+                #   들어가서, 뒤늦게 연 포트(Maya 의 18801)는 허용한 줄 알았는데 막혀 있었다 (2026-10-25).
+                #   예전처럼 "허용할까요?"를 처음부터 다시 묻지는 않는다. 거부한 앱은 묻지 않는다
+                for a in listening:
+                    if self.decisions.get(a["exe"]) != "allow":
+                        continue
+                    svc = firewall.app_service(a["id"])
+                    new = [p for p in a["ports"] if svc and p not in svc[0]]
+                    if new and (a["exe"], tuple(new)) not in self.asked:
+                        found = dict(a, more=new, have=sorted(svc[0]), where=svc[1])
+                        break
+                apps = [a for a in listening if a["exe"] not in self.decisions and a["exe"] not in self.asked]
+                if apps and not found:
                     zones = firewall.active_zones()
                     opened = set().union(*(firewall.zone_ports(z) for z in zones))
                     for a in apps:
                         closed = [p for p in a["ports"] if p not in opened]
                         if closed:
-                            found = dict(a, closed=closed, zones=sorted(zones))
+                            found = dict(a, closed=closed, zones=sorted(zones),
+                                         publics=firewall.public_connections() if "public" in zones else [])
                             break
         except Exception as e:
             dbg("[방화벽] 살피기 실패", e)
@@ -94,13 +105,45 @@ class FirewallPrompt:
 
     def _found(self, a):
         self.busy = False
-        if a:
+        if a and a.get("more"):
+            self.asked.add((a["exe"], tuple(a["more"])))
+            self._ask_more(a)
+        elif a:
             self.asked.add(a["exe"])
             self._ask(a)
         return False
 
-    # ── 묻기 ──
-    def _ask(self, a):
+    def _ask_more(self, a):
+        """허용한 앱이 새 포트로도 기다린다 — 그 포트도 열지"""
+        d = self._window()
+        box = d.get_child()
+        title = Gtk.Label(xalign=0)
+        title.set_markup("<b>허용한 앱이 새 포트를 씁니다</b>")
+        box.add(title)
+        where = "모든 네트워크" if a["where"] == "all" else "개인 네트워크"
+        info = Gtk.Label(label=f"{a['name']} 이(가) 새 포트로도 연결을 기다립니다 ({', '.join(a['more'])}).\n"
+                               f"이 앱은 {where}에서 허용되어 있지만 이 포트는 아직 막혀 있습니다. 이 포트도 열까요?\n\n{a['exe']}",
+                         xalign=0)
+        info.set_line_wrap(True)
+        info.set_max_width_chars(60)
+        info.set_selectable(True)
+        box.add(info)
+        btns = Gtk.Box(spacing=8)
+        btns.set_halign(Gtk.Align.END)
+        b_no = Gtk.Button(label="그대로 두기")
+        b_yes = Gtk.Button(label="이 포트도 열기")
+        for b in (b_no, b_yes):
+            btns.pack_start(b, False, False, 0)
+        box.add(btns)
+        ports = sorted(set(a["have"]) | set(a["ports"]))[:16]
+        b_yes.connect("clicked", lambda *_: (self._close(), self._helper(["app", "add", a["id"], a["name"], a["where"], *ports],
+                                                                          lambda: None)))
+        b_no.connect("clicked", lambda *_: self._close())
+        d.connect("delete-event", lambda *_: (self._close(), False)[1])
+        b_yes.grab_focus()
+        d.show_all()
+
+    def _window(self):
         d = Gtk.Window(title="방화벽")
         d.set_keep_above(True)
         d.set_resizable(False)
@@ -109,6 +152,12 @@ class FirewallPrompt:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         box.set_border_width(20)
         d.add(box)
+        return d
+
+    # ── 묻기 ──
+    def _ask(self, a):
+        d = self._window()
+        box = d.get_child()
         title = Gtk.Label(xalign=0)
         title.set_markup("<b>방화벽이 이 앱의 연결을 막았습니다</b>")
         box.add(title)
@@ -119,6 +168,17 @@ class FirewallPrompt:
         info.set_max_width_chars(60)
         info.set_selectable(True)
         box.add(info)
+        pub = a.get("publics") or []
+        if pub:
+            # 공용 네트워크에서 "개인에서 허용"을 고르면 지금 연결에선 여전히 막힌다 — 그걸 모르고 허용한 줄 알았다 (2026-10-25)
+            names = ", ".join(n for _u, n in pub)
+            note = Gtk.Label(label=f"지금 연결({names})은 공용 네트워크입니다. ‘개인 네트워크에서 허용’만 고르면 이 연결에서는 "
+                                   f"계속 막힙니다. 집·회사처럼 믿을 수 있는 네트워크라면 ‘개인으로 바꾸고 허용’을 고르세요.",
+                             xalign=0)
+            note.set_line_wrap(True)
+            note.set_max_width_chars(60)
+            note.get_style_context().add_class("dim-label")
+            box.add(note)
         btns = Gtk.Box(spacing=8)
         btns.set_halign(Gtk.Align.END)
         b_home = Gtk.Button(label="개인 네트워크에서 허용")
@@ -126,6 +186,10 @@ class FirewallPrompt:
         b_no = Gtk.Button(label="허용 안 함")
         for b in (b_no, b_all, b_home):
             btns.pack_start(b, False, False, 0)
+        if pub:
+            b_priv = Gtk.Button(label="개인으로 바꾸고 허용")
+            btns.pack_start(b_priv, False, False, 0)
+            b_priv.connect("clicked", lambda *_: self._allow(a, "home", make_private=[u for u, _n in pub]))
         box.add(btns)
         b_home.connect("clicked", lambda *_: self._allow(a, "home"))
         b_all.connect("clicked", lambda *_: self._allow(a, "all"))
@@ -144,25 +208,33 @@ class FirewallPrompt:
         self._save()
         self._close()
 
-    def _allow(self, a, where):
-        from gi.repository import Gio
+    def _allow(self, a, where, make_private=()):
         self._close()
-        cmd = ["pkexec", firewall.HELPER, "app", "add", a["id"], a["name"], where, *a["ports"]]
+
+        def done():
+            self.decisions[a["exe"]] = "allow"
+            self._save()
+            self.asked.discard(a["exe"])
+            for u in make_private:                # 관리자 인증은 방금 받아 둔 것(auth_admin_keep)으로 이어진다
+                self._helper(["profile", u, "home"], lambda: None)
+        self._helper(["app", "add", a["id"], a["name"], where, *a["ports"]], done)
+
+    def _helper(self, args, on_ok):
+        from gi.repository import Gio
+        cmd = ["pkexec", firewall.HELPER, *args]
         try:
             proc = Gio.Subprocess.new(cmd, Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_MERGE)
         except GLib.Error as e:
             dbg("[방화벽] 도우미를 띄우지 못함", e.message)
             return
 
-        def done(p, res):
+        def fin(p, res):
             try:
                 _ok, out, _err = p.communicate_utf8_finish(res)
             except GLib.Error:
                 out = ""
             if p.get_successful():
-                self.decisions[a["exe"]] = "allow"
-                self._save()
-                self.asked.discard(a["exe"])
+                on_ok()
             else:
-                dbg("[방화벽] 허용하지 못함 (인증 취소?)", (out or "").strip()[-200:])
-        proc.communicate_utf8_async(None, None, done)
+                dbg("[방화벽] 도우미 실패 (인증 취소?)", args[0], (out or "").strip()[-200:])
+        proc.communicate_utf8_async(None, None, fin)
