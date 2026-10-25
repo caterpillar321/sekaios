@@ -16,6 +16,16 @@ sekai_gpu_check() {
     ls /dev/dri/card* >/dev/null 2>&1 || return 0        # DRM 장치가 아예 없음 → 기본 화면 모드의 몫
     command -v eglinfo >/dev/null 2>&1 || return 0
     r=$(timeout 8 eglinfo -B -p gbm 2>/dev/null | sed -n 's/^OpenGL ES profile renderer: //p' | head -1)
+    # gbm 은 화면 장치의 주 노드(cardN)를 연다. 다른 프로그램이 화면을 쥐고 있으면(부팅 직후의 Plymouth, 돌고 있는 합성기)
+    #   amdgpu 는 인증 안 된 주 노드의 GPU 요청을 막아(ACCEL_WORKING -13) Mesa 가 llvmpipe 로 내려간다 — 가속이 멀쩡한 AMD 에서
+    #   부팅 직후의 로그인 화면·첫 설정이 CPU 로 그려지고 하드웨어 커서가 버려져 커서가 안 보였다 (8600G, 2026-10-25).
+    #   렌더 노드(renderD*)는 인증이 필요 없다 — 거기서 가속이 잡히면 그걸 믿는다. NVIDIA 는 gbm 쪽으로 잡힌다
+    case "$r" in
+        ""|*llvmpipe*|*softpipe*|*swrast*|*SWR*)
+            r2=$(timeout 8 eglinfo -B -p surfaceless 2>/dev/null | sed -n 's/^OpenGL ES profile renderer: //p' | head -1)
+            case "$r2" in ""|*llvmpipe*|*softpipe*|*swrast*|*SWR*) ;; *) r=$r2 ;; esac
+            ;;
+    esac
     case "$r" in
         ""|*llvmpipe*|*softpipe*|*swrast*|*SWR*)
             # 둘 다 있어야 한다: CPU 로 그리고(LIBGL_ALWAYS_SOFTWARE),
