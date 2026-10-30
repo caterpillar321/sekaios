@@ -1,6 +1,8 @@
 #!/usr/bin/python3
 # SekaiOS — DDR5 램 SPD 허브의 쪽 번호(MR11)를 0 으로 둔다.
 #   sekai-spd-page0 prime 1-0050   udev 가 spd5118 을 붙일 때 (60-sekai-spd.rules)
+#   sekai-spd-page0 prime-all      부팅 때 udev 가 끝난 뒤 한 번 더 (sekai-spd-prime.service) — udev 의 bind 처리가
+#                                  아예 안 돈 허브가 있었다 (메인 PC 1-0050, 2026-10-25·10-30 — 실패 기록도 없이 빠짐)
 #   sekai-spd-page0 [reboot|…]     꺼지거나 다시 시작하기 직전 (systemd-shutdown 훅)
 #
 # DDR5 SPD 는 1024 바이트를 128 바이트 8쪽으로 나눠 보이고, 몇 쪽을 볼지는 허브의 MR11 로 고른다.
@@ -69,21 +71,32 @@ def fix(name):
         log(f"{name}: {e!r}")
 
 
-def main():
-    if sys.argv[1:2] == ["prime"]:
-        name = os.path.basename(sys.argv[2])
-        try:
-            with open(f"{DRIVER}/{name}/eeprom", "rb") as f:
-                f.read()
-        except OSError as e:
-            log(f"{name}: eeprom {e}")
-        fix(name)
-        return
+def prime(name):
+    # 캐시가 이미 찼으면 이 읽기는 버스에 닿지 않고, 쪽 번호가 0 이면 fix 는 쓰지 않는다 — 두 번 불러도 된다
     try:
-        devs = [n for n in os.listdir(DRIVER) if "-" in n]
+        with open(f"{DRIVER}/{name}/eeprom", "rb") as f:
+            f.read()
+    except OSError as e:
+        log(f"{name}: eeprom {e}")
+    fix(name)
+
+
+def devices():
+    try:
+        return sorted(n for n in os.listdir(DRIVER) if "-" in n)
     except OSError:
-        return                                  # DDR5 SPD 허브가 없다
-    for n in devs:
+        return []                               # DDR5 SPD 허브가 없다
+
+
+def main():
+    if sys.argv[1:2] == ["prime"] and len(sys.argv) == 3:
+        prime(os.path.basename(sys.argv[2]))
+        return
+    if sys.argv[1:] == ["prime-all"]:
+        for n in devices():
+            prime(n)
+        return
+    for n in devices():
         fix(n)
 
 

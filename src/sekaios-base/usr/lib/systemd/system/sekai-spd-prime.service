@@ -1,0 +1,16 @@
+[Unit]
+Description=SekaiOS DDR5 SPD 쪽 번호 되돌리기 (부팅 때 한 번 더)
+# udev 의 bind 처리(60-sekai-spd.rules)가 빠진 허브가 있었다 — udev 가 끝난 뒤 모든 허브를 다시 prime 한다.
+#   로그인(OpenRGB 의 램 감지 등)보다 먼저. 허브가 없으면 아무것도 안 한다 (sekai-spd-page0 의 설명)
+DefaultDependencies=no
+After=systemd-udev-trigger.service systemd-modules-load.service
+Before=greetd.service display-manager.service sysinit.target
+
+[Service]
+Type=oneshot
+ExecStartPre=-/usr/bin/udevadm settle -t 10
+ExecStart=/usr/libexec/sekai/sekai-spd-page0 prime-all
+TimeoutStartSec=60
+
+[Install]
+WantedBy=sysinit.target

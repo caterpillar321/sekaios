@@ -450,6 +450,8 @@ if [ "$1" = "configure" ]; then
     systemctl enable sekai-drives.service >/dev/null 2>&1 || true
     # 칩셋 슬롯 블랙웰 카드 — 커널 자동 재배치가 칩셋 USB 를 죽이면 다음 부팅부터 pci=realloc=off (sekai-pci)
     systemctl enable sekai-pci.service >/dev/null 2>&1 || true
+    # DDR5 SPD 쪽 번호 — udev 가 빠뜨린 허브도 부팅 때 한 번 더 (sekai-spd-page0 prime-all)
+    systemctl enable sekai-spd-prime.service >/dev/null 2>&1 || true
     [ -d /run/systemd/system ] && sysctl -q -p /etc/sysctl.d/60-sekai-panic.conf >/dev/null 2>&1 || true
     if [ ! -d /run/live/medium ] && [ ! -f /etc/snapper/configs/root ] \
        && [ "$(findmnt -no FSTYPE,FSROOT / 2>/dev/null)" = "btrfs /@" ] && mountpoint -q /.snapshots; then
