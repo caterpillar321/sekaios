@@ -386,7 +386,7 @@ Priority: optional
 Depends: sekai-shell (= ${FULL}),
  worldlink (>= 0.50.1-sekai34), hyprbars (>= 0.50.0-sekai31), hyprexpo, xwayland,
  xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr,
- swaybg, swayidle, swaylock, grim, slurp, wl-clipboard, cliphist, libnotify-bin,
+ swaybg, swayidle, swaylock, grim, slurp, wf-recorder, wl-clipboard, cliphist, libnotify-bin,
  brightnessctl, playerctl, wtype, pkexec,
  xserver-xorg-core, xserver-xorg-video-fbdev, xserver-xorg-input-libinput, xserver-xorg-legacy,
  xinit, xauth, x11-xserver-utils, xfwm4, xfconf, sxhkd, xcape, xsecurelock, xss-lock, maim, slop, xclip,

@@ -582,7 +582,18 @@ class NotificationService:
                               actions, hints, timeout)
             inv.return_value(GLib.Variant("(u)", (nid,)))
         elif method == "CloseNotification":
-            self.close(params.unpack()[0], CLOSED_BY_CALL)
+            # 앱이 거둔 알림은 센터에서도 걷는다 (GNOME 처럼) — 녹화 중지·읽음 처리 등이 끝난 뒤 받을 쪽 없는 카드가 남았다
+            nid = params.unpack()[0]
+            if any(h.id == nid for h in self.history):
+                self.history = [h for h in self.history if h.id != nid]
+                self._save_history()
+                if nid in self._unread_ids:              # 안 읽은 수(배지)에서도
+                    self._unread_ids.discard(nid)
+                    self.unread = max(0, self.unread - 1)
+                if self.center is not None and self.center.get_visible():
+                    self.center.rebuild()
+                self._changed()
+            self.close(nid, CLOSED_BY_CALL)
             inv.return_value(None)
         else:
             inv.return_value(None)
