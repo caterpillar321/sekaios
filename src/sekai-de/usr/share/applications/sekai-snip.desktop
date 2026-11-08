@@ -1,0 +1,21 @@
+[Desktop Entry]
+Type=Application
+Name=Snipping Tool
+Name[ko]=캡처 도구
+GenericName=Screenshot
+GenericName[ko]=화면 캡처
+Comment=Capture all or part of the screen
+Comment[ko]=화면 전체나 일부, 창을 찍습니다
+Exec=sekai-snip
+Icon=applets-screenshooter
+Terminal=false
+Categories=Utility;Graphics;GTK;
+Keywords=캡처;캡처 도구;스크린샷;화면 캡처;화면 찍기;스냅;snipping;snip;screenshot;capture;print screen;
+StartupNotify=true
+StartupWMClass=org.sekaios.Snip
+Actions=new;
+
+[Desktop Action new]
+Name=New capture
+Name[ko]=새 캡처
+Exec=sekai-snip --new

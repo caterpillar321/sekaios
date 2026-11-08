@@ -426,7 +426,12 @@ class ToastStack(Gtk.Window):
         self.show_all()
 
     def _expire(self, nid):
-        self.service.close(nid, EXPIRED)
+        # 단추가 있는 알림은 토스트만 걷고 센터에 살려 둔다 (윈도우·GNOME 처럼) — 예전엔 6초 뒤 닫힘 신호를 보내
+        #   기다리던 쪽(sekai-screenshot 의 notify-send)이 끝나 버려, 센터나 늦게 누른 [열기]·[폴더]가 아무 일도 안 했다
+        if self.service.keeps_alive(self.service.live.get(nid)):
+            self.drop(nid)
+        else:
+            self.service.close(nid, EXPIRED)
         return False
 
     def drop(self, nid):
@@ -599,9 +604,7 @@ class NotificationService:
         if not n.transient:
             self.history = [h for h in self.history if h.id != nid]
             self.history.append(n)
-            keep = max_history()
-            if len(self.history) > keep:
-                self.history = self.history[-keep:]
+            self._trim_history()
             self._save_history()
             # 갱신(진행률 등)마다 늘리면 센터엔 1건인데 배지는 갱신 횟수만큼 커졌다
             if nid not in self._unread_ids:
@@ -613,7 +616,8 @@ class NotificationService:
             self.toasts.push(n)
         elif not n.resident:
             # 방해 금지: 토스트는 안 띄우지만 "닫힘" 신호는 보내야 한다 — 안 그러면
-            # 동작 버튼을 기다리는 쪽(notify-send --action 등)이 영영 끝나지 않고 쌓인다
+            # 기다리는 쪽(notify-send --wait 등)이 영영 끝나지 않고 쌓인다. 단추가 있는 것은 센터에서 누를 수 있게
+            # 살려 두고(keeps_alive), 센터에서 지우거나 보관 개수를 넘을 때 닫는다
             GLib.timeout_add(self.timeout_for(n) or 6000, self._dnd_expire, nid)
         if self.center is not None and self.center.get_visible():
             self.center.rebuild()
@@ -635,9 +639,24 @@ class NotificationService:
             return 6000
 
     def _dnd_expire(self, nid):
-        if nid in self.live:
+        if nid in self.live and not self.keeps_alive(self.live[nid]):
             self.close(nid, EXPIRED)
         return False
+
+    @staticmethod
+    def keeps_alive(n):
+        """토스트가 사라져도 닫지 않을 알림 — 단추(동작)가 있고 센터 기록에 남는 것"""
+        return n is not None and bool(n.actions) and not n.transient
+
+    def _trim_history(self):
+        """보관 개수를 넘은 옛 기록을 버린다 — 아직 살아 있던 것은 그때 닫는다 (기다리는 쪽이 끝나게)"""
+        keep = max_history()
+        if len(self.history) <= keep:
+            return
+        old, self.history = self.history[:-keep], self.history[-keep:]
+        for h in old:
+            if h.id in self.live:
+                self.close(h.id, EXPIRED)
 
     def close(self, nid, reason=CLOSED_BY_CALL):
         if self.toasts is not None:
@@ -657,7 +676,11 @@ class NotificationService:
             return
         self._emit("ActionInvoked", GLib.Variant("(us)", (n.id, key)))
         if not n.resident:
-            self.close(n.id, DISMISSED)
+            # 눌러서 끝난 알림은 센터에서도 걷는다 (윈도우처럼) — 남겨 두면 받을 쪽이 없는 단추가 그대로 보였다
+            in_center = self.center is not None and self.center.get_visible()
+            self.forget(n)
+            if in_center:
+                self.center.close()             # 연 앱이 앞에 보이게
 
     def forget(self, n):
         """센터 기록에서 지우기."""
@@ -695,9 +718,8 @@ class NotificationService:
             self._cleared_seen = cleared
             self.clear_history()
             return
-        keep = max_history()
-        if len(self.history) > keep:
-            self.history = self.history[-keep:]
+        if len(self.history) > max_history():
+            self._trim_history()
             self._save_history()
             if self.center is not None and self.center.get_visible():
                 self.center.rebuild()
@@ -717,7 +739,7 @@ class NotificationService:
             #   resident 는 방해 금지 중에 온 것처럼 토스트만 걷는다 — 센터에서 눌러 동작을 부를 수 있게
             for nid in list(self.toasts.cards):
                 n = self.live.get(nid)
-                if n is not None and n.resident and not n.transient:
+                if n is not None and (n.resident or self.keeps_alive(n)) and not n.transient:
                     self.toasts.drop(nid)
                 else:
                     self.close(nid, DISMISSED)

@@ -31,6 +31,7 @@ install -Dm755 "$SRC/sekai-appinstall" "$STAGE/usr/bin/sekai-appinstall"
 install -Dm755 "$SRC/sekai-wine"      "$STAGE/usr/bin/sekai-wine"
 install -Dm755 "$SRC/sekai-store"     "$STAGE/usr/bin/sekai-store"
 install -Dm755 "$SRC/sekai-calc"      "$STAGE/usr/bin/sekai-calc"
+install -Dm755 "$SRC/sekai-snip"      "$STAGE/usr/bin/sekai-snip"
 install -Dm755 "$SRC/sekai-photos"    "$STAGE/usr/bin/sekai-photos"
 install -Dm755 "$SRC/sekai-wallpaper" "$STAGE/usr/bin/sekai-wallpaper"
 install -Dm755 "$SRC/sekai-desk"      "$STAGE/usr/bin/sekai-desk"
@@ -73,8 +74,8 @@ for f in "$SRC/sekaisettings/pages"/*.py; do install -Dm644 "$f" "$DIST/sekaiset
 mkdir -p "$DIST/sekaiadmin/pages"
 for f in "$SRC/sekaiadmin"/*.py;        do install -Dm644 "$f" "$DIST/sekaiadmin/$(basename "$f")"; done
 for f in "$SRC/sekaiadmin/pages"/*.py;  do install -Dm644 "$f" "$DIST/sekaiadmin/pages/$(basename "$f")"; done
-# 파일 탐색기 (sekai-files) · 메모장 (sekai-notepad) · 계산기 (sekai-calc) · 사진 (sekai-photos) · 앱 설치 관리자 (sekai-appinstall) · 스토어 (sekai-store)
-for pkg in sekaifiles sekainotepad sekaicalc sekaiphotos sekaiappinstall sekaistore sekaiwine nenerobo; do
+# 파일 탐색기 (sekai-files) · 메모장 (sekai-notepad) · 계산기 (sekai-calc) · 사진 (sekai-photos) · 앱 설치 관리자 (sekai-appinstall) · 스토어 (sekai-store) · 캡처 도구 (sekai-snip)
+for pkg in sekaifiles sekainotepad sekaicalc sekaiphotos sekaiappinstall sekaistore sekaiwine nenerobo sekaisnip; do
     mkdir -p "$DIST/$pkg"
     for f in "$SRC/$pkg"/*.py; do install -Dm644 "$f" "$DIST/$pkg/$(basename "$f")"; done
 done
