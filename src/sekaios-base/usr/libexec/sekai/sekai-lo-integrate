@@ -1,0 +1,98 @@
+#!/bin/sh
+# SekaiOS — 리브레오피스 연동 패키지를 자동으로 챙긴다 (/etc/apt/apt.conf.d/81sekai-libreoffice)
+#
+#   sekai-lo-integrate check    apt 가 패키지를 바꾼 뒤마다 (빠르게 — dpkg-query 몇 번뿐)
+#   sekai-lo-integrate install  check 가 systemd-run 으로 띄운다 — 실행 중인 apt 가 끝나기를 기다렸다가 깐다
+#
+# 왜: 데비안의 libreoffice-gtk3·libreoffice-l10n-* 는 Suggests 라 apt(추천만 깖)·스토어로 깔면 빠진다.
+#   gtk3 가 없으면 리브레오피스가 X11 기본 화면(gen VCL)으로 떠 Sekai 테마가 안 먹고 모양새도 낡았다 (2026-11-14 메인 PC).
+#   언어 팩이 없으면 메뉴가 영어다.
+#
+# 한 번만: 리브레오피스가 깔려 있는 동안 한 번 챙기면 표시(MARK)를 남겨, 사용자가 일부러 지운 연동 패키지를 다시 깔지
+#   않는다. 리브레오피스를 지우면 표시도 지워 다음에 다시 깔 때 또 챙긴다. 시스템 언어를 바꾸면 그 언어 팩을 한 번 더 챙긴다.
+set -u
+
+MARK=/var/lib/sekai/lo-integrated     # 내용: 챙길 때의 언어 (예: ko)
+UNIT=sekai-lo-integrate
+
+installed() {
+    [ "$(dpkg-query -W -f='${db:Status-Status}' "$1" 2>/dev/null)" = installed ]
+}
+
+# 시스템 언어 → 언어 팩 이름 후보 (ko_KR.UTF-8 → "ko-kr ko", zh_TW → "zh-tw zh"). 영어(미국)는 없음 — 기본 내장
+lang_raw() {
+    L=""
+    for f in /etc/default/locale /etc/locale.conf; do
+        [ -r "$f" ] || continue
+        L=$(sed -n 's/^LANG=["'\'']\{0,1\}\([^"'\''.@]*\).*/\1/p' "$f" | tail -n 1)
+        [ -n "$L" ] && break
+    done
+    printf '%s' "$L"
+}
+
+lang_candidates() {
+    L=$(lang_raw)
+    case "$L" in ""|C|POSIX|en_US|en) return 0 ;; esac
+    ll=$(printf '%s' "${L%%_*}" | tr 'A-Z' 'a-z')
+    case "$L" in
+        *_*) cc=$(printf '%s' "${L#*_}" | tr 'A-Z' 'a-z'); printf 'libreoffice-l10n-%s-%s libreoffice-l10n-%s\n' "$ll" "$cc" "$ll" ;;
+        *)   printf 'libreoffice-l10n-%s\n' "$ll" ;;
+    esac
+}
+
+# 아직 없는 것 (언어 팩은 후보 중 하나라도 깔려 있으면 됐다)
+missing() {
+    installed libreoffice-gtk3 || printf 'libreoffice-gtk3\n'
+    c=$(lang_candidates)
+    [ -n "$c" ] || return 0
+    for p in $c; do installed "$p" && return 0; done
+    printf '%s\n' "$c"
+}
+
+check() {
+    if ! installed libreoffice-core; then
+        rm -f "$MARK"
+        return 0
+    fi
+    lang=$(lang_raw)
+    [ -f "$MARK" ] && [ "$(cat "$MARK" 2>/dev/null)" = "$lang" ] && return 0
+    if [ -z "$(missing)" ]; then
+        mkdir -p "${MARK%/*}" && printf '%s' "$lang" > "$MARK"
+        return 0
+    fi
+    # 지금은 apt 가 잠금을 쥐고 있다 — 따로 띄워 끝나기를 기다리게. systemd 가 없는 곳·chroot(이미지 만들기·설치
+    # 프로그램)면 그냥 넘어간다
+    [ -d /run/systemd/system ] || return 0
+    [ "$(stat -c %d:%i / 2>/dev/null)" = "$(stat -c %d:%i /proc/1/root/. 2>/dev/null)" ] || return 0
+    systemctl is-active --quiet "$UNIT" 2>/dev/null && return 0
+    systemctl reset-failed "$UNIT" >/dev/null 2>&1
+    systemd-run --no-block --quiet --unit="$UNIT" --description="리브레오피스 연동 패키지 설치" \
+        --property=Type=oneshot /usr/libexec/sekai/sekai-lo-integrate install >/dev/null 2>&1 || true
+}
+
+install_missing() {
+    installed libreoffice-core || return 0
+    lang=$(lang_raw)
+    want=""
+    for p in $(missing); do
+        case "$p" in
+            libreoffice-l10n-*) [ -n "$(apt-cache policy "$p" 2>/dev/null | sed -n 's/^ *Candidate: *//p' | grep -v '(none)')" ] || continue
+                                case " $want " in *" libreoffice-l10n-"*) continue ;; esac ;;
+        esac
+        want="$want $p"
+    done
+    if [ -n "$want" ]; then
+        echo "깔 것:$want"
+        # 사용자의 apt·스토어가 아직 돌고 있으면 잠금이 풀리길 기다린다 (최대 15분)
+        # 복원 지점은 만들지 않는다 — 리브레오피스를 깔기 전 지점이 이미 있다
+        DEBIAN_FRONTEND=noninteractive SEKAI_NO_SNAPSHOT=1 \
+            apt-get -o DPkg::Lock::Timeout=900 -o Dpkg::Options::=--force-confold -y install $want || return 1
+    fi
+    mkdir -p "${MARK%/*}" && printf '%s' "$lang" > "$MARK"
+}
+
+case "${1:-}" in
+    check)   check ;;
+    install) install_missing ;;
+    *) echo "쓰임: sekai-lo-integrate check|install" >&2; exit 2 ;;
+esac

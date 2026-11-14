@@ -1,0 +1,4 @@
+// SekaiOS — 리브레오피스를 깔면 GTK3 연동(libreoffice-gtk3)과 시스템 언어의 언어 팩(libreoffice-l10n-<언어>)도 이어서 깐다.
+//   데비안은 둘을 "제안(Suggests)"으로만 두어, 빠지면 X11 기본 화면(gen)으로 떠 테마도 안 먹고 메뉴도 영어다.
+//   패키지 설치가 끝난 뒤 따로 깐다 (apt 가 끝나기를 기다렸다가). 사용자가 일부러 지운 건 다시 깔지 않는다.
+DPkg::Post-Invoke { "[ ! -x /usr/libexec/sekai/sekai-lo-integrate ] || /usr/libexec/sekai/sekai-lo-integrate check || true"; };
