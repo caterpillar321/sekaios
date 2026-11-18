@@ -57,6 +57,11 @@ mnt
 say "패키지 인덱스 갱신"
 inroot "apt-get update -qq" >/dev/null
 
+say "데비안 패키지 최신으로 (보안 업데이트·새 커널)"
+#   예전엔 SekaiOS 패키지만 새로 깔아 rootfs 를 만든 날의 커널·라이브러리가 그대로 남았다
+#   (2026-11-18 0006 빌드 때 rootfs 커널 6.12.111, 저장소 최신 6.12.117). 설치하자마자 큰 업데이트가 뜨지 않게.
+inroot "apt-get -y -o Dpkg::Options::=--force-confold full-upgrade" 2>&1 | tail -3
+
 say "SekaiOS 데스크탑 설치 (sekai-desktop 메타패키지)"
 #   앱 목록은 이제 sekai-desktop 의 Depends 가 정의한다.
 #   이미지와 '업그레이드된 옛 설치본'이 같은 목록으로 수렴하게 하려는 것.
