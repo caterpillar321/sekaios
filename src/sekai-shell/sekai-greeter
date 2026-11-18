@@ -34,7 +34,7 @@ from sekaishell.greetd import Greetd, GreetdError   # noqa: E402
 from sekaishell import wallpaint                      # noqa: E402
 
 DEMO = os.environ.get("SEKAI_GREETER_DEMO") == "1"
-WALLPAPER = "/usr/share/backgrounds/sekai/hatsune.png"
+WALLPAPER = "/usr/share/backgrounds/sekai/origami.png"
 SESSION_CMD = ["/usr/bin/sekai-session"]
 SESSION_ENV = ["XDG_SESSION_TYPE=wayland", "XDG_CURRENT_DESKTOP=SekaiOS",
                "XDG_SESSION_DESKTOP=SekaiOS"]           # (sekai-session 과 같게 — loginctl 의 Desktop 도 이것)

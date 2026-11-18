@@ -50,7 +50,7 @@ DEFAULTS = {
         "cursor_size": 24,
     },
     "wallpaper": {
-        "path": "/usr/share/backgrounds/sekai/hatsune.png",
+        "path": "/usr/share/backgrounds/sekai/origami.png",
         "mode": "fill",          # fill / fit / stretch / center / tile
         "color": "#151517",
     },

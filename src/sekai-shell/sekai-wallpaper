@@ -15,7 +15,7 @@ import sys
 import time
 
 CFG = os.path.expanduser("~/.config/sekai/settings.json")
-FALLBACK = "/usr/share/backgrounds/sekai/hatsune.png"
+FALLBACK = "/usr/share/backgrounds/sekai/origami.png"
 MODES = {"fill", "fit", "stretch", "center", "tile", "solid_color"}
 
 

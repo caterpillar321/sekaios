@@ -82,7 +82,7 @@ if DEMO:
     LOCKFILE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "sekai-lock-demo.pid")
     LOCKED_MARK = LOCKFILE + ".locked"
 CFG = os.path.expanduser("~/.config/sekai/settings.json")
-FALLBACK_WALL = "/usr/share/backgrounds/sekai/hatsune.png"
+FALLBACK_WALL = "/usr/share/backgrounds/sekai/origami.png"
 PAM_SERVICE = "sekai-lock"
 WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"]
 IDLE_BACK = 30          # 로그인 단계에서 이만큼(초) 가만히 있으면 커튼으로

@@ -44,7 +44,7 @@ from sekaishell import userenv, wallpaint  # noqa: E402
 
 CFG = os.path.expanduser("~/.config/sekai/settings.json")
 ICONS_CFG = os.path.expanduser("~/.config/sekai/desktop-icons.json")
-FALLBACK_WALL = "/usr/share/backgrounds/sekai/hatsune.png"
+FALLBACK_WALL = "/usr/share/backgrounds/sekai/origami.png"
 DEBUG = os.environ.get("SEKAI_DEBUG") == "1"
 
 ICON = 48                 # 아이콘 크기

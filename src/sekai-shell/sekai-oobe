@@ -49,7 +49,7 @@ ZONES = [("Asia/Seoul", "서울", "UTC+9"), ("Asia/Tokyo", "도쿄", "UTC+9"),
          ("America/Los_Angeles", "로스앤젤레스", "UTC-8"), ("UTC", "협정 세계시 (UTC)", "UTC")]
 ACCENTS = [("#39c5bb", "미쿠 틸"), ("#00e5ff", "시안"), ("#ff6b8a", "분홍"), ("#ffb454", "주황"),
            ("#8a7cff", "보라"), ("#4c9aff", "파랑"), ("#5ad17a", "초록"), ("#f1f1f3", "흰색")]
-WALLS = [("hatsune", "Hatsune"), ("sakura", "Sakura"), ("midnight", "Midnight")]
+WALLS = [("origami", "Origami"), ("hatsune", "Hatsune"), ("sakura", "Sakura"), ("midnight", "Midnight")]
 
 OOBE_CSS = """
 window.oobe { background: transparent; }
@@ -112,7 +112,7 @@ class Oobe(Gtk.Window):
         self.get_style_context().add_class("oobe")
         self.st = {"lang": "ko_KR.UTF-8", "timezone": "Asia/Seoul", "keyboard": "ko",
                    "hostname": "sekai-pc", "fullname": "", "username": "", "password": "",
-                   "accent": "#39c5bb", "wallpaper": "hatsune"}
+                   "accent": "#39c5bb", "wallpaper": "origami"}
         vis = Gdk.Screen.get_default().get_rgba_visual()
         if vis:
             self.set_visual(vis)
@@ -133,7 +133,7 @@ class Oobe(Gtk.Window):
         self._bgc = None                      # ((W, H, 배율, 그림), 그려 둔 배경) — _paint_bg
         self._bg_pending = None
         try:
-            self.bg = GdkPixbuf.Pixbuf.new_from_file(f"{WALLDIR}/hatsune.png")
+            self.bg = GdkPixbuf.Pixbuf.new_from_file(f"{WALLDIR}/origami.png")
         except Exception:
             pass
         ov = Gtk.Overlay()
@@ -576,7 +576,7 @@ class Oobe(Gtk.Window):
             v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
             v.get_style_context().add_class("wall-pick")
             try:
-                pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(f"{WALLDIR}/{key}.png", 240, 135, False)
+                pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(f"{WALLDIR}/{key}.png", 200, 112, False)  # 4장 (Origami 추가) — 한 줄에 들게
                 v.pack_start(Gtk.Image.new_from_pixbuf(pb), False, False, 0)
             except Exception:
                 v.pack_start(W.icon("image-x-generic", 64), False, False, 0)

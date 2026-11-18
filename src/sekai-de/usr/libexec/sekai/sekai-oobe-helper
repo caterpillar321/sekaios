@@ -39,7 +39,7 @@ RESERVED = {"root", "daemon", "bin", "sys", "sync", "games", "man", "lp", "mail"
             "_greetd", "messagebus", "polkitd", "sshd", "avahi", "pulse", "rtkit", "colord", "geoclue"}
 LANGS = {"ko_KR.UTF-8", "en_US.UTF-8", "ja_JP.UTF-8"}
 ACCENT_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
-WALLS = {"hatsune", "sakura", "midnight"}
+WALLS = {"origami", "hatsune", "sakura", "midnight"}
 ENV = dict(os.environ, LC_ALL="C.UTF-8", PATH="/usr/sbin:/usr/bin:/sbin:/bin")
 
 
@@ -167,7 +167,7 @@ def apply(req):
     pw = str(req.get("password", ""))
     kb = req.get("keyboard", "ko")
     accent = str(req.get("accent", "#39c5bb"))
-    wall = str(req.get("wallpaper", "hatsune"))
+    wall = str(req.get("wallpaper", "origami"))
 
     if lang not in LANGS:
         return {"ok": False, "error": "지원하지 않는 언어입니다"}
@@ -204,7 +204,7 @@ def apply(req):
     if not ACCENT_RE.match(accent):
         accent = "#39c5bb"
     if wall not in WALLS:
-        wall = "hatsune"
+        wall = "origami"
 
     # 시간대
     run(["timedatectl", "set-timezone", tz])
