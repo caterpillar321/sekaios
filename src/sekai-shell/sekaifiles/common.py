@@ -48,7 +48,7 @@ TRASH = "trash:///"
 
 SPECIAL_TITLES = {HOME: "홈", COMPUTER: "내 PC", TRASH: "휴지통"}
 SPECIAL_ICONS = {
-    HOME: ["user-home", "go-home", "folder"],
+    HOME: ["go-home", "user-home", "folder"],     # 집 모양 — 집 폴더(user-home)는 진짜 홈 폴더(~)가 쓴다
     COMPUTER: ["computer", "system", "drive-harddisk"],
     TRASH: ["user-trash", "user-trash-full", "trash-empty"],
 }

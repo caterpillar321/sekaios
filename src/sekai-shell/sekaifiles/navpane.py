@@ -1,7 +1,7 @@
 """파일 탐색기 — 왼쪽 탐색 창 (윈도우 11 처럼).
 
-    홈
-    ─ 즐겨찾기: 바탕 화면 · 다운로드 · 문서 · 사진 · 음악 · 동영상
+    홈 (윈도우 11 의 홈 — 최근·즐겨찾기 모음)
+    ─ 홈 폴더 (사용자 이름, ~ — 윈도우 탐색 창의 사용자 폴더) · 즐겨찾기: 바탕 화면 · 다운로드 · 문서 · 사진 · 음악 · 동영상
     ─ 내 PC
         로컬 디스크 (/) · USB 같은 드라이브 (연결 안 된 것도 — 누르면 연결) · 꺼내기 단추
     ─ 휴지통
@@ -9,12 +9,15 @@
 행에 파일을 놓으면 그리로 복사·이동 (휴지통이면 삭제). 드라이브 목록은 Gio.VolumeMonitor 를 따라 바로 바뀐다.
 창(host)이 주는 것: navigate(uri) · open_drive(drive) · eject_drive(drive) · nav_context_menu(row, event)
 """
+import os
+
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
-from .common import COMPUTER, HOME, TRASH, favorites, icons, image, list_drives, norm_uri, uri_of_path  # noqa: E402
+from .common import (COMPUTER, HOME, SPECIAL_ICONS, TRASH, favorites, home_dir, icons, image,  # noqa: E402
+                     list_drives, norm_uri, uri_of_path)
 from .views import DropTarget  # noqa: E402
 
 
@@ -117,8 +120,13 @@ class NavPane(Gtk.Box):
         for r in self.list.get_children():
             r.destroy()
         L = self.list
-        L.add(NavRow("loc", "홈", ["user-home", "go-home"], uri=HOME))
+        L.add(NavRow("loc", "홈", SPECIAL_ICONS[HOME], uri=HOME))
         L.add(self._sep())
+        # 진짜 홈 폴더(~) — 위의 "홈"은 모음 화면이라 리눅스의 홈 디렉터리로 바로 가는 길이 없었다 (2026-11-18)
+        home = home_dir()
+        row = NavRow("loc", os.path.basename(home) or home, ["user-home", "folder-home", "folder"], uri=uri_of_path(home))
+        row.set_tooltip_text(home)
+        L.add(row)
         for p, label, icons_ in favorites():
             L.add(NavRow("loc", label, icons_, uri=uri_of_path(p)))
         L.add(self._sep())
