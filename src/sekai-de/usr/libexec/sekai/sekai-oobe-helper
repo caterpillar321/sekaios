@@ -265,7 +265,7 @@ def _user_setup(user, lang, accent, wall, kb):
     settings = {
         "locale": {"lang": lang},
         "appearance": {"accent": accent},
-        "wallpaper": {"path": f"/usr/share/backgrounds/sekai/{wall}.jpg"},
+        "wallpaper": {"path": f"/usr/share/backgrounds/sekai/{wall}.png"},
     }
     if kb == "us":
         settings["input"] = {"kb_options": ""}

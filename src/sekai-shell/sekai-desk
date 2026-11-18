@@ -40,11 +40,11 @@ from sekaishell.layer import GtkLayerShell  # noqa: E402  (X11 기본 화면 모
 from sekaishell.popup import PanelPopup, make_translucent  # noqa: E402,F401
 from sekaishell.monitors import hypr_monitors, primary_gdk  # noqa: E402
 from sekaishell.launchers import desktop_dir, launcher_command, launcher_trusted, mark_trusted  # noqa: E402
-from sekaishell import userenv  # noqa: E402
+from sekaishell import userenv, wallpaint  # noqa: E402
 
 CFG = os.path.expanduser("~/.config/sekai/settings.json")
 ICONS_CFG = os.path.expanduser("~/.config/sekai/desktop-icons.json")
-FALLBACK_WALL = "/usr/share/backgrounds/sekai/hatsune.jpg"
+FALLBACK_WALL = "/usr/share/backgrounds/sekai/hatsune.png"
 DEBUG = os.environ.get("SEKAI_DEBUG") == "1"
 
 ICON = 48                 # 아이콘 크기
@@ -1319,31 +1319,16 @@ class Desk(Gtk.Window):
         key = (W, H, self.mode)
         if key in self.wall_cache:
             return self.wall_cache[key]
-        surf = cairo.ImageSurface(cairo.FORMAT_RGB24, W, H)
-        cr = cairo.Context(surf)
-        cr.set_source_rgb(*self.bgcolor)
-        cr.paint()
         pb = self._wall_pixbuf() if self.mode != "solid_color" else None
-        if pb is not None:
-            bw, bh = pb.get_width(), pb.get_height()
-            if self.mode == "tile":
-                Gdk.cairo_set_source_pixbuf(cr, pb, 0, 0)
-                cr.get_source().set_extend(cairo.EXTEND_REPEAT)
-                cr.paint()
-            else:
-                if self.mode == "fill":
-                    sx = sy = max(W / bw, H / bh)
-                elif self.mode == "fit":
-                    sx = sy = min(W / bw, H / bh)
-                elif self.mode == "stretch":
-                    sx, sy = W / bw, H / bh
-                else:                                   # center
-                    sx = sy = 1.0
-                # 한 번만 고품질로 줄여 둔다 (매 프레임 큰 그림을 스케일하면 느리다)
-                nw, nh = max(1, int(bw * sx)), max(1, int(bh * sy))
-                scaled = pb.scale_simple(nw, nh, GdkPixbuf.InterpType.HYPER) if (nw, nh) != (bw, bh) else pb
-                Gdk.cairo_set_source_pixbuf(cr, scaled, (W - nw) / 2, (H - nh) / 2)
-                cr.paint()
+        if pb is not None and self.mode == "tile":
+            surf = cairo.ImageSurface(cairo.FORMAT_RGB24, W, H)
+            cr = cairo.Context(surf)
+            Gdk.cairo_set_source_pixbuf(cr, pb, 0, 0)
+            cr.get_source().set_extend(cairo.EXTEND_REPEAT)
+            cr.paint()
+        else:
+            # 한 번만 줄여 둔다 (매 프레임 큰 그림을 스케일하면 느리다). 계단 없이 — sekaishell/wallpaint.py
+            surf = wallpaint.cover(pb, W, H, self.mode, self.bgcolor)
         self.wall_cache = {key: surf}
         # 원본은 놓는다 — 화면 크기 그림만 있으면 그릴 수 있다. 4K·폰 사진 원본을 모니터마다 세션 내내 들고 있어
         #   바탕 화면이 180MB 넘게 차지했다 (2560x1440 화면이면 그림은 15MB)

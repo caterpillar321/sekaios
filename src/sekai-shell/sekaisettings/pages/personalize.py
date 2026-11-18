@@ -28,6 +28,9 @@ def _wallpapers():
         if not os.path.isdir(d):
             continue
         for f in sorted(glob.glob(os.path.join(d, "*"))):
+            # 기본 배경의 예전 이름(hatsune.jpg 등 → .png 를 가리키는 링크, 2026-11-18 PNG 로 바꿈)은 목록에 안 낸다
+            if d == WALL_DIRS[0] and os.path.islink(f):
+                continue
             if f.lower().endswith(EXTS) and os.path.isfile(f):
                 out.append(f)
     # 중복 제거, 순서 유지
@@ -84,9 +87,10 @@ def build_wallpaper(store):
     tiles = {}
 
     def _refresh_selection(path):
+        real = os.path.realpath(path) if path else path     # 예전 이름(.jpg 링크)으로 저장된 설정도 맞게
         for k, t in tiles.items():
             ctx = t.get_style_context()
-            (ctx.add_class if k == path else ctx.remove_class)("selected")
+            (ctx.add_class if k == path or k == real else ctx.remove_class)("selected")
 
     for f in _wallpapers():
         try:

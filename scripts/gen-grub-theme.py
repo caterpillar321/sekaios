@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.join(P, "src", "sekai-shell"))
 from sekaishell import logo  # noqa: E402
 
 OUT = os.path.join(P, "src", "sekaios-base", "usr", "share", "grub", "themes", "sekai")
-WALL = os.path.join(P, "src", "sekai-de", "usr", "share", "backgrounds", "sekai", "hatsune.jpg")
+WALL = os.path.join(P, "src", "sekai-de", "usr", "share", "backgrounds", "sekai", "hatsune.png")
 FONT_DIRS = [os.path.join(P, "rootfs", "usr", "share", "fonts", "opentype", "pretendard"),
              "/usr/share/fonts/opentype/pretendard"]
 ACCENT = (0x39 / 255, 0xc5 / 255, 0xbb / 255)

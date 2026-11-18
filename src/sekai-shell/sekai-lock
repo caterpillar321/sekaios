@@ -82,7 +82,7 @@ if DEMO:
     LOCKFILE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "sekai-lock-demo.pid")
     LOCKED_MARK = LOCKFILE + ".locked"
 CFG = os.path.expanduser("~/.config/sekai/settings.json")
-FALLBACK_WALL = "/usr/share/backgrounds/sekai/hatsune.jpg"
+FALLBACK_WALL = "/usr/share/backgrounds/sekai/hatsune.png"
 PAM_SERVICE = "sekai-lock"
 WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"]
 IDLE_BACK = 30          # 로그인 단계에서 이만큼(초) 가만히 있으면 커튼으로
@@ -210,6 +210,7 @@ if os.path.isdir(os.path.join(HERE, "sekaishell")):
     sys.path.insert(0, HERE)
 from sekaishell import logo as sekai_logo  # noqa: E402
 from sekaishell.monitors import primary_gdk  # noqa: E402
+from sekaishell import wallpaint  # noqa: E402
 
 
 def settings():
@@ -316,23 +317,28 @@ button.switch-user label, button.switch-user image { color: @fg; }
 """
 
 
-def blurred(pb, W, H):
-    """화면 크기로 채운 뒤 흐리게 — 작게 줄였다가 부드럽게 키우는 방식 (빠르다)."""
+def sharp_cover(pb, W, H):
+    """화면 크기로 채운 그림 (cairo). 계단 없이 — sekaishell/wallpaint.py (실수로 줄이고 디더링).
+    예전엔 BILINEAR 로 바로 8비트에 줄여 어두운 그라데이션에 띠가 보였다. 잠금은 곧바로 떠야 해 fast"""
+    return wallpaint.cover(pb, W, H, fast=True)
+
+
+def soft_cover(pb, W, H):
+    """흐린 그림 (cairo) — 작게 줄였다가 부드럽게 키우는 방식 (빠르다). 처음 쓸 때 만든다"""
     bw, bh = pb.get_width(), pb.get_height()
     s = max(W / bw, H / bh)
     nw, nh = max(1, int(bw * s)), max(1, int(bh * s))
-    full = pb.scale_simple(nw, nh, GdkPixbuf.InterpType.BILINEAR)
-    small = full.scale_simple(max(1, nw // 24), max(1, nh // 24), GdkPixbuf.InterpType.HYPER)
+    small = pb.scale_simple(max(1, nw // 24), max(1, nh // 24), GdkPixbuf.InterpType.HYPER)
     small = small.scale_simple(max(1, nw // 12), max(1, nh // 12), GdkPixbuf.InterpType.BILINEAR)
-    return full, small.scale_simple(nw, nh, GdkPixbuf.InterpType.BILINEAR)
+    return wallpaint.cover(small, W, H, fast=True)
 
 
-def draw_cover(cr, pb, W, H):
-    if pb is None:
+def draw_cover(cr, img, W, H):
+    if img is None:
         cr.set_source_rgb(0.08, 0.08, 0.09)
         cr.paint()
         return
-    Gdk.cairo_set_source_pixbuf(cr, pb, (W - pb.get_width()) / 2, (H - pb.get_height()) / 2)
+    cr.set_source_surface(img, (W - img.get_width()) / 2, (H - img.get_height()) / 2)
     cr.paint()
 
 
@@ -491,13 +497,14 @@ class LockView(Gtk.Overlay):
         W, H = w.get_allocated_width(), w.get_allocated_height()
         if self.imgs is None or self.size != (W, H):
             self.size = (W, H)
-            self.imgs = blurred(self.app.wall, W, H) if self.app.wall is not None else (None, None)
-        sharp, soft = self.imgs
+            self.imgs = [sharp_cover(self.app.wall, W, H) if self.app.wall is not None else None, None]
         k = self.stage * self.stage * (3 - 2 * self.stage)       # 부드러운 전환
+        if k > 0 and self.imgs[1] is None and self.app.wall is not None:
+            self.imgs[1] = soft_cover(self.app.wall, W, H)      # 흐린 그림은 처음 쓸 때 (잠금이 빨리 뜨게)
+        sharp, soft = self.imgs
         draw_cover(cr, sharp, W, H)
         if soft is not None and k > 0:
-            Gdk.cairo_set_source_pixbuf(cr, soft, (W - soft.get_width()) / 2,
-                                        (H - soft.get_height()) / 2)
+            cr.set_source_surface(soft, (W - soft.get_width()) / 2, (H - soft.get_height()) / 2)
             cr.paint_with_alpha(k)
         # 글자가 읽히게: 커튼은 위아래만, 로그인은 전체를 조금 더 어둡게
         cr.set_source_rgba(0, 0, 0, 0.12 + 0.23 * k)

@@ -30,10 +30,12 @@ def hexrgb(h):
 
 THEMES = {
     # 이름: (바탕 위, 바탕 아래, [(빛 색, 중심 x, 중심 y, 반지름, 세기)], 줄 색, 알갱이 색)
-    "hatsune": ("#111216", "#0a0b0d",
-                [("#39c5bb", 0.16, 0.30, 0.66, 0.34),
-                 ("#2a6fdb", 0.66, 0.02, 0.46, 0.15),
-                 ("#e0467c", 0.95, 0.98, 0.48, 0.12)],
+    # hatsune 은 2026-11-18 사용자 요청으로 색조를 어둡게 — 바탕(예전 #111216 → #0a0b0d)과 빛 세기(예전 0.34·0.15·0.12)를
+    #   75% 쯤으로. 구도·줄·알갱이는 그대로
+    "hatsune": ("#0b0c0f", "#060708",
+                [("#39c5bb", 0.16, 0.30, 0.66, 0.255),
+                 ("#2a6fdb", 0.66, 0.02, 0.46, 0.11),
+                 ("#e0467c", 0.95, 0.98, 0.48, 0.09)],
                 "#bff5f0", "#e8fffc"),
     "sakura":  ("#141114", "#0c0a0c",
                 [("#e0467c", 0.20, 0.28, 0.62, 0.28),
@@ -149,10 +151,11 @@ def draw(name, W, H, out_dir):
     img = img * 255 + rng.random(img.shape) - rng.random(img.shape)
     out = np.clip(np.rint(img), 0, 255).astype(np.uint8)
 
-    # 저장: 4:4:4 JPEG (색 정보를 줄이지 않는다 — 4:2:0 이면 어두운 색 그라데이션이 얼룩진다)
-    jpg = os.path.join(out_dir, f"{name}.jpg")
-    Image.fromarray(out, "RGB").save(jpg, "JPEG", quality=95, subsampling=0, optimize=True)
-    print(f"  {jpg}  {os.path.getsize(jpg) // 1024} KiB")
+    # 저장: PNG (무손실). 예전엔 4:4:4 JPEG(품질 95)였는데 JPEG 가 디더 잡음을 40% 지워(표준편차 0.47 → 0.28)
+    #   어두운 그라데이션에 계단이 남았다 (2026-11-18). 화면 크기로 줄일 때도 디더링한다 — sekaishell/wallpaint.py
+    png = os.path.join(out_dir, f"{name}.png")
+    Image.fromarray(out, "RGB").save(png, "PNG", optimize=True)
+    print(f"  {png}  {os.path.getsize(png) // 1024} KiB")
 
 
 if __name__ == "__main__":

@@ -29,6 +29,7 @@ if os.path.isdir(os.path.join(HERE, "sekaishell")):
     sys.path.insert(0, HERE)
 from sekaishell.layer import GtkLayerShell  # noqa: E402  (X11 기본 화면 모드에선 흉내)
 from sekaishell import wizard as W  # noqa: E402
+from sekaishell import wallpaint  # noqa: E402
 
 DEMO = os.environ.get("SEKAI_OOBE_DEMO") == "1"
 # 시작 애니메이션 때 틀 소리 — 있을 때만 (개발 ISO 는 local/overlay-dev 로 넣을 수 있다. 공개 이미지엔 없다)
@@ -132,7 +133,7 @@ class Oobe(Gtk.Window):
         self._bgc = None                      # ((W, H, 배율, 그림), 그려 둔 배경) — _paint_bg
         self._bg_pending = None
         try:
-            self.bg = GdkPixbuf.Pixbuf.new_from_file(f"{WALLDIR}/hatsune.jpg")
+            self.bg = GdkPixbuf.Pixbuf.new_from_file(f"{WALLDIR}/hatsune.png")
         except Exception:
             pass
         ov = Gtk.Overlay()
@@ -250,18 +251,12 @@ class Oobe(Gtk.Window):
     #   한 번에 ~100ms 라 시작 애니메이션·설정 카드가 나타나는 동안 초당 5프레임쯤이었다 (2026-10-06 메인 PC).
     #   시작 애니메이션이 첫 프레임에 bg_prepare 로 다른 스레드에서 미리 그리게 한다.
     def _render_bg(self, cr, W, H, pix):
-        if pix is not None:
-            bw, bh = pix.get_width(), pix.get_height()
-            s = max(W / bw, H / bh)
-            cr.save()
-            cr.translate((W - bw * s) / 2, (H - bh * s) / 2)
-            cr.scale(s, s)
-            Gdk.cairo_set_source_pixbuf(cr, pix, 0, 0)
-            cr.paint()
-            cr.restore()
-        else:
-            cr.set_source_rgb(0.08, 0.08, 0.09)
-            cr.paint()
+        # 계단 없이 줄인다 (sekaishell/wallpaint.py — 실수로 줄이고 디더링). 장치 픽셀 크기로
+        sf = cr.get_target().get_device_scale()[0] or 1
+        img = wallpaint.cover(pix, round(W * sf), round(H * sf))
+        img.set_device_scale(sf, sf)
+        cr.set_source_surface(img, 0, 0)
+        cr.paint()
         cr.set_source_rgba(0, 0, 0, 0.35)
         cr.paint()
 
@@ -581,7 +576,7 @@ class Oobe(Gtk.Window):
             v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
             v.get_style_context().add_class("wall-pick")
             try:
-                pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(f"{WALLDIR}/{key}.jpg", 240, 135, False)
+                pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(f"{WALLDIR}/{key}.png", 240, 135, False)
                 v.pack_start(Gtk.Image.new_from_pixbuf(pb), False, False, 0)
             except Exception:
                 v.pack_start(W.icon("image-x-generic", 64), False, False, 0)
@@ -603,7 +598,7 @@ class Oobe(Gtk.Window):
         for key, v in self.walls.items():
             (v.get_style_context().add_class if key == k else v.get_style_context().remove_class)("selected")
         try:
-            self.bg = GdkPixbuf.Pixbuf.new_from_file(f"{WALLDIR}/{k}.jpg")
+            self.bg = GdkPixbuf.Pixbuf.new_from_file(f"{WALLDIR}/{k}.png")
             self.queue_draw()
         except Exception:
             pass
