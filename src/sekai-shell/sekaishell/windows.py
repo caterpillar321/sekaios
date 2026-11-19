@@ -290,24 +290,42 @@ class WindowManager:
         KEYS["left"][_z], KEYS["right"][_z], KEYS["up"][_z], KEYS["down"][_z] = "left", "right", "max", "restore"
     del _z
 
+    def _tiling_here(self, c):
+        """이 창이 타일 창이거나 타일링 모니터(WorldLink SEKAI_TILE_MONITORS)에 있나"""
+        if not c.get("floating", True):
+            return True
+        try:
+            from .tilepick import tiled_monitor_names
+            mons = self.hypr.query("monitors") or []
+            tiled = tiled_monitor_names((self.hypr.query("getoption general:sekai_tile_monitors") or {}).get("str"), mons)
+            return any(m.get("id") == c.get("monitor") and m.get("name") in tiled for m in mons)
+        except Exception as e:
+            dbg("[win] 타일링 모니터 확인 실패", e)
+            return False
+
+    def move(self, direction):
+        """Win+Shift+화살표 — 타일링 모니터면 Hyprland 기본대로 그쪽 칸으로 창 옮기기(movewindow, 끝이면 옆 모니터로),
+        자유 배치면 윈도우처럼 ← → 로 옆 모니터로 (↑ ↓ 는 없음)"""
+        c = self._active()
+        if not c or direction not in ("left", "right", "up", "down"):
+            return
+        if self._tiling_here(c):
+            self.hypr.dispatch(f"movewindow {direction[0]}")
+        elif direction in ("left", "right"):
+            self.hypr.dispatch(f"movewindow mon:{direction[0]}")
+
     def snap(self, direction):
         c = self._active()
         if not c or direction not in self.KEYS:
             return
         addr = c["address"]
+        if self._tiling_here(c):
+            # 타일링 모니터 — Hyprland 기본 단축키대로 Win+화살표 = 그쪽 창으로 초점 옮기기 (movefocus).
+            #   타일링을 쓰던 사람이 그대로 쓸 수 있게. 자유 배치 모니터는 윈도우처럼 스냅
+            self.hypr.dispatch(f"movefocus {direction[0]}")
+            return
         if is_fullscreen(c):
             return                                        # 전체 화면(F11·동영상) 중엔 스냅하지 않는다
-        if not c.get("floating", True):
-            # 타일 창(타일링 모니터) — ← → 는 옆 칸과 맞바꾸고 끝이면 옆 모니터로, ↑ 최대화, ↓ 최대화 풀기·최소화
-            if direction in ("left", "right"):
-                self.hypr.dispatch(f"movewindow {direction[0]}")
-            elif direction == "up":
-                self._set_max(addr, True)
-            elif is_max(c):
-                self._set_max(addr, False)
-            else:
-                desktops.minimize(self.hypr, addr)
-            return
         cur = "max" if is_max(c) else self.snapped.get(addr)
         if cur not in (None, "max") and not self._in_zone(c, cur):
             cur = None                                    # 다른 방법(Win+Shift+화살표·Super+끌기)으로 옮겨졌다

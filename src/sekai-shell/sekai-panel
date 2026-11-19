@@ -2814,6 +2814,7 @@ def main():
         "Volume": volume,
         "Brightness": osd.brightness,
         "Snap": wm.snap,
+        "Move": wm.move,                     # Win+Shift+화살표 — 타일링 모니터면 칸 옮기기, 자유 배치면 옆 모니터로
         "ShowDesktop": wm.show_desktop,
         "Power": panel.power_keys.handle,
         "Touchpad": touchpad_ctl,

@@ -5,7 +5,8 @@
 #    sekai-ctl switch next|prev|commit      Alt+Tab 창 전환기
 #    sekai-ctl volume up|down|mute|mic-mute  음량 + 화면 표시
 #    sekai-ctl brightness up|down           밝기 + 화면 표시
-#    sekai-ctl snap left|right|up|down      창 배치 (Win+화살표)
+#    sekai-ctl snap left|right|up|down      창 배치 (Win+화살표) — 타일링 모니터면 그쪽 창으로 초점 (Hyprland 처럼)
+#    sekai-ctl move left|right|up|down      Win+Shift+화살표 — 타일링 모니터면 그쪽 칸으로, 자유 배치면 옆 모니터로
 #    sekai-ctl showdesktop                  바탕 화면 보기 (Win+D) — 다시 하면 창들을 되살린다
 #    sekai-ctl power button|lid             전원 단추를 눌렀다 / 덮개가 움직였다 (설정 › 전원 및 잠금 대로)
 #    sekai-ctl touchpad [toggle|on|off]     터치패드 켜고 끄기 (노트북 Fn 키)
@@ -53,6 +54,10 @@ case "$1" in
             down) brightnessctl -q -n1 set 5%- ;;
         esac ;;
     snap)          call Snap "${2:-up}" ;;
+    move)          call Move "${2:-left}" || case "$2" in                  # 셸이 없으면 옛 동작 (옆 모니터로)
+            left)  hyprctl dispatch movewindow mon:l ;;
+            right) hyprctl dispatch movewindow mon:r ;;
+        esac >/dev/null 2>&1 ;;
     showdesktop)   call ShowDesktop ;;                         # 바탕 화면 보기 (Win+D) — 다시 하면 되살린다
     power)         call Power "${2:-button}" ;;                # 셸이 없으면 억제도 없어 logind 가 이미 처리했다
     touchpad)      call Touchpad "${2:-toggle}" ;;
@@ -81,6 +86,6 @@ case "$1" in
             new)  hyprctl dispatch workspace emptym ;;
         esac >/dev/null 2>&1 ;;
     *)
-        sed -n '3,28p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '3,29p' "$0" | sed 's/^# \{0,1\}//'
         exit 2 ;;
 esac
