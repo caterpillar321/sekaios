@@ -308,6 +308,19 @@ def border_colors(a):
     return ("rgba(0000004d)" if light else "rgba(ffffff2e)"), inactive
 
 
+def tile_border_rules(a):
+    """타일 창(타일링 모니터 — WorldLink SEKAI_TILE_MONITORS)의 테두리 — 창이 붙어 있어 어느 창에 초점이 있는지 보여야 한다.
+    Hyprland 처럼 굵게(2px), 초점 창은 강조색, 나머지는 어두운 회색. 떠 있는 창은 그대로 윈도우식 무채색 얇은 선.
+    대비 테마는 모든 창이 노랑·흰색이라 넣지 않는다. floating:0 은 동적 규칙 — 창이 떴다 타일이 됐다 하면 바로 따라 바뀐다"""
+    if a.get("mode") == "contrast":
+        return []
+    light = theme.mode_of(a) == "light"
+    active = hex_to_rgba(a.get("accent") or DEFAULTS["appearance"]["accent"], 0.93)
+    inactive = "rgba(0000003d)" if light else "rgba(5a5a5a99)"
+    return ["windowrulev2 = bordersize 2, floating:0",
+            f"windowrulev2 = bordercolor {active} {inactive}, floating:0"]
+
+
 # 접근성 — 커서 색(테마)과 색 필터 셰이더
 CURSOR_THEMES = {"white": "Sekai-Cursor-White", "black": "Sekai-Cursor-Black"}
 SHADER_DIR = "/usr/share/sekai/shaders"
@@ -535,6 +548,7 @@ class Store:
         # 접근성 — 색 필터(화면 셰이더) · 대비 테마의 굵은 노란 테두리
         if x.get("color_filter") and color_filter_path(x.get("color_filter_kind")):
             lines.append(f"decoration:screen_shader = {color_filter_path(x.get('color_filter_kind'))}")
+        lines += tile_border_rules(a)
         if a.get("mode") == "contrast":
             lines.append("general:border_size = 3")
             lines.append("general:col.active_border = rgba(ffff00ff)")
@@ -723,6 +737,8 @@ class Store:
             if key != "folder_accent" and self.get("appearance", "mode") != "contrast":
                 try:
                     keyword("general:col.active_border", border_colors(self.get("appearance"))[0])
+                    for ln in tile_border_rules(self.get("appearance"))[1:]:     # 타일 창 테두리의 강조색도
+                        keyword("windowrulev2", ln.split("=", 1)[1].strip())
                 except Exception as e:
                     dbg("테두리 색 반영 실패", e)
             if key != "accent_border":
