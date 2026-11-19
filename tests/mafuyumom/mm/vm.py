@@ -262,8 +262,11 @@ def versions():
 
 # ── 최신 패키지 ──
 def newest(pattern):
-    """packages/ 에서 그 이름의 가장 새 판"""
-    files = glob.glob(os.path.join(config.REPO, "packages", pattern))
+    """packages/ 에서 그 이름의 가장 새 판 — MM_PKGDIRS(콜론으로 구분)가 있으면 그 폴더들도 (브랜치 시험판을 게시 폴더에
+    넣지 않고 시험할 때: MM_PKGDIRS=local/tiling-debs:local/tiling-debs/shell)"""
+    dirs = [os.path.join(config.REPO, "packages")] + [
+        d if os.path.isabs(d) else os.path.join(config.REPO, d) for d in os.environ.get("MM_PKGDIRS", "").split(":") if d]
+    files = [f for d in dirs for f in glob.glob(os.path.join(d, pattern))]
     if not files:
         return None
     def ver(p):
