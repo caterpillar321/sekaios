@@ -30,17 +30,45 @@ def tiled_names():
     return [str(n) for n in (Store().get("layout", "tile_monitors") or [])]
 
 
-def is_tiled(name):
-    return name in tiled_names()
+def _keys(name, mons=None):
+    """단자 이름(DP-4) → 이 모니터로 칠 수 있는 설정 값들 — 설정 › 디스플레이의 다른 항목처럼 모니터 고유 이름
+    ("desc:제조사 모델 일련번호")을 먼저 (케이블을 다른 단자에 꽂아도 그대로), 예전에 적은 단자 이름도"""
+    from .store import display_key
+    m = next((x for x in (mons if mons is not None else hypr_monitors()) if x.get("name") == name), None)
+    key = display_key(m) if m else name
+    return key, {key, name}
 
 
-def set_tiled(name, tile):
+def is_tiled(name, mons=None, tiled=None):
+    _key, both = _keys(name, mons)
+    return bool(both & set(tiled if tiled is not None else tiled_names()))
+
+
+def set_tiled(name, tile, store=None):
+    """store: 이미 열어 둔 설정(설정 앱의 것) — 따로 읽어 쓰면 그 앱이 들고 있던 옛 값으로 나중에 덮어쓴다"""
     from .store import Store
-    s = Store()
-    cur = [n for n in (s.get("layout", "tile_monitors") or []) if n != name]
+    key, both = _keys(name)
+    s = store or Store()
+    cur = [n for n in (s.get("layout", "tile_monitors") or []) if n not in both]
     if tile:
-        cur.append(name)
+        cur.append(key)
     s.set("layout", "tile_monitors", cur)
+
+
+def tiled_monitor_names(option, mons):
+    """합성기 설정 값(general:sekai_tile_monitors) → 지금 붙은 모니터 중 타일링인 것의 단자 이름들"""
+    opt = str(option or "").strip()
+    if opt in ("", "none", "[[EMPTY]]"):
+        return set()
+    if opt in ("*", "all"):
+        return {m.get("name") for m in mons}
+    vals = {v.strip() for v in opt.split(",")}
+    out = set()
+    for m in mons:
+        desc = str(m.get("description") or "").strip()
+        if m.get("name") in vals or desc in vals or "desc:" + desc in vals:
+            out.add(m.get("name"))
+    return out
 
 
 def available():
@@ -86,6 +114,8 @@ class TilePicker:
 
     # ── D-Bus (sekai-ctl tile …) ──
     def handle(self, action="pick", name=""):
+        if not available():
+            return                          # 업데이트 뒤 다시 로그인하기 전(옛 합성기) — 모르는 설정이다
         if action == "toggle":
             self.toggle(name or self._focused())
         elif self.wins and not self._done:
@@ -121,7 +151,7 @@ class TilePicker:
         mons = hypr_monitors()
         if not mons:
             return
-        tiled = set(tiled_names())
+        tiled = tiled_names()
         focused = next((m.get("name") for m in mons if m.get("focused")), mons[0].get("name"))
         many = len(mons) > 1
         for i, m in enumerate(mons, 1):
@@ -131,7 +161,7 @@ class TilePicker:
                 hint = ("숫자를 누르면 그 화면의 창 배치가 바뀝니다 · Esc 닫기" if many
                         else "1 을 누르면 창 배치가 바뀝니다 · Esc 닫기")
             # 키보드는 초점이 있는 화면의 것 하나만 받는다 (EXCLUSIVE 는 한 면만)
-            self._card(m, i, m.get("name") in tiled, hint=hint, keys=mine)
+            self._card(m, i, is_tiled(m.get("name"), mons, tiled), hint=hint, keys=mine)
         self._done = False
         self._arm(PICK_MS)
 

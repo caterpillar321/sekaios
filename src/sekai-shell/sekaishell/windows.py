@@ -366,9 +366,9 @@ class WindowManager:
         self._drag_edge = None
         self._drag_mons = self.hypr.query("monitors") or []         # 가장자리·레이아웃 바 판단에
         # 타일링 모니터(WorldLink SEKAI_TILE_MONITORS) — 거기선 합성기가 칸을 정한다. 스냅 미리보기·레이아웃 바를 띄우지 않는다
-        tl = str((self.hypr.query("getoption general:sekai_tile_monitors") or {}).get("str") or "").strip()
-        self._tile_mons = set() if tl in ("", "none", "[[EMPTY]]") else (
-            {m.get("name") for m in self._drag_mons} if tl in ("*", "all") else {n.strip() for n in tl.split(",")})
+        from .tilepick import tiled_monitor_names
+        self._tile_mons = tiled_monitor_names((self.hypr.query("getoption general:sekai_tile_monitors") or {}).get("str"),
+                                              self._drag_mons)
         # 크기를 바꿀 수 없는 창(SEKAI_FIXED_SIZE)은 칸에 맞출 수 없다 — 스냅 미리보기·레이아웃 바 없이 옮기기만.
         #   타일 창을 끄는 것도 같다 (놓은 자리에서 합성기가 칸을 다시 나눈다)
         self._drag_fixed = bool(c.get("sekaiFixed")) or not c.get("floating", True)

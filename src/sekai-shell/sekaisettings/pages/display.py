@@ -188,6 +188,8 @@ def build(store):
     if store.migrate_display(all_mons):
         store.save()
     keys = {m.get("name"): display_key(m) for m in all_mons}     # 단자 이름 → 설정 열쇠
+    from sekaishell import tilepick
+    tile_ok = tilepick.available()          # 합성기가 모니터마다 창 배치를 아나 (WorldLink sekai48~)
 
     def key_of(n):
         return keys.get(n) or n
@@ -541,16 +543,14 @@ def build(store):
             """창 배치 — 자유 배치(윈도우처럼 겹쳐 띄움) / 타일링(창이 화면을 나눠 채움). 이 모니터의 창이 바로 바뀐다"""
             if quiet["on"]:
                 return
-            cur = [x for x in (store.get("layout", "tile_monitors") or []) if x != n]
-            if v == "tile":
-                cur.append(n)
-            store.set("layout", "tile_monitors", cur)
+            tilepick.set_tiled(n, v == "tile", store)
 
-        place = "tile" if name in (store.get("layout", "tile_monitors") or []) else "free"
-        row(s, "창 배치",
-            "타일링 — 창이 겹치지 않고 화면을 나눠 채웁니다 (대화상자는 떠 있음, Win+Shift+V 로 한 창만 띄우기)",
-            icon=["view-grid-symbolic", "view-app-grid-symbolic"],
-            control=combo(PLACEMENT, place, on_place))
+        if tile_ok:   # 업데이트 직후 다시 로그인하기 전(옛 합성기)엔 감춘다 — 모르는 설정이라 오류 막대가 뜬다
+            place = "tile" if tilepick.is_tiled(name, all_mons, store.get("layout", "tile_monitors") or []) else "free"
+            row(s, "창 배치",
+                "타일링 — 창이 겹치지 않고 화면을 나눠 채웁니다 (대화상자는 떠 있음, Win+Shift+V 로 한 창만 띄우기 · Win+Shift+T 로 빠르게 바꾸기)",
+                icon=["view-grid-symbolic", "view-app-grid-symbolic"],
+                control=combo(PLACEMENT, place, on_place))
         p.add_widget(vrr_note)
         note = _copy_note(name)
         if note:
