@@ -163,7 +163,21 @@ class TilePicker:
             # 키보드는 초점이 있는 화면의 것 하나만 받는다 (EXCLUSIVE 는 한 면만)
             self._card(m, i, is_tiled(m.get("name"), mons, tiled), hint=hint, keys=mine)
         self._done = False
+        # 번호 화면이 떠 있는 동안 합성기 단축키를 쉰다 (hyprland.conf 의 submap sekai-tilepick) — Win+Shift 를 쥔 채 숫자를
+        #   누르면 Win+Shift+숫자(창을 그 데스크톱으로)가 가로챘다
+        self._submap(True)
         self._arm(PICK_MS)
+
+    def _submap(self, on):
+        import subprocess
+        if on == getattr(self, "_in_submap", False):
+            return
+        try:
+            subprocess.run(["hyprctl", "dispatch", "submap", "sekai-tilepick" if on else "reset"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+            self._in_submap = on
+        except Exception as e:
+            dbg("[tile] submap", e)
 
     def _card(self, m, num, tile, hint=None, keys=False, changed=False):
         g = gdk_for(m)
@@ -211,7 +225,7 @@ class TilePicker:
 
     def _on_key(self, _w, ev):
         k = ev.keyval
-        if k == Gdk.KEY_Escape:
+        if k == Gdk.KEY_Escape or ev.hardware_keycode == 28:   # Esc, 또는 T (Win+Shift+T 를 다시 누름) — 닫기
             self.close()
             return True
         num = _KEYCODES.get(ev.hardware_keycode) or _KEYPAD.get(k)
@@ -229,6 +243,7 @@ class TilePicker:
         ic.set_from_icon_name(mode_icon(tile), Gtk.IconSize.MENU)
         box.get_style_context().add_class("changed")
         self._done = True
+        self._submap(False)                 # 바뀐 결과를 보여 주는 동안엔 단축키가 다시 된다
         self._arm(DONE_MS)
         return True
 
@@ -243,6 +258,7 @@ class TilePicker:
         return False
 
     def close(self):
+        self._submap(False)
         if self._timer:
             GLib.source_remove(self._timer)
             self._timer = 0
