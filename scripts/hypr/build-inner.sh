@@ -8,7 +8,7 @@ OUT=/build/deb
 #   예전엔 여기서 원본에 patch-*.py 를 적용했다. 이제 그 고친 것들은 포크의 커밋이다 (git log v0.50.1..sekai).
 #   재현할 수 있게 커밋을 고정한다 — 합성기를 고치면 포크에 커밋·푸시하고 여기 REF 와 rev_for 를 올린다.
 SEKAICOMP_URL="https://github.com/caterpillar321/worldlink.git"
-SEKAICOMP_REF="46dce59cad0b6d516bf513fa5369457c797eb43a"
+SEKAICOMP_REF="4f51cf80fb4006367dd0a3c067bd662310967e2f"
 MAINT="SekaiOS <sekai@localhost>"
 REV="sekai2"
 # 패키지별 리비전 (고친 패키지만 올린다 → apt 가 그 패키지만 업그레이드)
@@ -85,6 +85,7 @@ REV="sekai2"
 #      sekai43: 하드웨어 커서가 3번 잇달아 실패한 모니터는 소프트웨어 커서로 굳힌다 — 커서를 받지 못하는 보조 GPU(Quadro)에서 움직일 때마다 시도·실패·기록 (로그인 한 번에 557번) (포크 32e3cf3) — hyprbars sekai40 · hyprexpo sekai28
 #      sekai44: X11 창이 _MOTIF_WM_HINTS 로 "장식 없음"을 알리면 제목줄을 앱이 그린다 — 막대를 빼서 RustDesk 제목줄이 두 줄이던 것 (포크 2c8caeb) — hyprbars sekai41 · hyprexpo sekai29
 #      sekai45: KDE server-decoration 의 모드 요청에 답하지 않는다(원본처럼) — 요청마다 server 로 답하자 헤더바 GTK3 창(탐색기)이 다시 요청해 초당 3만여 번 핑퐁, 쉬는데도 앱·합성기 CPU (포크 46dce59) — hyprbars sekai42 · hyprexpo sekai30
+#      sekai47 (브랜치 tiling-monitors, 포크 sekai-tiling): 모니터마다 자유 배치/타일링 — general:sekai_tile_monitors, 대화상자·크기 고정·sekaifloat 태그는 떠 있음, 모니터를 옮기면 그 방식으로, 타일 창 최대화 (포크 4f51cf8) — hyprbars sekai44 · hyprexpo sekai32
 #   aquamarine sekai3: 다른 GPU 로 화면을 넘길 때 그 GPU 의 그리기 영역(viewport)을 늘 맞춘다 — 같은 크기면 건너뛰는 캐시가 모든
 #      GPU 에 하나라 두 번째 GPU 는 0×0 이 되어 모니터가 단색 보라였다 · CPU 복사의 읽기 객체를 따로 두고 PBO 로 읽는다
 #      (patches/aquamarine/0001·0002, 원본 b2f6c1a·8a0eb4f 의 해당 부분)
@@ -100,7 +101,7 @@ REV="sekai2"
 #   aquamarine sekai8: 구형(legacy) KMS 커밋이 커서를 바꾸지 않는 프레임마다 커서를 숨겼다 — 가만히 있는데 화면이 다시 그려지면
 #      (마우스가 지나간 곳의 효과·시계) 커서가 사라지고 움직이면 나타났다. nouveau 는 기본으로 원자 설정을 안 줘 legacy 를 탄다
 #      (드라이버 안 깐 GTX 1660 SUPER, sekai-pc-subone 2026-10-25). 원본 main 에도 같은 코드 (patches/aquamarine/0005)
-rev_for() { case "$1" in aquamarine) echo sekai8 ;; hyprbars) echo sekai42 ;; hyprexpo) echo sekai30 ;; worldlink|sekaicomp|hyprland) echo sekai45 ;; *) echo "$REV" ;; esac; }
+rev_for() { case "$1" in aquamarine) echo sekai8 ;; hyprbars) echo sekai44 ;; hyprexpo) echo sekai32 ;; worldlink|sekaicomp|hyprland) echo sekai47 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"

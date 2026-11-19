@@ -16,6 +16,8 @@ from sekaishell.store import display_key
 from ..util import hyprctl, keyword, spawn
 from ..widgets import Page, button, combo, row, switch
 from .arrange import ArrangeView
+
+PLACEMENT = [("free", "자유 배치"), ("tile", "타일링")]
 from sekaishell import monscale
 
 
@@ -534,6 +536,21 @@ def build(store):
         row(s, "가변 주사율 (VRR)",
             "G-Sync·FreeSync — 게임의 프레임에 맞춰 주사율을 바꿔 끊김·찢어짐을 줄입니다",
             control=vrr_combo)
+
+        def on_place(v, n=name):
+            """창 배치 — 자유 배치(윈도우처럼 겹쳐 띄움) / 타일링(창이 화면을 나눠 채움). 이 모니터의 창이 바로 바뀐다"""
+            if quiet["on"]:
+                return
+            cur = [x for x in (store.get("layout", "tile_monitors") or []) if x != n]
+            if v == "tile":
+                cur.append(n)
+            store.set("layout", "tile_monitors", cur)
+
+        place = "tile" if name in (store.get("layout", "tile_monitors") or []) else "free"
+        row(s, "창 배치",
+            "타일링 — 창이 겹치지 않고 화면을 나눠 채웁니다 (대화상자는 떠 있음, Win+Shift+V 로 한 창만 띄우기)",
+            icon=["view-grid-symbolic", "view-app-grid-symbolic"],
+            control=combo(PLACEMENT, place, on_place))
         p.add_widget(vrr_note)
         note = _copy_note(name)
         if note:

@@ -74,6 +74,7 @@ DEFAULTS = {
     "display": {},               # {"desc:<모니터 설명>" 또는 "DP-1": {...}} — display_key
     "layout": {
         "primary": "",           # 주 디스플레이 (모니터 이름). 비면 첫 모니터
+        "tile_monitors": [],     # 창을 타일링으로 배치할 모니터 이름 (비면 모두 자유 배치 — 윈도우처럼)
     },
     "panel": {
         "height": 48,
@@ -504,6 +505,9 @@ class Store:
         active, inactive = border_colors(a)
         lines.append(f"    col.active_border = {active}")
         lines.append(f"    col.inactive_border = {inactive}")
+        tiles = [str(n) for n in (self.get("layout").get("tile_monitors") or []) if str(n).strip() and "\n" not in str(n)]
+        if tiles:
+            lines.append(f"    sekai_tile_monitors = {','.join(tiles)}")
         lines.append("}")
         lines.append("")
 
@@ -646,6 +650,8 @@ class Store:
         ("appearance", "titlebar"):         ("plugin:hyprbars:enabled", _01),
         ("appearance", "titlebar_bg"):      ("plugin:hyprbars:bar_color", _rgba),
         ("appearance", "fg"):               ("plugin:hyprbars:col.text", _rgba),
+        ("layout", "tile_monitors"):        ("general:sekai_tile_monitors",
+                                             lambda v: ",".join(v) if isinstance(v, (list, tuple)) and v else "none"),
         ("input", "kb_layout"):             ("input:kb_layout", _layout),
         ("input", "kb_variant"):            ("input:kb_variant", _str),
         ("input", "kb_options"):            ("input:kb_options", _str),

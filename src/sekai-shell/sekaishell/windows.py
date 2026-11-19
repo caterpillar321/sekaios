@@ -297,6 +297,17 @@ class WindowManager:
         addr = c["address"]
         if is_fullscreen(c):
             return                                        # 전체 화면(F11·동영상) 중엔 스냅하지 않는다
+        if not c.get("floating", True):
+            # 타일 창(타일링 모니터) — ← → 는 옆 칸과 맞바꾸고 끝이면 옆 모니터로, ↑ 최대화, ↓ 최대화 풀기·최소화
+            if direction in ("left", "right"):
+                self.hypr.dispatch(f"movewindow {direction[0]}")
+            elif direction == "up":
+                self._set_max(addr, True)
+            elif is_max(c):
+                self._set_max(addr, False)
+            else:
+                desktops.minimize(self.hypr, addr)
+            return
         cur = "max" if is_max(c) else self.snapped.get(addr)
         if cur not in (None, "max") and not self._in_zone(c, cur):
             cur = None                                    # 다른 방법(Win+Shift+화살표·Super+끌기)으로 옮겨졌다
@@ -354,8 +365,13 @@ class WindowManager:
         self._drag_addr = addr
         self._drag_edge = None
         self._drag_mons = self.hypr.query("monitors") or []         # 가장자리·레이아웃 바 판단에
-        # 크기를 바꿀 수 없는 창(SEKAI_FIXED_SIZE)은 칸에 맞출 수 없다 — 스냅 미리보기·레이아웃 바 없이 옮기기만
-        self._drag_fixed = bool(c.get("sekaiFixed"))
+        # 타일링 모니터(WorldLink SEKAI_TILE_MONITORS) — 거기선 합성기가 칸을 정한다. 스냅 미리보기·레이아웃 바를 띄우지 않는다
+        tl = str((self.hypr.query("getoption general:sekai_tile_monitors") or {}).get("str") or "").strip()
+        self._tile_mons = set() if tl in ("", "none", "[[EMPTY]]") else (
+            {m.get("name") for m in self._drag_mons} if tl in ("*", "all") else {n.strip() for n in tl.split(",")})
+        # 크기를 바꿀 수 없는 창(SEKAI_FIXED_SIZE)은 칸에 맞출 수 없다 — 스냅 미리보기·레이아웃 바 없이 옮기기만.
+        #   타일 창을 끄는 것도 같다 (놓은 자리에서 합성기가 칸을 다시 나눈다)
+        self._drag_fixed = bool(c.get("sekaiFixed")) or not c.get("floating", True)
         if self._drag_fixed:
             return False
         if self.topbar is not None:
@@ -421,6 +437,8 @@ class WindowManager:
         if not found:
             return "none", ""
         m, W, H = found
+        if m.get("name") in getattr(self, "_tile_mons", ()):
+            return "none", m.get("name", "")        # 타일링 모니터 — 합성기가 타일로 받는다
         x = min(max(x - m["x"], 0), W - 1)          # 화면 밖이면 그 끝으로
         y = min(max(y - m["y"], 0), H - 1)
         E = 4                                   # 가장자리로 치는 두께
@@ -469,6 +487,13 @@ class WindowManager:
         if mon is None:
             return True
         m, mw, mh = mon
+        if m.get("name") in getattr(self, "_tile_mons", ()):
+            mon = None                              # 타일링 모니터엔 레이아웃 바가 없다 — 떠 있던 바는 아래서 닫는다
+            if self.topbar is not None and self.topbar.get_visible():
+                self.topbar.hide()
+                self.topbar.set_hot(None)
+                self._bar_hit = None
+            return True
         dx, dy = abs(x - (m["x"] + mw / 2)), y - m["y"]
         bar = self.topbar
         if not self._drag_armed:
@@ -553,6 +578,12 @@ class WindowManager:
         self._drag_addr = None
         if self.preview is not None:
             self.preview.hide_now()
+        if mon_name and mon_name in getattr(self, "_tile_mons", ()):
+            # 타일링 모니터에 놓았다 — 합성기가 타일로 받는다. 스냅·원래 크기 되돌리기는 하지 않는다 (타일을 흐트러뜨린다)
+            self.snapped.pop(addr, None)
+            self.saved.pop(addr, None)
+            self.drag_start.pop(addr, None)
+            return False
         if bar_open and (hit or zone == "max"):
             # 레이아웃 바가 내려와 있었다 — 가리킨 칸으로, 칸 밖 맨 위면 최대화
             if hit:
