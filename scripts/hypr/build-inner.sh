@@ -8,7 +8,7 @@ OUT=/build/deb
 #   예전엔 여기서 원본에 patch-*.py 를 적용했다. 이제 그 고친 것들은 포크의 커밋이다 (git log v0.50.1..sekai).
 #   재현할 수 있게 커밋을 고정한다 — 합성기를 고치면 포크에 커밋·푸시하고 여기 REF 와 rev_for 를 올린다.
 SEKAICOMP_URL="https://github.com/caterpillar321/worldlink.git"
-SEKAICOMP_REF="59fa53555945411e5662ae87e4786a3f275db9de"
+SEKAICOMP_REF="6b4f079a2d3c59ff35006ee4102f5716f26c747c"
 MAINT="SekaiOS <sekai@localhost>"
 REV="sekai2"
 # 패키지별 리비전 (고친 패키지만 올린다 → apt 가 그 패키지만 업그레이드)
@@ -90,6 +90,7 @@ REV="sekai2"
 #      sekai49: 타일링 방식을 바꿔 창이 커서 밑에서 움직이면 움직임이 끝난 뒤 커서 자리를 다시 알림(닫기 단추가 빨갛게 남던 것) (포크 1ab4e6f) — hyprbars sekai46 · hyprexpo sekai34
 #      sekai50: 입력기(ibus) 가상 키보드의 수식 키를 단축키 판정에서 늘 뺌 — Win 이 눌린 채 남아 휠만 굴려도 다음 데스크톱(데스크톱 1 알림)이 되던 것 (포크 8870f8d) — hyprbars sekai47 · hyprexpo sekai35
 #      sekai51: 그림자를 두는 앱(크롬·VS Code)의 하위 면을 그림과 같은 자리에서 다시 그림 — 마우스 올림 동그라미 흔적이 남던 것 (포크 59fa535) — hyprbars sekai48 · hyprexpo sekai36
+#      sekai52: 창의 주 면도 그림과 같은 방식으로 다시 그림(창 영역 시작점만큼 빼고 창 크기에 맞춤) — 크롬·VS Code 흔적의 나머지, 화면 찍기(전체 다시 그림)를 하면 사라지던 것 (포크 6b4f079) — hyprbars sekai49 · hyprexpo sekai37
 #   aquamarine sekai3: 다른 GPU 로 화면을 넘길 때 그 GPU 의 그리기 영역(viewport)을 늘 맞춘다 — 같은 크기면 건너뛰는 캐시가 모든
 #      GPU 에 하나라 두 번째 GPU 는 0×0 이 되어 모니터가 단색 보라였다 · CPU 복사의 읽기 객체를 따로 두고 PBO 로 읽는다
 #      (patches/aquamarine/0001·0002, 원본 b2f6c1a·8a0eb4f 의 해당 부분)
@@ -105,7 +106,7 @@ REV="sekai2"
 #   aquamarine sekai8: 구형(legacy) KMS 커밋이 커서를 바꾸지 않는 프레임마다 커서를 숨겼다 — 가만히 있는데 화면이 다시 그려지면
 #      (마우스가 지나간 곳의 효과·시계) 커서가 사라지고 움직이면 나타났다. nouveau 는 기본으로 원자 설정을 안 줘 legacy 를 탄다
 #      (드라이버 안 깐 GTX 1660 SUPER, sekai-pc-subone 2026-10-25). 원본 main 에도 같은 코드 (patches/aquamarine/0005)
-rev_for() { case "$1" in aquamarine) echo sekai8 ;; hyprbars) echo sekai48 ;; hyprexpo) echo sekai36 ;; worldlink|sekaicomp|hyprland) echo sekai51 ;; *) echo "$REV" ;; esac; }
+rev_for() { case "$1" in aquamarine) echo sekai8 ;; hyprbars) echo sekai49 ;; hyprexpo) echo sekai37 ;; worldlink|sekaicomp|hyprland) echo sekai52 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
