@@ -1762,11 +1762,26 @@ class Desk(Gtk.Window):
                    None,
                    ("배경 바꾸기", "preferences-desktop-wallpaper-symbolic",
                     lambda: run(["sekai-settings", "--page=wallpaper"])),
+                   *self._tile_entry(),
                    ("디스플레이 설정", "video-display-symbolic",
                     lambda: run(["sekai-settings", "--page=display"])),
                    ("개인 설정", "preferences-desktop-theme-symbolic",
                     lambda: run(["sekai-settings", "--page=appearance"]))]
         self.menu.show_at(ev.x, ev.y, entries, W, H)
+
+    def _tile_entry(self):
+        """이 화면의 창 배치(자유 배치/타일링) 바꾸기 — WorldLink 가 모니터마다 방식을 아는 판(sekai47~)에서만"""
+        try:
+            from sekaishell import tilepick
+            name = tilepick.name_for_gdk(self.monitor) if tilepick.available() else None
+            if not name:
+                return []
+            tiled = tilepick.is_tiled(name)
+        except Exception as e:
+            dbg("창 배치 메뉴", e)
+            return []
+        return [(tilepick.menu_label(name), tilepick.mode_icon(not tiled),
+                 lambda: run(["sekai-ctl", "tile", "toggle", name]))]
 
     def _menu_item(self, ev):
         b = self.board

@@ -673,6 +673,21 @@ window.switcher-window, window.osd-window { background: transparent; color: @fg;
 .switch-card.selected label { color: @fg; }
 .switcher-title { font-size: 9.75pt; font-weight: 600; color: @fg; padding: 2px 8px 0 8px; }
 
+/* ═══ 화면마다 창 배치 (Win+Shift+T — sekaishell/tilepick.py) ═══════════════ */
+.tilepick {
+    background: @glass;
+    border: 1px solid @line;
+    border-radius: 18px;
+    padding: 18px 40px 16px 40px;
+    min-width: 180px;
+}
+.tilepick.changed { border: 2px solid alpha(@accent, 0.85); }
+.tilepick-num  { font-size: 66pt; font-weight: 800; color: @fg; }
+.tilepick-mode { font-size: 13.5pt; font-weight: 600; color: @fg; }
+.tilepick.changed .tilepick-mode, .tilepick.changed image { color: @accent; }
+.tilepick-name { font-size: 9pt; color: @text3; }
+.tilepick-hint { font-size: 9.75pt; color: @text2; }
+
 /* ═══ 음량·밝기 표시 (OSD) ══════════════════════════════════════════ */
 .osd {
     background: @glass;

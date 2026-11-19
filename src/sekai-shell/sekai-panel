@@ -27,6 +27,8 @@ from sekaishell.switcher import Switcher                 # noqa: E402
 from sekaishell.osd import Osd, DesktopOsd               # noqa: E402
 from sekaishell.quicksettings import QuickSettings       # noqa: E402
 from sekaishell.clipboard import ClipboardPopup          # noqa: E402
+from sekaishell.tilepick import TilePicker               # noqa: E402
+from sekaishell import tilepick as tilepick_mod          # noqa: E402
 from sekaishell.windows import WindowManager             # noqa: E402
 from sekaishell.shell import ShellService                # noqa: E402
 from sekaishell.updates import UpdateNotifier            # noqa: E402
@@ -1754,6 +1756,12 @@ class TaskbarMixin:
         it = Gtk.MenuItem(label="검색")
         it.set_submenu(sub)
         m.append(it)
+        # 이 화면의 창 배치 (자유 배치/타일링) — WorldLink sekai47~
+        if tilepick_mod.available() and (mon_name := tilepick_mod.name_for_gdk(self.gdk_monitor)):
+            it = Gtk.MenuItem(label=tilepick_mod.menu_label(mon_name))
+            it.connect("activate", lambda _i, n=mon_name: tilepick_mod.TilePicker.shared.toggle(n)
+                       if tilepick_mod.TilePicker.shared else tilepick_mod.set_tiled(n, not tilepick_mod.is_tiled(n)))
+            m.append(it)
         m.append(Gtk.SeparatorMenuItem())
         for label, cmd in (("작업 관리자", ["sekai-taskmgr"]),
                            ("작업 표시줄 설정", ["sekai-settings", "--page=appearance"])):
@@ -2693,6 +2701,7 @@ def main():
     switcher = Switcher(hypr, on_restore=panel.restore_window)
     osd = Osd(bottom_margin=int(sekai_conf("panel", "height", PANEL_HEIGHT)) + 24)
     clip = ClipboardPopup(hypr)
+    tilepick = TilePicker()
     clip.set_panel_height(int(sekai_conf("panel", "height", PANEL_HEIGHT)))
     wm = WindowManager(hypr)
     if _layer.WAYLAND:
@@ -2821,6 +2830,7 @@ def main():
         "ColorFilter": a11y.color_filter,
         "Osk": a11y.osk_ctl,
         "Narrator": a11y.narrator_ctl,
+        "Tile": tilepick.handle,             # 모니터마다 자유 배치/타일링 (Win+Shift+T · 우클릭 메뉴)
     })
 
     # SIGUSR1 = 시작 메뉴 토글

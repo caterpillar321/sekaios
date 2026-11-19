@@ -40,6 +40,10 @@ XML = """
       <arg type="s" name="action" direction="in"/>
       <arg type="s" name="arg" direction="in"/>
     </method>
+    <method name="Tile">
+      <arg type="s" name="action" direction="in"/>
+      <arg type="s" name="monitor" direction="in"/>
+    </method>
   </interface>
 </node>
 """
