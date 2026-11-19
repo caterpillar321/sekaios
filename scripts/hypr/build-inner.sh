@@ -8,7 +8,7 @@ OUT=/build/deb
 #   예전엔 여기서 원본에 patch-*.py 를 적용했다. 이제 그 고친 것들은 포크의 커밋이다 (git log v0.50.1..sekai).
 #   재현할 수 있게 커밋을 고정한다 — 합성기를 고치면 포크에 커밋·푸시하고 여기 REF 와 rev_for 를 올린다.
 SEKAICOMP_URL="https://github.com/caterpillar321/worldlink.git"
-SEKAICOMP_REF="570cbe717620e3cf75c4c12cf211f0df630aedaa"
+SEKAICOMP_REF="8f26e8fb541b4370258146726b8539582d1f5085"
 MAINT="SekaiOS <sekai@localhost>"
 REV="sekai2"
 # 패키지별 리비전 (고친 패키지만 올린다 → apt 가 그 패키지만 업그레이드)
@@ -86,7 +86,7 @@ REV="sekai2"
 #      sekai44: X11 창이 _MOTIF_WM_HINTS 로 "장식 없음"을 알리면 제목줄을 앱이 그린다 — 막대를 빼서 RustDesk 제목줄이 두 줄이던 것 (포크 2c8caeb) — hyprbars sekai41 · hyprexpo sekai29
 #      sekai45: KDE server-decoration 의 모드 요청에 답하지 않는다(원본처럼) — 요청마다 server 로 답하자 헤더바 GTK3 창(탐색기)이 다시 요청해 초당 3만여 번 핑퐁, 쉬는데도 앱·합성기 CPU (포크 46dce59) — hyprbars sekai42 · hyprexpo sekai30
 #      sekai47 (브랜치 tiling-monitors, 포크 sekai-tiling): 모니터마다 자유 배치/타일링 — general:sekai_tile_monitors, 대화상자·크기 고정·sekaifloat 태그는 떠 있음, 모니터를 옮기면 그 방식으로, 타일 창 최대화 (포크 4f51cf8) — hyprbars sekai44 · hyprexpo sekai32
-#      sekai48 (같은 브랜치): 원본 Hyprland 와 맞춤 — 설정이 비면 기능 꺼짐(원본과 같음)·타일링 모니터에 뜰 창은 처음부터 칸 크기로·설정값 설명 5개 (포크 570cbe7). hyprtester·28단계 동작·애니메이션 비교로 원본과 같음 확인 — hyprbars sekai45 · hyprexpo sekai33
+#      sekai48 (같은 브랜치): 원본 Hyprland 와 맞춤 + 실제 두 화면 시험으로 고친 것(자유 배치 화면에 놓은 타일 창은 놓은 자리에, 떠 있던 크기 모르는 창은 작업 영역 60% 가운데) — 설정이 비면 기능 꺼짐(원본과 같음)·타일링 모니터에 뜰 창은 처음부터 칸 크기로·설정값 설명 5개 (포크 8f26e8f). hyprtester·28단계 동작·애니메이션 비교로 원본과 같음 확인 — hyprbars sekai45 · hyprexpo sekai33
 #   aquamarine sekai3: 다른 GPU 로 화면을 넘길 때 그 GPU 의 그리기 영역(viewport)을 늘 맞춘다 — 같은 크기면 건너뛰는 캐시가 모든
 #      GPU 에 하나라 두 번째 GPU 는 0×0 이 되어 모니터가 단색 보라였다 · CPU 복사의 읽기 객체를 따로 두고 PBO 로 읽는다
 #      (patches/aquamarine/0001·0002, 원본 b2f6c1a·8a0eb4f 의 해당 부분)
