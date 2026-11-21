@@ -59,12 +59,21 @@ def _hangul_settings():
 
 
 def _keys_text(v):
-    """'Hangul,Shift+space' → '한/영 키, Shift+Space'"""
-    out = []
+    """'Hangul,Shift+space' → '한/영 키, Shift+Space'.
+    한/영 키 + 수식 키 조합(Shift+Hangul …)은 "한/영 키 (다른 키를 쥐고 있어도)" 하나로 — SekaiOS 기본값은 16개다"""
+    out, combo = [], False
     for one in (v or "").split(","):
         one = one.strip()
-        if one:
-            out.append("+".join(KEY_NAMES.get(k, k) for k in one.split("+")))
+        if not one:
+            continue
+        parts = one.split("+")
+        if len(parts) > 1 and parts[-1] == "Hangul" and all(p in ("Shift", "Control", "Alt", "Mod4", "Super") for p in parts[:-1]):
+            combo = True
+            continue
+        out.append("+".join(KEY_NAMES.get(k, k) for k in parts))
+    if combo:
+        out = [("한/영 키 (다른 키를 쥐고 있어도)" if x == "한/영 키" else x) for x in out] if "한/영 키" in out else \
+              ["한/영 키 (다른 키를 쥐고 있어도)"] + out
     return ", ".join(out) or "없음"
 
 

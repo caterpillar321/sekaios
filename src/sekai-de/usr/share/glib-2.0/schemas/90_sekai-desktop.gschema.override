@@ -34,6 +34,9 @@ engines-order=['hangul']
 [org.freedesktop.ibus.engine.hangul]
 use-event-forwarding=false
 initial-input-mode='latin'
-# 한/영 전환: 한/영 키만. 오른쪽 Alt 는 xkb 옵션(korean:ralt_hangul)으로 한/영 키가 된다.
+# 한/영 전환: 한/영 키 (오른쪽 Alt 는 xkb 옵션 korean:ralt_hangul 로 한/영 키가 된다).
+#   Shift·Ctrl·Alt·Win 을 쥐고 있어도 한/영 키는 늘 한/영 전환 — 예전엔 "한/영 키 하나만" 받아, 대문자를 치다 Shift 를 떼기 전에
+#   오른쪽 Alt 를 누르면 바뀌지 않았다 (윈도우는 쥔 키와 상관없이 바뀐다). Win 은 IBus 에선 Mod4 다 (Super 로 적으면 안 맞는다).
+#   한글 입력기(ibus-hangul)가 켜져 있을 때만의 설정이라 영어 설정에는 아무 영향이 없다.
 #   Shift+Space 는 뺐다 — 영문 대문자 뒤 스페이스에서 한글로 넘어가 버린다.
-switch-keys='Hangul'
+switch-keys='Hangul,Shift+Hangul,Control+Hangul,Alt+Hangul,Mod4+Hangul,Shift+Control+Hangul,Shift+Alt+Hangul,Shift+Mod4+Hangul,Control+Alt+Hangul,Control+Mod4+Hangul,Alt+Mod4+Hangul,Shift+Control+Alt+Hangul,Shift+Control+Mod4+Hangul,Shift+Alt+Mod4+Hangul,Control+Alt+Mod4+Hangul,Shift+Control+Alt+Mod4+Hangul'
