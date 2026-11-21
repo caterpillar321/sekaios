@@ -8,7 +8,7 @@ OUT=/build/deb
 #   예전엔 여기서 원본에 patch-*.py 를 적용했다. 이제 그 고친 것들은 포크의 커밋이다 (git log v0.50.1..sekai).
 #   재현할 수 있게 커밋을 고정한다 — 합성기를 고치면 포크에 커밋·푸시하고 여기 REF 와 rev_for 를 올린다.
 SEKAICOMP_URL="https://github.com/caterpillar321/worldlink.git"
-SEKAICOMP_REF="6b4f079a2d3c59ff35006ee4102f5716f26c747c"
+SEKAICOMP_REF="ac00e01ab502685be5b0b8ea4ce556cee6ad5c01"
 MAINT="SekaiOS <sekai@localhost>"
 REV="sekai2"
 # 패키지별 리비전 (고친 패키지만 올린다 → apt 가 그 패키지만 업그레이드)
@@ -106,7 +106,7 @@ REV="sekai2"
 #   aquamarine sekai8: 구형(legacy) KMS 커밋이 커서를 바꾸지 않는 프레임마다 커서를 숨겼다 — 가만히 있는데 화면이 다시 그려지면
 #      (마우스가 지나간 곳의 효과·시계) 커서가 사라지고 움직이면 나타났다. nouveau 는 기본으로 원자 설정을 안 줘 legacy 를 탄다
 #      (드라이버 안 깐 GTX 1660 SUPER, sekai-pc-subone 2026-10-25). 원본 main 에도 같은 코드 (patches/aquamarine/0005)
-rev_for() { case "$1" in aquamarine) echo sekai8 ;; hyprbars) echo sekai49 ;; hyprexpo) echo sekai37 ;; worldlink|sekaicomp|hyprland) echo sekai52 ;; *) echo "$REV" ;; esac; }
+rev_for() { case "$1" in aquamarine) echo sekai8 ;; hyprbars) echo sekai50 ;; hyprexpo) echo sekai38 ;; worldlink|sekaicomp|hyprland) echo sekai53 ;; *) echo "$REV" ;; esac; }
 
 mkdir -p "$SRC" "$OUT"
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
