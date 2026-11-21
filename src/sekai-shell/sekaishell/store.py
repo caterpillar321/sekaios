@@ -37,8 +37,8 @@ DEFAULTS = {
         "fg": "#f1f1f3",
         "titlebar_bg": "#2c2c30", # 창 제목줄 — GTK 다크 앱 본문(#2d2d2d)에 맞춤
         "rounding": 8,            # 윈도우 11 창 모서리
-        "border_size": 1,
-        "accent_border": False,   # 창 테두리를 강조색으로 — 윈도우처럼 기본은 끔 (무채색 얇은 선)
+        "border_size": 2,         # 흰 바탕 위에서도 창 윤곽이 보이게 (2026-11-21, 1px 회색은 너무 흐렸다)
+        "accent_border": False,   # 창 테두리를 강조색으로 — 윈도우처럼 기본은 끔 (무채색 선)
         "gaps_in": 6,
         "gaps_out": 0,          # 최대화한 창이 화면에 꽉 차게 (윈도우처럼)
         "inactive_opacity": 1.0,
@@ -302,10 +302,12 @@ def border_colors(a):
     """(활성, 비활성) 창 테두리 색 — 윈도우 11 처럼 기본은 무채색, 활성 창은 조금 더 진한 선.
     "강조색 테두리"를 켜면 활성 창만 강조색. 대비 테마는 write_hypr_fragment 가 따로 (노랑·흰색)"""
     light = theme.mode_of(a) == "light"
-    inactive = "rgba(0000001f)" if light else "rgba(ffffff14)"
+    # 어두운 모드도 흰색이 아니라 중간 회색 반투명 — 흰 바탕(웹 페이지) 위에선 그보다 어둡고, 어두운 바탕화면 위에선
+    #   그보다 밝아서 어디서나 선으로 보인다 (흰색 선은 흰 페이지 위 그림자에 묻혀 뿌연 띠가 됐다, 2026-11-21)
+    inactive = "rgba(0000001f)" if light else "rgba(80808066)"
     if a.get("accent_border"):
         return hex_to_rgba(a.get("accent") or DEFAULTS["appearance"]["accent"], 0.53), inactive
-    return ("rgba(0000004d)" if light else "rgba(ffffff2e)"), inactive
+    return ("rgba(0000004d)" if light else "rgba(80808099)"), inactive
 
 
 def tile_border_rules(a):
