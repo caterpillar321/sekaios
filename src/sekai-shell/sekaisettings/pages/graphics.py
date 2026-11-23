@@ -32,7 +32,7 @@ def _status():
         res = subprocess.run([HELPER, "status"], capture_output=True, text=True, timeout=20)
     except Exception:
         return None
-    st = {"gpus": [], "sb": False, "nvidia": None, "mok": "-"}
+    st = {"gpus": [], "sb": False, "nvidia": None, "mok": "-", "plan": None}
     for line in res.stdout.splitlines():
         kind, _, rest = line.partition(" ")
         if kind == "GPU":
@@ -45,6 +45,8 @@ def _status():
             st["nvidia"] = None if rest.strip() == "-" else rest.strip()
         elif kind == "MOK":
             st["mok"] = rest.strip()
+        elif kind == "NVPLAN":
+            st["plan"] = None if rest.strip() == "-" else rest.strip()
     return st
 
 
@@ -169,10 +171,10 @@ class GraphicsPage:
         self.sb_label = info("…")
         row(s, "보안 부팅", "켜져 있으면 직접 만든 드라이버는 등록한 키로 서명되어야 올라갑니다",
             control=self.sb_label)
-        row(s, "드라이버 출처",
-            "NVIDIA 가 운영하는 데비안 13 공식 저장소 (developer.download.nvidia.com). "
-            "설치를 누를 때만 추가됩니다.",
-            control=info("NVIDIA 공식"))
+        self.src_row = row(s, "드라이버 출처",
+                           "NVIDIA 가 운영하는 데비안 13 공식 저장소 (developer.download.nvidia.com). "
+                           "설치를 누를 때만 추가됩니다.",
+                           control=info("NVIDIA 공식"))
         row(s, "진단 정보", "화면 문제를 물어볼 때 이 내용을 찍어 보내 주세요",
             control=button("보기", self._report))
 
@@ -294,11 +296,25 @@ class GraphicsPage:
             b.hide()
         if self.p.busy:
             return
-        if not ver:
+        plan = st.get("plan")
+        if plan == "legacy":
+            self.src_row.sub_label.set_text(
+                "GTX 900·10 계열은 NVIDIA 최신 드라이버가 지원을 끝내, 데비안 13 이 관리하는 550 드라이버를 씁니다 "
+                "(데비안 non-free 저장소).")
+        if not ver and plan == "old":
+            self._set("이 카드에 맞는 드라이버가 없음",
+                      "GTX 700 이하 카드는 지금 쓸 수 있는 NVIDIA 드라이버가 없어 기본 드라이버(nouveau)로 씁니다.")
+        elif not ver and plan == "mixed":
+            self._set("함께 쓸 수 있는 드라이버가 없음",
+                      "GTX 900·10 계열과 RTX 50 계열은 서로 다른 드라이버가 필요해 한 번에 쓸 수 없습니다. "
+                      "한 장을 빼면 설치할 수 있습니다.")
+        elif not ver:
+            what = (" 이 카드에는 데비안의 550 드라이버를 설치합니다 (GTX 900·10 계열 — NVIDIA 최신 드라이버는 지원을 끝냄)."
+                    if plan == "legacy" else "")
             self._set("설치되어 있지 않음",
                       "설치하면 3D 가속·고해상도·여러 모니터를 쓸 수 있습니다. 인터넷 연결이 필요하고 "
-                      "10분쯤 걸립니다." + (" 보안 부팅 키 등록을 위해 다시 시작할 때 한 번 입력이 필요합니다."
-                                          if st.get("sb") else ""))
+                      "10분쯤 걸립니다." + what + (" 보안 부팅 키 등록을 위해 다시 시작할 때 한 번 입력이 필요합니다."
+                                                 if st.get("sb") else ""))
             self.install_btn.show()
         elif loaded:
             self._set(f"사용 중 — 버전 {ver}", "NVIDIA 드라이버가 그래픽 카드를 쓰고 있습니다.")

@@ -3,16 +3,20 @@
 #  SekaiOS 그래픽 드라이버 도우미 — 관리자 권한으로 실행된다 (pkexec)
 #
 #    sekai-gpu status           그래픽 카드·드라이버·보안 부팅 상태 (권한 없이도 됨)
-#    sekai-gpu install-nvidia   NVIDIA 공식 저장소의 드라이버(open 커널 모듈)를 설치한다
+#    sekai-gpu install-nvidia   카드 세대에 맞는 NVIDIA 드라이버를 설치한다 (아래 "드라이버 출처")
 #    sekai-gpu remove-nvidia    NVIDIA 드라이버를 지우고 기본 드라이버로 돌아간다
 #    sekai-gpu enroll-mok       보안 부팅 키 등록을 새 비밀번호로 다시 예약한다 (비밀번호를 잊었을 때)
 #    sekai-gpu report           진단 정보 (사람이 읽는 글, 권한 없이도 됨)
 #
-#  드라이버 출처
-#    데비안 13 의 nvidia-driver 는 550 이라 RTX 50(Blackwell) 을 모른다.
-#    → NVIDIA 가 직접 운영하는 데비안 13 저장소(CUDA 저장소)의 최신 드라이버를 쓴다.
+#  드라이버 출처 — 카드 세대(PCI 장치 번호)로 고른다 (nvidia_plan)
+#    튜링(GTX 16·RTX 20) 이후만: NVIDIA 가 직접 운영하는 데비안 13 저장소(CUDA 저장소)의 최신 드라이버, open 커널 모듈.
+#      데비안 13 의 nvidia-driver 는 550 이라 RTX 50(Blackwell) 을 모른다.
 #      저장소 키는 sekai-desktop 이 가지고 있고(/usr/share/keyrings/nvidia-cuda-debian13.gpg),
 #      저장소는 사용자가 설치를 고를 때만 추가된다.
+#    맥스웰·파스칼·볼타(GTX 900·10, TITAN V)가 있으면: 데비안 13 의 550 드라이버(비공개 커널 모듈, non-free).
+#      open 모듈은 튜링부터이고, NVIDIA 저장소(데비안 13)는 590 부터라 이 세대를 지원하지 않는다(580 이 마지막).
+#      550 은 에이다(RTX 40)까지 알아서 튜링 이후 카드가 함께 있어도 된다 — 블랙웰만 함께 쓸 수 없다.
+#    케플러 이하(GTX 700 이하): 쓸 수 있는 드라이버가 없다 — 기본 드라이버(nouveau) 그대로.
 #    커널 모듈은 이 컴퓨터에서 DKMS 로 빌드된다 (미리 빌드된 모듈은 NVIDIA 가 주지 않는다).
 #
 #  보안 부팅
@@ -24,6 +28,7 @@
 #    GPU <슬롯> <제조사> <쓰는 드라이버|-> <이름…>
 #    SECUREBOOT on|off
 #    NVIDIA <설치된 버전|->
+#    NVPLAN open|legacy|old|mixed|-   이 컴퓨터에 맞는 드라이버 (nvidia_plan)
 #    MOK enrolled|pending|missing|-
 #    PROGRESS <0-100> <설명>
 #    MOKPASS <비밀번호>         다시 시작할 때 파란 화면에 넣을 비밀번호
@@ -83,13 +88,27 @@ MODPROBE = "/etc/modprobe.d/sekai-nvidia.conf"
 MODPROBE_TEXT = """# SekaiOS: NVIDIA 드라이버 설정 (sekai-gpu 가 만듦)
 #   modeset/fbdev — Wayland(Hyprland) 와 부팅 화면에 필요
 #   PreserveVideoMemoryAllocations — 절전 후 화면 깨짐 방지
+#   nvidia-current* 는 데비안 550 드라이버의 모듈 이름 (맥스웰·파스칼용, nvidia → nvidia-current 로 바꿔 올린다)
 options nvidia-drm modeset=1 fbdev=1
 options nvidia NVreg_PreserveVideoMemoryAllocations=1
+options nvidia-current-drm modeset=1 fbdev=1
+options nvidia-current NVreg_PreserveVideoMemoryAllocations=1
 """
 # 드라이버 본체. nvidia-open(메타)은 CUDA 도구까지 끌고 와서 쓰지 않는다.
 NVIDIA_PKGS = ["nvidia-kernel-open-dkms", "nvidia-driver", "firmware-nvidia-gsp",
                "nvidia-driver-cuda",   # nvidia-smi · CUDA · NVENC(영상 인코딩) — 윈도우 드라이버에 있는 것들
                "nvidia-settings"]
+# 맥스웰·파스칼·볼타용 — 데비안 13 의 550 (non-free). NVIDIA 저장소는 추가하지 않고, 이미 있으면 막는다
+#   (590 이후가 이 카드를 모르는 채로 550 을 덮어쓰지 않게)
+LEGACY_PKGS = ["nvidia-kernel-dkms", "nvidia-driver", "nvidia-settings", "nvidia-smi",
+               "nvidia-suspend-common",     # 절전 때 화면 메모리 보존 (PreserveVideoMemoryAllocations 와 짝)
+               "libnvidia-encode1", "libnvcuvid1"]   # NVENC·NVDEC (영상 인코딩·디코딩)
+LEGACY_PREFS_TEXT = """# SekaiOS: 이 컴퓨터는 데비안 550 NVIDIA 드라이버를 쓴다 (맥스웰·파스칼·볼타 카드 — sekai-gpu)
+#   NVIDIA 저장소(590 이후)는 이 카드를 모르므로 거기서 오는 드라이버는 받지 않는다
+Package: nvidia-* libnvidia-* libcuda* libnvcuvid* libnvoptix* libegl-nvidia* libgles-nvidia* libglx-nvidia* libgl1-nvidia* xserver-xorg-video-nvidia* firmware-nvidia-* libxnvctrl*
+Pin: origin developer.download.nvidia.com
+Pin-Priority: -1
+"""
 MOK_KEY = "/var/lib/dkms/mok.key"
 MOK_PUB = "/var/lib/dkms/mok.pub"
 
@@ -137,10 +156,42 @@ def secure_boot():
 
 
 def nvidia_version():
-    r = sh(["dpkg-query", "-W", "-f=${Status} ${Version}", "nvidia-kernel-open-dkms"])
-    if r.returncode == 0 and r.stdout.startswith("install ok installed"):
-        return r.stdout.split()[-1]
+    for pkg in ("nvidia-kernel-open-dkms", "nvidia-kernel-dkms"):     # NVIDIA 저장소 open · 데비안 550
+        r = sh(["dpkg-query", "-W", "-f=${Status} ${Version}", pkg])
+        if r.returncode == 0 and r.stdout.startswith("install ok installed"):
+            return r.stdout.split()[-1]
     return None
+
+
+def nvidia_ids():
+    """[(슬롯, PCI 장치 번호)] — NVIDIA 표시 장치만"""
+    res = []
+    for dev in sorted(glob.glob("/sys/bus/pci/devices/*")):
+        if _read(f"{dev}/vendor") == "0x10de" and _read(f"{dev}/class").startswith("0x03"):
+            try:
+                res.append((os.path.basename(dev), int(_read(f"{dev}/device"), 16)))
+            except ValueError:
+                pass
+    return res
+
+
+# NVIDIA 장치 번호로 본 세대 (번호는 세대 순으로 커진다)
+#   ~0x133F 케플러 이하(GK·GF) · 0x1340~0x1DFF 맥스웰(GM)·파스칼(GP)·볼타(GV) · 0x1E00~ 튜링(TU) 이후
+#   0x2900~ 블랙웰(GB) — 데비안 550 이 모른다
+def nvidia_plan():
+    """'open' (NVIDIA 저장소 최신) | 'legacy' (데비안 550) | 'old' (드라이버 없음) | 'mixed' (함께 쓸 드라이버 없음) | None"""
+    ids = [d for _s, d in nvidia_ids()]
+    if not ids:
+        return None
+    legacy = [d for d in ids if 0x1340 <= d < 0x1E00]
+    blackwell = [d for d in ids if d >= 0x2900]
+    if legacy and blackwell:
+        return "mixed"
+    if legacy:
+        return "legacy"
+    if all(d < 0x1340 for d in ids):
+        return "old"
+    return "open"
 
 
 EFIVARS = "/sys/firmware/efi/efivars"
@@ -175,6 +226,7 @@ def status():
     out("SECUREBOOT", "on" if sb else "off")
     v = nvidia_version()
     out("NVIDIA", v or "-")
+    out("NVPLAN", nvidia_plan() or "-")
     out("MOK", mok_state() if sb else "-")
     return 0
 
@@ -204,6 +256,7 @@ def report():
         boot = " (부팅 화면)" if _read(dev + "/boot_vga") == "1" else ""
         add(f"  {slot} {ids} {name} — 드라이버 {drv}{boot}")
     v = nvidia_version()
+    add(f"  맞는 NVIDIA 드라이버: {nvidia_plan() or '-'}")
     add(f"  NVIDIA 드라이버: {v or '없음'}"
         + (f" · 모듈 {_read('/sys/module/nvidia/version')}" if os.path.isdir("/sys/module/nvidia") else ""))
     add("")
@@ -309,12 +362,29 @@ def undo_repo():
 
 
 def install_nvidia():
-    if not any(v == "nvidia" for _s, v, _d, _n in gpus()):
+    plan = nvidia_plan()
+    if plan is None:
         out("ERROR", "NVIDIA 그래픽 카드를 찾지 못했습니다")
         return 1
-    out("PROGRESS", 1, "NVIDIA 저장소를 추가하는 중")
-    write(SOURCES, SOURCES_TEXT)
-    write(PREFS, PREFS_TEXT)
+    if plan == "old":
+        out("ERROR", "이 그래픽 카드(GTX 700 이하)는 지금 쓸 수 있는 NVIDIA 드라이버가 없습니다 — 기본 드라이버로 씁니다")
+        return 1
+    if plan == "mixed":
+        out("ERROR", "GTX 900·10 계열과 RTX 50 계열이 함께 꽂혀 있어 둘 다 쓰는 NVIDIA 드라이버가 없습니다 — "
+                     "한 장을 빼고 다시 설치해 주세요")
+        return 1
+    legacy = plan == "legacy"
+    if legacy:
+        out("PROGRESS", 1, "데비안 NVIDIA 드라이버(550)를 준비하는 중")
+        try:
+            os.remove(SOURCES)              # 예전에 추가된 NVIDIA 저장소 — 이 카드를 모르는 드라이버를 주므로
+        except FileNotFoundError:
+            pass
+        write(PREFS, LEGACY_PREFS_TEXT)
+    else:
+        out("PROGRESS", 1, "NVIDIA 저장소를 추가하는 중")
+        write(SOURCES, SOURCES_TEXT)
+        write(PREFS, PREFS_TEXT)
     write(MODPROBE, MODPROBE_TEXT)
 
     out("PROGRESS", 3, "패키지 목록을 받는 중")
@@ -332,7 +402,7 @@ def install_nvidia():
     # 지금 커널과, 앞으로 올 커널(메타 패키지) 모두의 헤더 — DKMS 가 커널이 바뀔 때마다 다시 빌드한다
     kernel = os.uname().release
     flavor = kernel.rsplit("-", 1)[-1]              # 6.12.x+deb13-amd64 → amd64
-    pkgs = [f"linux-headers-{kernel}", f"linux-headers-{flavor}"] + NVIDIA_PKGS
+    pkgs = [f"linux-headers-{kernel}", f"linux-headers-{flavor}"] + (LEGACY_PKGS if legacy else NVIDIA_PKGS)
     bad = removal_guard(["--no-install-recommends", "install"] + pkgs)
     if bad:
         undo_repo()
@@ -340,6 +410,8 @@ def install_nvidia():
         return 1
     # 시스템 복원 지점의 설명 (btrfs 설치본 — apt 훅이 이 이름으로 만든다)
     ENV.update(SEKAI_RESTORE_DESC="NVIDIA 드라이버 설치 전", SEKAI_RESTORE_KIND="driver")
+    if legacy:
+        out("PROGRESS", 15, "데비안 NVIDIA 드라이버(550)를 받는 중")
     rc, log = run_status(["apt-get", "-y", "-q", "--no-install-recommends"] + APT_OPTS
                          + ["install"] + pkgs, 15, 92)
     if rc != 0:
@@ -354,8 +426,9 @@ def install_nvidia():
         out("ERROR", "커널 모듈을 만들지 못했습니다 — /var/lib/dkms 의 make.log 를 확인해 주세요")
         return 1
 
+    # 모든 커널 — 설치만 되고 아직 안 켠 새 커널(업데이트)도 DKMS 가 모듈을 만들었으니 부팅 이미지에 넣어야 한다
     out("PROGRESS", 96, "부팅 이미지를 다시 만드는 중")
-    sh(["update-initramfs", "-u", "-k", kernel])
+    sh(["update-initramfs", "-u", "-k", "all"])
 
     if sb and mok_state() != "enrolled":
         pw, err = enroll_mok()
@@ -388,7 +461,7 @@ def reenroll_mok():
     return 0
 
 
-NV_NAME = re.compile(r"^(nvidia-|libnvidia-|firmware-nvidia-gsp|xserver-xorg-video-nvidia|libcuda|"
+NV_NAME = re.compile(r"^(nvidia-|libnvidia-|firmware-nvidia-gsp|xserver-xorg-video-nvidia|libcuda|glx-alternative-nvidia|"
                      r"libnvcuvid|libnvoptix|libegl-nvidia|libgles-nvidia|libglx-nvidia|libgl1-nvidia|"
                      r"libxnvctrl)")
 
@@ -463,8 +536,10 @@ def remove_nvidia():
             os.remove(f)
         except FileNotFoundError:
             pass
+    # 모든 커널 — "-u" 만 쓰면 가장 새 커널만 다시 만들어, 지금 켜진 커널의 부팅 이미지에 지운 드라이버 모듈이
+    #   남았다(다시 시작하면 부팅 초기에 그 모듈이 올라온다, VM 시험 2026-11-23)
     out("PROGRESS", 94, "부팅 이미지를 다시 만드는 중")
-    sh(["update-initramfs", "-u"])
+    sh(["update-initramfs", "-u", "-k", "all"])
     sh(["apt-get", "-q", "update"])
     out("PROGRESS", 100, "완료")
     out("REBOOT")

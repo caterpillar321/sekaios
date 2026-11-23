@@ -9,8 +9,15 @@ case "$1" in prereqs) prereqs; exit 0 ;; esac
 
 . /usr/share/initramfs-tools/hook-functions
 
-modinfo -k "$version" nvidia_drm >/dev/null 2>&1 || exit 0
+# NVIDIA 저장소 드라이버는 nvidia·nvidia_drm, 데비안 550(맥스웰·파스칼용)은 nvidia-current·nvidia-current-drm
+if modinfo -k "$version" nvidia_drm >/dev/null 2>&1; then
+    mods="nvidia nvidia_modeset nvidia_drm"
+elif modinfo -k "$version" nvidia-current-drm >/dev/null 2>&1; then
+    mods="nvidia-current nvidia-current-modeset nvidia-current-drm"
+else
+    exit 0
+fi
 # 모듈 옵션(/etc/modprobe.d — modeset=1 fbdev=1)과 GSP 펌웨어는 initramfs-tools 가 따라 넣는다
-for m in nvidia nvidia_modeset nvidia_drm; do
+for m in $mods; do
     force_load "$m"
 done
