@@ -1,0 +1,13 @@
+[Unit]
+Description=SekaiOS 플랫팩 앱용 NVIDIA GL 확장을 드라이버 버전에 맞추기
+ConditionPathExists=/sys/module/nvidia/version
+ConditionPathExists=/usr/bin/flatpak
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/sekai/sekai-flatpak-gl
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=40min

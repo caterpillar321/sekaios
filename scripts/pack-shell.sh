@@ -453,6 +453,8 @@ if [ "$1" = "configure" ]; then
     systemctl enable sekai-pci.service >/dev/null 2>&1 || true
     # DDR5 SPD 쪽 번호 — udev 가 빠뜨린 허브도 부팅 때 한 번 더 (sekai-spd-page0 prime-all)
     systemctl enable sekai-spd-prime.service >/dev/null 2>&1 || true
+    # 플랫팩 앱용 NVIDIA GL 확장을 드라이버 버전에 맞춘다 (드라이버를 올리면 옛 확장만 남아 플랫팩 앱이 빈 창 — sekai-flatpak-gl)
+    systemctl enable sekai-flatpak-gl.timer >/dev/null 2>&1 || true
     [ -d /run/systemd/system ] && sysctl -q -p /etc/sysctl.d/60-sekai-panic.conf >/dev/null 2>&1 || true
     if [ ! -d /run/live/medium ] && [ ! -f /etc/snapper/configs/root ] \
        && [ "$(findmnt -no FSTYPE,FSROOT / 2>/dev/null)" = "btrfs /@" ] && mountpoint -q /.snapshots; then

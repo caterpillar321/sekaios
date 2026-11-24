@@ -1,0 +1,10 @@
+[Unit]
+Description=SekaiOS 플랫팩 NVIDIA GL 확장 점검 — 켜고 3분 뒤, 그 뒤 6시간마다
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=6h
+RandomizedDelaySec=2min
+
+[Install]
+WantedBy=timers.target

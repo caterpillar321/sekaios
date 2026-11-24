@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS — 플랫팩 앱용 NVIDIA GL 확장을 드라이버 버전에 맞춘다 (root, sekai-flatpak-gl.timer)
+#
+#  플랫팩 앱은 컴퓨터의 NVIDIA 드라이버와 버전이 똑같은 확장(org.freedesktop.Platform.GL.nvidia-<버전>)이
+#  있어야 GPU 로 그린다. 없으면 GL 을 못 얻어 빈 창이 된다 (RustDesk "Failed to initialize GLArea", 2026-11-24 —
+#  드라이버를 615 → 620 으로 올렸는데 확장은 615 그대로였다).
+#  그 확장은 인자 없는 "flatpak update" 때만 따라오는데, sekai-update 는 플랫팩을 안 건드리고 스토어는 앱을
+#  하나씩 업데이트한다 → 지금 올라온 드라이버 버전을 보고 없으면 Flathub 에서 받고, 받으면 옛 버전을 지운다.
+#  플랫팩 앱이 없거나, NVIDIA 드라이버가 안 올라와 있으면 아무것도 하지 않는다. 받기에 실패하면(인터넷) 다음 때 다시.
+# ═══════════════════════════════════════════════════════════════
+import os
+import re
+import subprocess
+import sys
+
+ENV = dict(os.environ, LANG="C.UTF-8", LC_ALL="C.UTF-8", PATH="/usr/sbin:/usr/bin:/sbin:/bin")
+BRANCH = "1.4"          # freedesktop GL 확장의 가지 (드라이버 버전과 무관하게 고정)
+
+
+def run(*cmd, timeout=None):
+    try:
+        return subprocess.run(cmd, env=ENV, capture_output=True, text=True, timeout=timeout)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return subprocess.CompletedProcess(cmd, 1, "", str(e))
+
+
+def main():
+    if not os.path.exists("/usr/bin/flatpak"):
+        return 0
+    try:
+        ver = open("/sys/module/nvidia/version").read().strip()
+    except OSError:
+        return 0                                  # NVIDIA 드라이버가 안 올라와 있다
+    if not re.fullmatch(r"[0-9]+(\.[0-9]+)+", ver):
+        return 0
+    tag = ver.replace(".", "-")
+    if not run("flatpak", "list", "--system", "--app", "--columns=application").stdout.split():
+        return 0                                  # 플랫팩 앱이 없다
+    have = {l.split("\t")[0] for l in
+            run("flatpak", "list", "--system", "--runtime", "--columns=application").stdout.splitlines() if l}
+    want = [f"org.freedesktop.Platform.GL.nvidia-{tag}"]
+    if any(n.startswith("org.freedesktop.Platform.GL32.") for n in have):     # 32비트 앱(게임 등)을 쓰는 PC
+        want.append(f"org.freedesktop.Platform.GL32.nvidia-{tag}")
+    missing = [w for w in want if w not in have]
+    if missing and "flathub" not in run("flatpak", "remotes", "--system", "--columns=name").stdout.split():
+        print("flathub 저장소가 없어 GL 확장을 받을 수 없습니다", file=sys.stderr)
+        return 0
+    for w in missing:
+        r = run("flatpak", "install", "-y", "--noninteractive", "--system", "flathub",
+                f"runtime/{w}/x86_64/{BRANCH}", timeout=1800)
+        if r.returncode != 0:
+            print(f"{w} 받기 실패 — 다음 점검 때 다시: {(r.stderr or r.stdout).strip()[-300:]}", file=sys.stderr)
+            return 1
+        print(f"{w} 설치 (NVIDIA 드라이버 {ver})")
+    old = sorted(n for n in have if re.fullmatch(r"org\.freedesktop\.Platform\.GL(32)?\.nvidia-[0-9-]+", n)
+                 and not n.endswith(f".nvidia-{tag}"))
+    if old:
+        r = run("flatpak", "uninstall", "-y", "--noninteractive", "--system", *old, timeout=600)
+        print(("옛 GL 확장 지움: " if r.returncode == 0 else "옛 GL 확장 지우기 실패: ") + ", ".join(old))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
