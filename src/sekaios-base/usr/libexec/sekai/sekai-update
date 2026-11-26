@@ -12,6 +12,7 @@
 #    ALSO <묶음> <개수>                묶음 하나만 설치했는데 다른 묶음 것도 함께 올라감 (의존성)
 #    COUNT <개수>
 #    REBOOT                    다시 시작이 필요함
+#    WARN <설명>               설치는 됐지만 알아야 할 것 (예: 새 커널용 NVIDIA 모듈을 만들지 못함 — kmod_check)
 #    ERROR <설명>
 #  묶음은 저장소 출처로 가른다 — SekaiOS 저장소 · 데비안(보안 포함) · 그 밖의 저장소(직접 추가한 업체 저장소).
 #  앱 업데이트는 스토어(라이브러리)가 맡는다 — 윈도우처럼 시스템과 앱을 나눈다. Flathub 앱, 그리고 apt 로 깐
@@ -201,6 +202,7 @@ def _apply(group, pk, gone, pin_path):
         err = next((l for l in reversed(log) if l.startswith("E:")), "알 수 없는 오류")
         out("ERROR", f"설치하지 못했습니다: {err}")
         return 1
+    kmod_check()
     out("PROGRESS", 100, "완료")
     after, _apps, _pins = split()
     out("COUNT", len(after[0]) if after else 0)
@@ -208,6 +210,63 @@ def _apply(group, pk, gone, pin_path):
             or any(REBOOT_PKGS.match(n) for n in before)):
         out("REBOOT")
     return 0
+
+
+# ── 커널 모듈 (DKMS) ─────────────────────────────────────
+#   NVIDIA 드라이버는 커널마다 모듈을 이 컴퓨터에서 빌드한다. 새 커널이 들어왔는데 빌드가 안 되면(헤더가 빠짐·드라이버가
+#   새 커널을 모름) 다시 시작했을 때 NVIDIA 가 안 올라와 기본 화면 모드로 켜진다 (sekai-pc 에서 실제로 — 헤더 메타 없음).
+#   부팅 메뉴는 가장 새 커널을 먼저 켜므로 그 커널을 본다: 없으면 헤더를 챙겨 다시 빌드, 그래도 없으면 WARN.
+def _kernels():
+    """설치된 커널 (새것부터) — 부팅 이미지와 모듈 폴더가 다 있는 것만"""
+    r = subprocess.run(["linux-version", "list"], env=ENV, capture_output=True, text=True)
+    ks = [k for k in r.stdout.split() if os.path.isdir(f"/lib/modules/{k}") and os.path.exists(f"/boot/vmlinuz-{k}")]
+    if not ks:
+        return []
+    r = subprocess.run(["linux-version", "sort", "--reverse"], env=ENV, input="\n".join(ks) + "\n", capture_output=True, text=True)
+    return r.stdout.split() or ks
+
+
+def _dkms_nvidia():
+    """{(모듈/버전)} 과 {(모듈/버전, 커널)} — NVIDIA DKMS 가 없으면 (set(), set())"""
+    try:
+        r = subprocess.run(["dkms", "status"], env=ENV, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return set(), set()
+    mods, built = set(), set()
+    for line in r.stdout.splitlines():
+        m = re.match(r"^(nvidia[\w-]*/[^,]+)(?:, ([^,]+), [^:]+)?: (\w+)", line)
+        if not m:
+            continue
+        mods.add(m.group(1))
+        if m.group(2) and m.group(3) == "installed":
+            built.add((m.group(1), m.group(2)))
+    return mods, built
+
+
+def kmod_check():
+    mods, built = _dkms_nvidia()
+    ks = _kernels()
+    if not mods or not ks:
+        return
+    k = ks[0]                                   # 다음에 켜질 커널
+    missing = [mv for mv in mods if (mv, k) not in built]
+    if not missing:
+        return
+    out("PROGRESS", 98, "새 커널용 그래픽 드라이버를 만드는 중 (몇 분 걸립니다)")
+    if not os.path.isdir(f"/lib/modules/{k}/build"):
+        subprocess.run(["apt-get", "-y", "-q", "--no-install-recommends"] + APT_OPTS + ["install", f"linux-headers-{k}"],
+                       env=ENV, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for mv in missing:
+        subprocess.run(["dkms", "install", "--force", mv, "-k", k], env=ENV,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _m, built = _dkms_nvidia()
+    still = [mv for mv in missing if (mv, k) not in built]
+    if still:
+        prev = next((x for x in ks[1:] if all((mv, x) in built for mv in mods)), None)
+        out("WARN", f"새 커널({k})용 NVIDIA 드라이버를 만들지 못했습니다 — 다시 시작하면 기본 화면 모드로 켜질 수 있습니다."
+            + (f" 부팅 메뉴의 '고급 옵션'에서 이전 커널({prev})을 고르면 그대로 쓸 수 있습니다." if prev else ""))
+        return
+    subprocess.run(["update-initramfs", "-u", "-k", k], env=ENV, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def main():

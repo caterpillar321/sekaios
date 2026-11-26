@@ -262,7 +262,7 @@ class UpdatePage:
         self.progress_text.set_text("관리자 인증을 기다리는 중…")
         self.progress_text.show()
         self._set_status(title, "창을 닫아도 작업은 계속됩니다")
-        self._got = {"pkgs": [], "count": None, "reboot": False, "error": None, "also": {}, "apps": None}
+        self._got = {"pkgs": [], "count": None, "reboot": False, "error": None, "also": {}, "apps": None, "warn": []}
         threading.Thread(target=self._worker, args=(args,), daemon=True).start()
 
     def _worker(self, args):
@@ -317,6 +317,8 @@ class UpdatePage:
             self._got["reboot"] = True
         elif kind == "ERROR":
             self._got["error"] = rest
+        elif kind == "WARN":
+            self._got["warn"].append(rest)
         return False
 
     def _finish(self, action, err):
@@ -352,7 +354,9 @@ class UpdatePage:
             also = [f"{GROUP_TITLE[g]} {n}개" for g, n in self._got["also"].items()]
             if also:
                 sub += " — 필요해서 " + "·".join(also) + "도 함께 올렸습니다"
-            self._set_status("업데이트를 설치했습니다", sub)
+            if self._got["warn"]:
+                sub = " ".join(self._got["warn"]) + "\n" + sub
+            self._set_status("업데이트를 설치했습니다" if not self._got["warn"] else "업데이트를 설치했지만 확인이 필요합니다", sub)
             # 남은 것(다른 묶음·보류된 패키지 등)을 받아 둔 목록 기준으로 센다 — 수십 초 걸릴 수 있어 작업 스레드에서
             threading.Thread(target=self._reload_after_apply, args=(self._got["count"], sub), daemon=True).start()
             if self._got["reboot"]:
