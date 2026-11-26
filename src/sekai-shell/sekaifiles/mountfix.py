@@ -157,7 +157,8 @@ def admin_diagnose(dev, diag, cb):
         try:
             r = subprocess.run(["pkexec", VOLCHECK, dev], capture_output=True, text=True, timeout=180)
         except (OSError, subprocess.TimeoutExpired) as e:
-            GLib.idle_add(lambda: cb(None, str(e)) and False)
+            msg = str(e)                    # except 블록이 끝나면 e 는 지워진다 — 나중에 도는 lambda 가 못 읽는다
+            GLib.idle_add(lambda: cb(None, msg) and False)
             return
         if r.returncode in (126, 127):              # 인증 취소 · 거부
             GLib.idle_add(lambda: cb(None, None) and False)
