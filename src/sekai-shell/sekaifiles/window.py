@@ -11,6 +11,7 @@
 썸네일(thumbs) · 압축(archive) · 속성(properties) 도 부품 — 없으면 그 명령만 꺼진다.
 """
 import os
+import threading
 
 import gi
 gi.require_version("Gtk", "3.0")
@@ -19,7 +20,7 @@ from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 from sekaishell.appkit import ToastMixin  # noqa: E402
 
-from . import opener  # noqa: E402
+from . import mountfix, opener  # noqa: E402
 from .addressbar import AddressBar  # noqa: E402
 from .common import (COMPUTER, HOME, TRASH, archive, copy_text, count_text, crumbs, drive_letters,  # noqa: E402
                      dbg, edit_text, favorites, fileops, fit_pixbuf, fmt_size, gfile_of, home_dir, icons,
@@ -1510,12 +1511,77 @@ class ExplorerWindow(ToastMixin, Gtk.ApplicationWindow):
                 vol.mount_finish(res)
             except GLib.Error as e:
                 if not e.matches(Gio.io_error_quark(), Gio.IOErrorEnum.FAILED_HANDLED):
-                    opener.error(self, f"‘{d.name}’에 연결하지 못했습니다.", e.message)
+                    self._mount_failed(d, e.message)
                 return
             m = vol.get_mount()
             if m is not None:
                 self.navigate(m.get_root().get_uri())
         d.volume.mount(Gio.MountMountFlags.NONE, op, None, done)
+
+    # ── 연결 실패: 이유를 알아내 이유마다 다른 안내·할 일 (mountfix — 커널은 거의 늘 같은 영어 문장만 준다) ──
+    def _mount_failed(self, d, raw):
+        dev = d.volume.get_identifier("unix-device") if d.volume is not None else None
+        if not dev:
+            opener.error(self, f"‘{d.name}’에 연결하지 못했습니다.", raw)
+            return
+        def work():
+            try:
+                diag = mountfix.diagnose(dev)
+            except Exception:                                   # noqa: BLE001 — 진단이 실패해도 원래 오류는 보여 준다
+                diag = {"reason": "other", "fs": "", "fsname": "알 수 없음"}
+            GLib.idle_add(lambda: self._mount_explain(d, dev, diag, raw) and False)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _mount_explain(self, d, dev, diag, raw):
+        title, text, acts = mountfix.explain(d.name, diag, raw)
+        if not acts:
+            opener.error(self, title, text)
+            return
+        ids = {a: i + 1 for i, (_l, a) in enumerate(acts)}
+        buttons = [("닫기", Gtk.ResponseType.CANCEL)] + [(label, ids[a]) for label, a in acts]
+        default = ids.get("repair") or ids.get("ro") or ids.get("diag")
+
+        def answer(r):
+            act = next((a for a, i in ids.items() if i == r), None)
+            if act == "ro":
+                self.toast(f"‘{d.name}’을(를) 읽기 전용으로 여는 중…", 3)
+                mountfix.mount_ro(dev, lambda path, err: self._mount_done(d, path, err, "읽기 전용으로 열지 못했습니다."))
+            elif act == "repair":
+                self.toast(f"‘{d.name}’을(를) 고치는 중… (관리자 인증이 필요합니다)", 6)
+                mountfix.repair(dev, lambda ok, err: self._repair_done(d, ok, err))
+            elif act == "diag":
+                self.toast("원인을 확인하는 중… (관리자 인증이 필요합니다)", 5)
+                mountfix.admin_diagnose(dev, diag, lambda nd, err: self._diag_done(d, dev, diag, nd, err, raw))
+        opener.ask(self, title, text, buttons, answer, kind=Gtk.MessageType.WARNING, default=default)
+
+    def _diag_done(self, d, dev, diag, nd, err, raw):
+        if err:
+            opener.error(self, "원인을 확인하지 못했습니다.", err)
+        elif nd is not None:
+            self._mount_explain(d, dev, nd, raw)
+
+    def _mount_done(self, d, path, err, fail_title):
+        if err is not None:
+            if not err.matches(Gio.io_error_quark(), Gio.IOErrorEnum.FAILED_HANDLED) and "NotAuthorized" not in err.message:
+                opener.error(self, f"‘{d.name}’을(를) {fail_title}", err.message)
+            return
+        if path:
+            self.navigate(Gio.File.new_for_path(path).get_uri())
+
+    def _repair_done(self, d, ok, err):
+        if err is not None:
+            if "NotAuthorized" in err.message or "Dismissed" in err.message or "cancel" in err.message.lower():
+                return
+            opener.error(self, f"‘{d.name}’을(를) 고치지 못했습니다.",
+                         "윈도우에서 디스크 검사(chkdsk)를 해 보세요.\n\n자세한 내용: " + err.message)
+            return
+        if not ok:
+            opener.error(self, f"‘{d.name}’을(를) 다 고치지 못했습니다.",
+                         "이 도구로는 고칠 수 없는 오류가 있습니다. 윈도우에서 디스크 검사(chkdsk /f)를 해 보세요. "
+                         "읽기 전용으로는 열 수 있습니다.")
+            return
+        self.toast(f"‘{d.name}’을(를) 고쳤습니다. 여는 중…", 3)
+        self.open_drive(d)
 
     # ── 내장 드라이브 쓰기 허용 (sekai-drives — 윈도우 시스템 C:·리눅스 드라이브는 처음엔 읽기 전용) ──
     @staticmethod

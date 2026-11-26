@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+# ═══════════════════════════════════════════════════════════════
+#  SekaiOS 드라이브 연결 실패 원인 — 관리자 권한으로 읽기만 한다 (pkexec, 파일 탐색기의 "원인 자세히 확인")
+#
+#    sekai-volcheck /dev/sdb1
+#
+#  일반 계정은 커널 기록을 못 읽고 장치도 직접 못 읽어, 마운트 실패가 늘 같은 영어 문장으로만 보인다.
+#  여기서 보는 것 (아무것도 쓰지 않는다):
+#    - NTFS 면 ntfs-3g.probe --readwrite: 14 최대 절전 · 15 윈도우 캐시에 남음 · 13 손상
+#    - 이번 부팅의 커널 기록 중 이 장치 이름이 든 마지막 줄들 — ntfs3 의 "volume is dirty" 등
+#  출력 (한 줄에 하나):
+#    REASON dirty|hibernated|unclean|corrupt|unknown
+#    FS <형식|->
+#    LOG <커널 기록 한 줄>            (최대 4줄)
+#    ERROR <설명>
+#  인자는 장치 경로 하나만 받는다 — 관리자 권한으로 도는 프로그램이라 바깥에서 다른 것을 넘길 수 없게.
+# ═══════════════════════════════════════════════════════════════
+import os
+import re
+import stat
+import subprocess
+import sys
+
+ENV = dict(os.environ, LANG="C.UTF-8", LC_ALL="C.UTF-8", PATH="/usr/sbin:/usr/bin:/sbin:/bin")
+DEV_RE = re.compile(r"^/dev/(sd[a-z]+[0-9]*|nvme[0-9]+n[0-9]+(p[0-9]+)?|mmcblk[0-9]+(p[0-9]+)?|vd[a-z]+[0-9]*|"
+                    r"dm-[0-9]+|loop[0-9]+(p[0-9]+)?|sr[0-9]+)$")
+PROBE = {14: "hibernated", 15: "unclean", 13: "corrupt"}
+
+
+def out(*a):
+    print(" ".join(str(x).replace("\n", " ") for x in a), flush=True)
+
+
+def run(cmd, timeout=20):
+    try:
+        return subprocess.run(cmd, env=ENV, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return subprocess.CompletedProcess(cmd, -1, "", str(e))
+
+
+def main():
+    if len(sys.argv) != 2:
+        out("ERROR", "사용법: sekai-volcheck /dev/<장치>")
+        return 2
+    if os.geteuid() != 0:
+        out("ERROR", "관리자 권한이 필요합니다")
+        return 1
+    dev = os.path.realpath(sys.argv[1])
+    try:
+        ok = DEV_RE.match(dev) and stat.S_ISBLK(os.stat(dev).st_mode)
+    except OSError:
+        ok = False
+    if not ok:
+        out("ERROR", "드라이브 장치를 찾지 못했습니다")
+        return 1
+    fs = run(["blkid", "-o", "value", "-s", "TYPE", dev]).stdout.strip()
+    out("FS", fs or "-")
+    reason = "unknown"
+    if fs == "ntfs":
+        rc = run(["ntfs-3g.probe", "--readwrite", dev], timeout=60).returncode
+        reason = PROBE.get(rc, reason)
+    name = os.path.basename(dev)
+    log = run(["journalctl", "-k", "-b", "-q", "--no-pager", "-o", "short-precise", "-n", "2000"]).stdout
+    lines = [re.sub(r"^\S+ \S+ \S+ \S+ kernel: ", "", l) for l in log.splitlines()
+             if re.search(rf"\b{re.escape(name)}\b|\({re.escape(name)}\)", l)]
+    lines = [l for l in lines if not re.search(r"Attached SCSI|Mode Sense|Write cache|I/O size|transfer size|"
+                                               r"logical blocks|Write Protect|Assuming drive cache", l)]
+    if reason == "unknown" and any("dirty" in l.lower() for l in lines[-6:]):
+        reason = "dirty"
+    out("REASON", reason)
+    for l in lines[-4:]:
+        out("LOG", l[:300])
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
