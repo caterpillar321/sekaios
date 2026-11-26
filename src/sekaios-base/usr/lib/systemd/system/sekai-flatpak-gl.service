@@ -11,3 +11,6 @@ ExecStart=/usr/libexec/sekai/sekai-flatpak-gl
 Nice=10
 IOSchedulingClass=idle
 TimeoutStartSec=40min
+# 받기에 실패하면(켤 때 인터넷이 아직 없음 등) 다음 점검(6시간)까지 플랫팩 앱이 빈 창 — 10분 뒤 다시
+Restart=on-failure
+RestartSec=10min

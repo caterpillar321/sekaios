@@ -7,7 +7,9 @@
 #  드라이버를 615 → 620 으로 올렸는데 확장은 615 그대로였다).
 #  그 확장은 인자 없는 "flatpak update" 때만 따라오는데, sekai-update 는 플랫팩을 안 건드리고 스토어는 앱을
 #  하나씩 업데이트한다 → 지금 올라온 드라이버 버전을 보고 없으면 Flathub 에서 받고, 받으면 옛 버전을 지운다.
-#  플랫팩 앱이 없거나, NVIDIA 드라이버가 안 올라와 있으면 아무것도 하지 않는다. 받기에 실패하면(인터넷) 다음 때 다시.
+#  플랫팩 앱이 없거나, NVIDIA 드라이버가 안 올라와 있으면 아무것도 하지 않는다. 받기에 실패하면(인터넷) 10분 뒤 다시.
+#    sekai-flatpak-gl --version 620.70.10   그 버전 확장을 미리 받기만 (sekai-update 가 드라이버를 올린 직후 — 다시 시작 전이라
+#                                          옛 확장은 지우지 않는다)
 # ═══════════════════════════════════════════════════════════════
 import os
 import re
@@ -28,8 +30,9 @@ def run(*cmd, timeout=None):
 def main():
     if not os.path.exists("/usr/bin/flatpak"):
         return 0
+    ahead = len(sys.argv) == 3 and sys.argv[1] == "--version"
     try:
-        ver = open("/sys/module/nvidia/version").read().strip()
+        ver = sys.argv[2] if ahead else open("/sys/module/nvidia/version").read().strip()
     except OSError:
         return 0                                  # NVIDIA 드라이버가 안 올라와 있다
     if not re.fullmatch(r"[0-9]+(\.[0-9]+)+", ver):
@@ -53,6 +56,8 @@ def main():
             print(f"{w} 받기 실패 — 다음 점검 때 다시: {(r.stderr or r.stdout).strip()[-300:]}", file=sys.stderr)
             return 1
         print(f"{w} 설치 (NVIDIA 드라이버 {ver})")
+    if ahead:
+        return 0
     old = sorted(n for n in have if re.fullmatch(r"org\.freedesktop\.Platform\.GL(32)?\.nvidia-[0-9-]+", n)
                  and not n.endswith(f".nvidia-{tag}"))
     if old:

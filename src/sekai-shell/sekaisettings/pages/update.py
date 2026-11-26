@@ -345,6 +345,9 @@ class UpdatePage:
             if self._got["apps"] is not None:
                 self._set_apps(apt=self._got["apps"])
             self._summary(self.pkgs)
+            if self._got["warn"] and hasattr(self.status_row, "sub_label"):
+                lab = self.status_row.sub_label
+                lab.set_text(lab.get_text() + "\n" + " ".join(self._got["warn"]))
             self._show_list(self.pkgs)
             threading.Thread(target=lambda: self._set_apps(flatpak=_flatpak_count()), daemon=True).start()
         else:

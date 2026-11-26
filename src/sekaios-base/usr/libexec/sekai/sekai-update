@@ -54,6 +54,7 @@ PROTECTED = re.compile(r"^(sekai-|sekaios-|worldlink|sekaicomp|hyprland|hyprbars
 
 
 SELF = os.path.abspath(__file__)
+FLATPAK_GL = "/usr/libexec/sekai/sekai-flatpak-gl"
 GUARD_TAG = "SEKAI-BLOCKED:"
 
 
@@ -70,7 +71,24 @@ def split():
     """→ (시스템 (설치될 것, 지워질 것), 앱 {앱: [...]}, 선호 파일 내용) · 실패하면 (None, 오류, None)"""
     if aptapps is None:
         return None, "설정 앱(sekai-shell)이 너무 옛 판입니다 — 터미널에서 sudo apt full-upgrade 로 올려 주세요", None
-    return aptapps.split(env=ENV, tmpdir="/run")
+    return aptapps.split(env=ENV, tmpdir="/run", query=True)
+
+
+def nv_hold_warn():
+    """split 이 NVIDIA 드라이버를 묶었으면 알린다 (aptapps._nvidia_hold)"""
+    v = getattr(aptapps, "last_hold", None)
+    if v:
+        out("WARN", f"NVIDIA 드라이버 {v} 는 플랫팩 앱용 구성 요소가 Flathub 에 나오면 받습니다 — "
+                    "지금 받으면 플랫팩 앱이 빈 창이 되어 이번에는 지금 드라이버를 그대로 둡니다")
+
+
+def nv_userspace():
+    """설치된 NVIDIA 사용자 쪽 드라이버 버전 (없으면 None)"""
+    for pkg in ("nvidia-driver-libs", "nvidia-driver"):
+        r = subprocess.run(["dpkg-query", "-W", "-f=${Status} ${Version}", pkg], env=ENV, capture_output=True, text=True)
+        if r.returncode == 0 and r.stdout.startswith("install ok installed"):
+            return re.sub(r"^\d+:", "", r.stdout.split()[-1]).rsplit("-", 1)[0]
+    return None
 
 
 def guard():
@@ -121,6 +139,7 @@ def check():
         out("GROUP", name, grp, *(["security"] if sec else []))
     for name in gone:                           # 지워지는 것도 미리 보여 준다
         out("PKG", name, "-", "삭제")
+    nv_hold_warn()
     out("APPS", len(apps))                      # 앱 업데이트는 스토어에서 — 개수만 알린다
     out("COUNT", len(pk))
     out("PROGRESS", 100, "완료")
@@ -141,6 +160,8 @@ def apply(group=None):
         out("ERROR", f"설치할 업데이트를 계산하지 못했습니다: {apps} — 다른 설치가 끝난 뒤 다시 해 주세요")
         return 1
     pk, gone = sysd
+    nv_hold_warn()
+    nv_before = nv_userspace()
     pin_path = None
     if pins:
         # 선호 파일은 root 만 쓰는 /run 에 — 시뮬레이션과 같은 내용으로
@@ -148,7 +169,15 @@ def apply(group=None):
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(pins)
     try:
-        return _apply(group, pk, gone, pin_path)
+        rc = _apply(group, pk, gone, pin_path)
+        nv_after = nv_userspace()
+        if rc == 0 and nv_after and nv_after != nv_before and os.path.exists(FLATPAK_GL):
+            # 다시 시작하면 새 드라이버가 올라온다 — 플랫팩 앱이 그때 바로 그리도록 새 버전 GL 확장을 지금 받아 둔다
+            #   (옛 확장은 다시 시작한 뒤 sekai-flatpak-gl.timer 가 치운다)
+            out("PROGRESS", 99, "플랫팩 앱용 그래픽 구성 요소를 받는 중")
+            subprocess.run([FLATPAK_GL, "--version", nv_after], env=ENV,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1800)
+        return rc
     finally:
         if pin_path:
             os.unlink(pin_path)

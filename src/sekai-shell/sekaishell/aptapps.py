@@ -117,8 +117,65 @@ def app_units():
     return units
 
 
-def pin_text(units):
-    """앱 묶음을 지금 판에 묶는 선호 파일 내용 — 원래 /etc/apt/preferences 가 있으면 그 내용을 앞에 그대로"""
+# ── NVIDIA 드라이버 보류 ─────────────────────────────────
+#   플랫팩 앱은 NVIDIA 드라이버와 버전이 똑같은 GL 확장(Flathub org.freedesktop.Platform.GL.nvidia-<버전>)이 있어야 GPU 로
+#   그린다. NVIDIA 저장소는 새 드라이버를 Flathub 보다 먼저 낼 수 있어, 그 사이에 올리고 다시 시작하면 플랫팩 앱이 빈 창이
+#   된다 (2026-11-24 RustDesk). 플랫팩 앱이 깔린 PC 에서 새 버전 확장이 Flathub 에 아직 없으면 NVIDIA 패키지만 지금 판에 묶는다.
+#   Flathub 에는 관리자 도우미(sekai-update check·apply)만 묻고(query=True) 결과를 HOLD_FILE 에 — 설정 앱은 그 파일만 읽는다.
+NV_PKG = re.compile(r"^(nvidia-|libnvidia-|libcuda|libnvcuvid|libnvoptix|libegl-nvidia|libgles-nvidia|libglx-nvidia|"
+                    r"libgl1-nvidia|xserver-xorg-video-nvidia|firmware-nvidia-gsp|libxnvctrl)")
+HOLD_FILE = "/run/sekai-nvidia-hold"
+last_hold = None            # 마지막 split 이 NVIDIA 를 묶었으면 그 새 버전 (sekai-update 가 알린다)
+
+
+def _upstream(v):
+    return re.sub(r"^\d+:", "", v or "").rsplit("-", 1)[0]
+
+
+def _flatpak_gl_missing(ver):
+    """True = 플랫팩 앱이 있는데 Flathub 에 그 버전 GL 확장이 없다 · False = 있다/플랫팩 앱 없음 · None = 확인 못 함(네트워크)"""
+    try:
+        apps = subprocess.run(["flatpak", "list", "--system", "--app", "--columns=application"],
+                              capture_output=True, text=True, timeout=20).stdout.split()
+        if not apps:
+            return False
+        r = subprocess.run(["flatpak", "remote-info", "--system", "flathub",
+                            f"runtime/org.freedesktop.Platform.GL.nvidia-{ver.replace('.', '-')}/x86_64/1.4"],
+                           capture_output=True, text=True, timeout=60, env=ENV)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode == 0:
+        return False
+    low = (r.stderr + r.stdout).lower()
+    return True if ("not found" in low or "nothing matches" in low or "no such ref" in low) else None
+
+
+def _nvidia_hold(pk, query):
+    """(새 버전, {패키지: 지금 버전}) — 묶어야 하면, 아니면 None"""
+    nv = [p for p in pk if NV_PKG.match(p[0]) and p[1] not in ("-", "") and _upstream(p[1]) != _upstream(p[2])]
+    if not nv:
+        return None
+    new = next((_upstream(p[2]) for p in nv if p[0] in ("nvidia-driver-libs", "nvidia-driver")), _upstream(nv[0][2]))
+    if query:
+        miss = _flatpak_gl_missing(new)
+        try:
+            with open(HOLD_FILE, "w", encoding="utf-8") as f:
+                f.write(f"{new} {'hold' if miss else 'ok'}\n")
+        except OSError:
+            pass
+    else:
+        try:
+            with open(HOLD_FILE, encoding="utf-8") as f:
+                ver, _, state = f.read().strip().partition(" ")
+            miss = ver == new and state == "hold"
+        except OSError:
+            miss = False
+    return (new, {p[0]: p[1] for p in nv}) if miss else None
+
+
+def pin_text(units, extra=None):
+    """앱 묶음을 지금 판에 묶는 선호 파일 내용 — 원래 /etc/apt/preferences 가 있으면 그 내용을 앞에 그대로.
+    extra = {패키지: 버전} — 함께 묶을 것 (NVIDIA 보류)"""
     try:
         with open(PREFS, encoding="utf-8") as f:
             base = f.read().rstrip() + "\n\n"
@@ -130,17 +187,25 @@ def pin_text(units):
             if p not in seen:
                 seen.add(p)
                 parts.append(f"Package: {p}\nPin: version {v}\nPin-Priority: 1001\n")
+    for p, v in (extra or {}).items():
+        if p not in seen:
+            seen.add(p)
+            parts.append(f"Package: {p}\nPin: version {v}\nPin-Priority: 1001\n")
     return base + "\n".join(parts)
 
 
-def split(env=None, tmpdir=None):
+def split(env=None, tmpdir=None, query=False):
     """apt 업데이트를 가른다 → (시스템 (설치될 것, 지워질 것), 앱 {앱 패키지: [(이름, 지금, 새)]}, 선호 파일 내용)
     · 실패하면 (None, 오류, None). 선호 파일 내용은 시스템 쪽을 실제로 설치할 때 같은 선호로 쓰라고 ("" 면 묶을 것 없음).
     앱을 묶었더니 시스템 업데이트가 그 앱을 지우려 하면(시스템 쪽 의존성이 새 앱을 요구) 그 앱은 묶지 않는다."""
+    global last_hold
+    last_hold = None
     full, err = simulate(env=env)
     if full is None:
         return None, err, None
     pk, _gone = full
+    hold = _nvidia_hold(pk, query)
+    held = hold[1] if hold else {}
     changing = {p[0]: p for p in pk}
     units = app_units()
     apps = {}
@@ -149,9 +214,9 @@ def split(env=None, tmpdir=None):
         if ch and all(c[3] != "sekai" for c in ch):
             apps[app] = ch
     for _try in range(3):
-        if not apps:
+        if not apps and not held:
             return full, {}, ""
-        text = pin_text({a: units[a] for a in apps})
+        text = pin_text({a: units[a] for a in apps}, held)
         fd, path = tempfile.mkstemp(prefix="sekai-pin-", dir=tmpdir)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -164,6 +229,7 @@ def split(env=None, tmpdir=None):
         gone = set(sysd[1])
         stuck = [a for a in apps if any(m in gone for m, _v in units[a])]
         if not stuck:
+            last_hold = hold[0] if hold else None
             return sysd, {a: [c[:3] for c in ch] for a, ch in apps.items()}, text
         for a in stuck:
             del apps[a]
