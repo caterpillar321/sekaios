@@ -810,6 +810,19 @@ button.snap-card:hover { background: @hover; border-color: @accent; }
     background-size: 16px 3px;
 }
 .task-btn.app-btn.minimized { background-color: transparent; }
+/* 주의 끌기 — 앱이 알림을 원한다(X11 긴급 표시·xdg-activation, 합성기 "urgent"). 윈도우처럼 주황으로 몇 번 깜빡이고
+   주황으로 남는다. 그 창을 보면(활성화) 풀린다 */
+@keyframes sekai-attention {
+    0%   { background-color: alpha(#e8833a, 0.80); }
+    50%  { background-color: alpha(#e8833a, 0.20); }
+    100% { background-color: alpha(#e8833a, 0.80); }
+}
+.task-btn.app-btn.urgent {
+    background-color: alpha(#e8833a, 0.80);
+    background-image: linear-gradient(#e8833a, #e8833a);
+    background-size: 16px 3px;
+    animation: sekai-attention 1s ease-in-out 6;
+}
 
 /* 창 미리보기 (앱 버튼에 마우스를 올리면) */
 .task-preview-root { padding: 8px; border-radius: 8px; }

@@ -794,6 +794,13 @@ class WindowManager:
         ay, ah = ay + bar, ah - bar
         w, h = min(want[0], aw), min(want[1], ah)
         cw, ch = c.get("size", [0, 0])
+        # X11 창이 가운데가 아닌 곳에 열렸다 — 앱이 정한 자리(합성기 SEKAI_X11_POS, 위치를 기억하는 앱·와인 앱)다.
+        #   그런 앱은 크기도 스스로 기억하니 건드리지 않는다 (가운데로 옮기면 앱이 다시 제자리로 옮겨 잔상이 남았다)
+        if c.get("xwayland"):
+            cx0, cy0 = ax + (aw - cw) / 2, ay + (ah - ch) / 2
+            px, py = c.get("at", [cx0, cy0])
+            if abs(px - cx0) > 8 or abs(py - cy0) > 40:
+                return False
         if abs(cw - w) < 4 and abs(ch - h) < 4:
             return False
         self._place(addr, ax + (aw - w) / 2, ay + (ah - h) / 2, w, h)

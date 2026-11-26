@@ -1723,6 +1723,10 @@ def set_search_mode(mode):
     threading.Thread(target=work, daemon=True).start()
 
 
+# 주의를 끄는 창 (합성기 "urgent" — X11 긴급 표시·xdg-activation). 그 창이 활성화되거나 닫히면 뺀다. 모든 작업 표시줄이 함께 쓴다
+URGENT = set()
+
+
 class TaskbarMixin:
     """작업 버튼 — 주 작업 표시줄과 다른 모니터의 작업 표시줄이 함께 쓴다.
 
@@ -1961,7 +1965,7 @@ class TaskbarMixin:
         btn._sekai = {"key": key, "app_id": app_id, "wins": wins, "active": active_addr, "name": name}
 
         ctx = btn.get_style_context()
-        for cls in ("running", "active", "minimized"):
+        for cls in ("running", "active", "minimized", "urgent"):
             ctx.remove_class(cls)
         if wins:
             ctx.add_class("running")
@@ -1969,6 +1973,8 @@ class TaskbarMixin:
                 ctx.add_class("active")
             elif all(self._minimized(c) for c in wins):
                 ctx.add_class("minimized")
+            if any(c.get("address") in URGENT and c.get("address") != active_addr for c in wins):
+                ctx.add_class("urgent")
         btn.set_tooltip_text(None if wins else name)       # 창이 있으면 미리보기가 대신한다
         # 화면 읽기용 이름 — 앱 이름과 창 수 (툴팁을 끈 단추도 읽히게)
         btn.get_accessible().set_name(name if len(wins) < 2 else f"{name} — 창 {len(wins)}개")
@@ -2450,6 +2456,14 @@ class Panel(Gtk.Window, TaskbarMixin):
         #   X11 흉내는 주소 없이 보낸다 — 그땐 옮겨 간 것으로 본다)
         same_focus = (name == "activewindowv2" and bool(_arg.strip())
                       and "0x" + _arg.strip() == getattr(self, "_last_active", None))
+        # 주의 끌기 — 그 창을 보거나 닫으면 끝
+        if name == "urgent" and _arg.strip():
+            URGENT.add("0x" + _arg.strip())
+            self.queue_rebuild_all(50)
+        elif name in ("activewindowv2", "closewindow") and _arg.strip():
+            if "0x" + _arg.strip() in URGENT:
+                URGENT.discard("0x" + _arg.strip())
+                self.queue_rebuild_all(50)
         # 폴백: 사용자가 다른 창을 클릭하면 포커스 이벤트가 온다 → 메뉴 닫기
         #   Wayland 의 빈 activewindowv2 는 "초점이 창이 아닌 곳(레이어)으로 갔다" — 시작 메뉴를 처음 누르면 메뉴가
         #   키보드 초점을 가져가며 이렇게 온다. 그걸 다른 창으로 옮겨 간 것으로 봐서, 다른 창에서 작업하다 와서
